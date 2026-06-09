@@ -1,9 +1,10 @@
 import { supabase } from './supabase'
 
+// Table lives in public schema as pim_projects to avoid PostgREST schema-exposure issues
+const tb = () => supabase.from('pim_projects')
+
 export async function listProjects() {
-  const { data, error } = await supabase
-    .schema('pim')
-    .from('projects')
+  const { data, error } = await tb()
     .select('id, name, updated_at')
     .order('updated_at', { ascending: false })
   if (error) throw error
@@ -12,9 +13,7 @@ export async function listProjects() {
 
 export async function createProject(name = 'Untitled') {
   const { data: { user } } = await supabase.auth.getUser()
-  const { data, error } = await supabase
-    .schema('pim')
-    .from('projects')
+  const { data, error } = await tb()
     .insert({ user_id: user.id, name })
     .select()
     .single()
@@ -23,9 +22,7 @@ export async function createProject(name = 'Untitled') {
 }
 
 export async function loadProject(id) {
-  const { data, error } = await supabase
-    .schema('pim')
-    .from('projects')
+  const { data, error } = await tb()
     .select('*')
     .eq('id', id)
     .single()
@@ -34,9 +31,7 @@ export async function loadProject(id) {
 }
 
 export async function saveProject(id, { nodes, edges, views, activeViewId }) {
-  const { error } = await supabase
-    .schema('pim')
-    .from('projects')
+  const { error } = await tb()
     .update({
       nodes,
       edges,
@@ -49,19 +44,11 @@ export async function saveProject(id, { nodes, edges, views, activeViewId }) {
 }
 
 export async function renameProject(id, name) {
-  const { error } = await supabase
-    .schema('pim')
-    .from('projects')
-    .update({ name })
-    .eq('id', id)
+  const { error } = await tb().update({ name }).eq('id', id)
   if (error) throw error
 }
 
 export async function deleteProject(id) {
-  const { error } = await supabase
-    .schema('pim')
-    .from('projects')
-    .delete()
-    .eq('id', id)
+  const { error } = await tb().delete().eq('id', id)
   if (error) throw error
 }
