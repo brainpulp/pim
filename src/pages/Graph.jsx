@@ -79,12 +79,18 @@ export default function Graph() {
     const svg = d3.select(svgRef.current)
     const zoom = d3.zoom()
       .scaleExtent([0.08, 4])
+      .filter(e => {
+        // wheel zoom is always allowed
+        if (e.type === 'wheel') return true
+        // pan only when clicking the bare SVG background (not any node/edge element)
+        if (e.type === 'mousedown') return e.target === svgRef.current
+        return true
+      })
       .on('zoom', e => {
         zoomTransformRef.current = e.transform
         scheduleRender()
       })
     svg.call(zoom)
-    // prevent double-click zoom (we use dblclick for label editing)
     svg.on('dblclick.zoom', null)
     return () => svg.on('.zoom', null)
   }, [scheduleRender])
@@ -235,6 +241,9 @@ function NodeShape({ node, onMouseDown, onConnectorMouseDown, onRelease, onDelet
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const isAnchored = node.fx != null
+
+  // Keep draft in sync when label changes from outside (e.g. outline rename)
+  useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
 
   const commitEdit = () => {
     onLabelChange(node.id, draft)
