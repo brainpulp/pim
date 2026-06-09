@@ -14,12 +14,10 @@ export const DEFAULT_NODE_PROPS = {
 }
 
 export const FILL_COLORS = [
-  '#1d4ed8', '#0f766e', '#7e22ce', '#b45309',
-  '#be185d', '#0e7490', '#15803d', '#374151',
-]
-export const STROKE_COLORS = [
-  '#60a5fa', '#34d399', '#c084fc', '#fbbf24',
-  '#f472b6', '#22d3ee', '#4ade80', '#f87171',
+  '#1d4ed8', '#2563eb', '#0f766e', '#0d9488',
+  '#7e22ce', '#9333ea', '#b45309', '#d97706',
+  '#be185d', '#db2777', '#0e7490', '#0284c7',
+  '#15803d', '#16a34a', '#dc2626', '#374151',
 ]
 
 // Helper: update nodeProps for a specific node in the active view
@@ -106,6 +104,15 @@ const useGraphStore = create((set, get) => ({
 
   releaseAnchor: (id) => set(s => ({
     views: patchViewNode(s.views, s.activeViewId, id, { fx: null, fy: null }),
+  })),
+
+  releaseAllAnchors: () => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      nodeProps: Object.fromEntries(
+        Object.entries(v.nodeProps).map(([id, p]) => [id, { ...p, fx: null, fy: null }])
+      ),
+    }),
   })),
 
   // ── View ops ──────────────────────────────────────────────────

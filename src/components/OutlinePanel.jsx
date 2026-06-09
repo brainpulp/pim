@@ -157,12 +157,15 @@ function OutlineItem({
 
   const commitEdit = () => { onRename(item.id, draft); setEditing(false) }
 
-  const handleDragOver = (e) => {
-    e.preventDefault(); e.stopPropagation()
+  const getPosition = (e) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const relY = (e.clientY - rect.top) / rect.height
-    const position = relY < 0.3 ? 'before' : relY > 0.7 ? 'after' : 'into'
-    onDragOver({ id: item.id, position })
+    return relY < 0.3 ? 'before' : relY > 0.7 ? 'after' : 'into'
+  }
+
+  const handleDragOver = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    onDragOver({ id: item.id, position: getPosition(e) })
   }
 
   return (
@@ -185,8 +188,20 @@ function OutlineItem({
         onClick={() => onSelect?.(item.id)}
         onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; onDragStart(item.id) }}
         onDragOver={handleDragOver}
-        onDragLeave={e => { e.stopPropagation(); onDragOver(null) }}
-        onDrop={e => { e.preventDefault(); e.stopPropagation(); onDrop(item.id, dropTarget?.position || 'into') }}
+        onDragLeave={e => {
+          // Only clear if leaving to something outside this row entirely
+          if (!e.currentTarget.contains(e.relatedTarget)) {
+            e.stopPropagation(); onDragOver(null)
+          }
+        }}
+        onDrop={e => {
+          e.preventDefault(); e.stopPropagation()
+          // Compute position fresh at drop time — don't trust stale state
+          const rect = e.currentTarget.getBoundingClientRect()
+          const relY = (e.clientY - rect.top) / rect.height
+          const position = relY < 0.3 ? 'before' : relY > 0.7 ? 'after' : 'into'
+          onDrop(item.id, position)
+        }}
         onDragEnd={onDragEnd}
       >
         {/* Chevron — always rendered, faded if no children */}
@@ -284,8 +299,8 @@ const styles = {
   tree: { flex: 1, overflowY: 'auto', padding: '0.25rem 0.25rem' },
   empty: { color: '#444', fontSize: '0.78rem', textAlign: 'center', padding: '2rem 1rem', lineHeight: 1.6 },
   chevron: {
-    fontSize: 11, color: '#aaa', cursor: 'pointer',
-    width: 14, flexShrink: 0, userSelect: 'none',
+    fontSize: 14, color: '#aaa', cursor: 'pointer',
+    width: 18, height: 22, flexShrink: 0, userSelect: 'none',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   },
   cloneTag: { fontSize: 9, color: '#5b6af0', flexShrink: 0 },
