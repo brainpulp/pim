@@ -13,7 +13,7 @@ function buildTree(nodes, edges) {
   const roots = nodes.filter(n => parentCount[n.id] === 0)
   const seen = new Set()
 
-  function buildItem(nodeId, ancestors) {
+  function buildItem(nodeId, ancestors, parentId) {
     const node = nodes.find(n => n.id === nodeId)
     if (!node) return null
     const alreadySeen = seen.has(nodeId)
@@ -22,23 +22,24 @@ function buildTree(nodes, edges) {
     return {
       id: nodeId,
       label: node.label,
+      parentId: parentId || null,
       isClone: parentCount[nodeId] > 1 || alreadySeen,
       children: alreadySeen ? [] : (childrenOf[nodeId] || [])
         .filter(cid => !ancestors.has(cid))
-        .map(cid => buildItem(cid, newAncestors))
+        .map(cid => buildItem(cid, newAncestors, nodeId))
         .filter(Boolean),
     }
   }
 
-  const items = roots.map(n => buildItem(n.id, new Set()))
+  const items = roots.map(n => buildItem(n.id, new Set(), null))
   nodes.forEach(n => {
     if (!seen.has(n.id)) {
       seen.add(n.id)
       items.push({
-        id: n.id, label: n.label, isClone: false,
+        id: n.id, label: n.label, parentId: null, isClone: false,
         children: (childrenOf[n.id] || [])
           .filter(cid => !seen.has(cid))
-          .map(cid => buildItem(cid, new Set([n.id])))
+          .map(cid => buildItem(cid, new Set([n.id]), n.id))
           .filter(Boolean),
       })
     }
@@ -61,17 +62,24 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
 
-  // Drag-drop state: which node id is being dragged
+  // dropTarget: { id: string|'root', position: 'before'|'after'|'into' } | null
   const [dragId, setDragId] = useState(null)
-  const [dropTargetId, setDropTargetId] = useState(null) // 'root' | nodeId
+  const [dropTarget, setDropTarget] = useState(null)
 
   const tree = buildTree(nodes, edges)
 
-  const handleDrop = (targetId) => {
-    if (!dragId || dragId === targetId) return
-    reparentNode(dragId, targetId === 'root' ? null : targetId)
+  const handleDrop = (targetId, position) => {
+    if (!dragId || dragId === targetId) { setDragId(null); setDropTarget(null); return }
+
+    if (targetId === 'root' || position === 'into') {
+      reparentNode(dragId, targetId === 'root' ? null : targetId)
+    } else {
+      // before / after: become sibling → same parent as target
+      const parentEdge = edges.find(e => e.target === targetId)
+      reparentNode(dragId, parentEdge?.source || null)
+    }
     setDragId(null)
-    setDropTargetId(null)
+    setDropTarget(null)
   }
 
   return (
@@ -81,20 +89,21 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
         <button style={styles.addRootBtn} onClick={() => addNode('New node')}>+ Root</button>
       </div>
 
-      {/* Root drop zone */}
-      <div
-        style={{
-          ...styles.dropZone,
-          opacity: dragId ? 1 : 0,
-          background: dropTargetId === 'root' ? '#1a2a1a' : 'transparent',
-          borderColor: dropTargetId === 'root' ? '#4ade80' : '#2d3a6a',
-        }}
-        onDragOver={e => { e.preventDefault(); setDropTargetId('root') }}
-        onDragLeave={() => setDropTargetId(null)}
-        onDrop={() => handleDrop('root')}
-      >
-        ↑ make root
-      </div>
+      {/* Make-root drop zone (only visible while dragging) */}
+      {dragId && (
+        <div
+          style={{
+            ...styles.dropZone,
+            background: dropTarget?.id === 'root' ? '#1a2a1a' : 'transparent',
+            borderColor: dropTarget?.id === 'root' ? '#4ade80' : '#2d3a6a',
+          }}
+          onDragOver={e => { e.preventDefault(); setDropTarget({ id: 'root', position: 'into' }) }}
+          onDragLeave={() => setDropTarget(null)}
+          onDrop={() => handleDrop('root', 'into')}
+        >
+          ↑ make root
+        </div>
+      )}
 
       <div style={styles.tree}>
         {tree.length === 0 && (
@@ -114,11 +123,11 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
             onDrill={setDrillRoot}
             viewNodeProps={viewNodeProps}
             dragId={dragId}
-            dropTargetId={dropTargetId}
+            dropTarget={dropTarget}
             onDragStart={setDragId}
-            onDragOver={setDropTargetId}
+            onDragOver={setDropTarget}
             onDrop={handleDrop}
-            onDragEnd={() => { setDragId(null); setDropTargetId(null) }}
+            onDragEnd={() => { setDragId(null); setDropTarget(null) }}
           />
         ))}
       </div>
@@ -129,47 +138,65 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
 function OutlineItem({
   item, depth, selectedNodeId, onSelect,
   onAddChild, onRename, onDelete, onToggleVisible, onDrill,
-  viewNodeProps, dragId, dropTargetId, onDragStart, onDragOver, onDrop, onDragEnd,
+  viewNodeProps, dragId, dropTarget, onDragStart, onDragOver, onDrop, onDragEnd,
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(item.label)
   const [expanded, setExpanded] = useState(true)
   const inputRef = useRef()
+
   const hasChildren = item.children.length > 0
   const isHidden = viewNodeProps[item.id]?.visible === false
   const isSelected = item.id === selectedNodeId
-  const isDropTarget = dropTargetId === item.id
+  const isDropInto = dropTarget?.id === item.id && dropTarget?.position === 'into'
+  const isDropBefore = dropTarget?.id === item.id && dropTarget?.position === 'before'
+  const isDropAfter = dropTarget?.id === item.id && dropTarget?.position === 'after'
 
   useEffect(() => { if (!editing) setDraft(item.label) }, [item.label, editing])
   useEffect(() => { if (editing) { inputRef.current?.focus(); inputRef.current?.select() } }, [editing])
 
   const commitEdit = () => { onRename(item.id, draft); setEditing(false) }
 
+  const handleDragOver = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const relY = (e.clientY - rect.top) / rect.height
+    const position = relY < 0.3 ? 'before' : relY > 0.7 ? 'after' : 'into'
+    onDragOver({ id: item.id, position })
+  }
+
   return (
-    <div style={{ paddingLeft: depth * 14 }}>
+    <div style={{ paddingLeft: depth * 14, position: 'relative' }}>
+      {/* Drop-before indicator */}
+      {isDropBefore && <div style={styles.dropLine} />}
+
       <div
         className="outline-row"
         draggable
         style={{
-          opacity: isHidden ? 0.4 : 1,
-          background: isSelected
-            ? '#1e2048'
-            : isDropTarget
-            ? '#1a2a3a'
-            : undefined,
-          borderLeft: isSelected ? '2px solid #5b6af0' : isDropTarget ? '2px solid #38bdf8' : '2px solid transparent',
-          cursor: 'grab',
+          opacity: (isHidden && !isSelected) ? 0.4 : 1,
+          background: isSelected ? '#1e2048' : isDropInto ? '#1a2a3a' : undefined,
+          borderLeft: isSelected
+            ? '2px solid #5b6af0'
+            : isDropInto ? '2px solid #38bdf8'
+            : '2px solid transparent',
+          cursor: dragId ? 'grabbing' : 'grab',
         }}
         onClick={() => onSelect?.(item.id)}
         onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; onDragStart(item.id) }}
-        onDragOver={e => { e.preventDefault(); e.stopPropagation(); onDragOver(item.id) }}
+        onDragOver={handleDragOver}
         onDragLeave={e => { e.stopPropagation(); onDragOver(null) }}
-        onDrop={e => { e.preventDefault(); e.stopPropagation(); onDrop(item.id) }}
+        onDrop={e => { e.preventDefault(); e.stopPropagation(); onDrop(item.id, dropTarget?.position || 'into') }}
         onDragEnd={onDragEnd}
       >
+        {/* Chevron — always rendered, faded if no children */}
         <span
-          style={{ ...styles.chevron, opacity: hasChildren ? 1 : 0 }}
-          onClick={e => { e.stopPropagation(); setExpanded(v => !v) }}
+          style={{
+            ...styles.chevron,
+            opacity: hasChildren ? 1 : 0.15,
+            cursor: hasChildren ? 'pointer' : 'default',
+          }}
+          onClick={e => { if (!hasChildren) return; e.stopPropagation(); setExpanded(v => !v) }}
         >
           {expanded ? '▾' : '▸'}
         </span>
@@ -197,14 +224,18 @@ function OutlineItem({
         )}
 
         <div className="outline-actions">
-          <button style={styles.iconBtn} onClick={e => { e.stopPropagation(); onDrill(item.id) }} title="Drill">⊳</button>
-          <button style={styles.iconBtn} onClick={e => { e.stopPropagation(); onToggleVisible(item.id, isHidden ? true : false) }} title={isHidden ? 'Show' : 'Hide'}>
+          <button style={styles.iconBtn} title="Drill" onClick={e => { e.stopPropagation(); onDrill(item.id) }}>⊳</button>
+          <button style={styles.iconBtn} title={isHidden ? 'Show' : 'Hide'}
+            onClick={e => { e.stopPropagation(); onToggleVisible(item.id, !isHidden) }}>
             {isHidden ? '◌' : '●'}
           </button>
-          <button style={styles.iconBtn} onClick={e => { e.stopPropagation(); onAddChild(item.id) }} title="Add child">+</button>
-          <button style={{ ...styles.iconBtn, color: '#f87171' }} onClick={e => { e.stopPropagation(); onDelete(item.id) }} title="Delete">×</button>
+          <button style={styles.iconBtn} title="Add child" onClick={e => { e.stopPropagation(); onAddChild(item.id) }}>+</button>
+          <button style={{ ...styles.iconBtn, color: '#f87171' }} title="Delete" onClick={e => { e.stopPropagation(); onDelete(item.id) }}>×</button>
         </div>
       </div>
+
+      {/* Drop-after indicator */}
+      {isDropAfter && <div style={styles.dropLine} />}
 
       {expanded && item.children.map((child, i) => (
         <OutlineItem
@@ -220,7 +251,7 @@ function OutlineItem({
           onDrill={onDrill}
           viewNodeProps={viewNodeProps}
           dragId={dragId}
-          dropTargetId={dropTargetId}
+          dropTarget={dropTarget}
           onDragStart={onDragStart}
           onDragOver={onDragOver}
           onDrop={onDrop}
@@ -232,7 +263,7 @@ function OutlineItem({
 }
 
 const styles = {
-  panel: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  panel: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '0.6rem 0.75rem', borderBottom: '1px solid #1e1e2e', flexShrink: 0,
@@ -245,11 +276,18 @@ const styles = {
   dropZone: {
     fontSize: '0.68rem', color: '#4ade80', textAlign: 'center', padding: '3px 0',
     border: '1px dashed', borderRadius: 4, margin: '2px 8px', transition: 'all 0.1s',
-    pointerEvents: 'auto',
+  },
+  dropLine: {
+    height: 2, background: '#38bdf8', borderRadius: 1,
+    position: 'absolute', left: 0, right: 0, zIndex: 10,
   },
   tree: { flex: 1, overflowY: 'auto', padding: '0.25rem 0.25rem' },
   empty: { color: '#444', fontSize: '0.78rem', textAlign: 'center', padding: '2rem 1rem', lineHeight: 1.6 },
-  chevron: { fontSize: 9, color: '#555', cursor: 'pointer', width: 10, flexShrink: 0, userSelect: 'none' },
+  chevron: {
+    fontSize: 11, color: '#aaa', cursor: 'pointer',
+    width: 14, flexShrink: 0, userSelect: 'none',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
   cloneTag: { fontSize: 9, color: '#5b6af0', flexShrink: 0 },
   label: {
     flex: 1, fontSize: '0.8rem', cursor: 'default',

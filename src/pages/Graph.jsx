@@ -7,6 +7,7 @@ import { loadProject, saveProject } from '../lib/db'
 
 export default function Graph({ projectId, projectName, onBack }) {
   const svgRef = useRef()
+  const bgRectRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
   const simNodesRef = useRef([])
@@ -16,10 +17,11 @@ export default function Graph({ projectId, projectName, onBack }) {
   const [tick, setTick] = useState(0)
   const [connecting, setConnecting] = useState(null)
   const [selected, setSelected] = useState(null) // { id, type: 'node'|'edge' }
+  const [sidebarWidth, setSidebarWidth] = useState(220)
 
   const loadProjectData = useGraphStore(s => s.loadProjectData)
   const [loading, setLoading] = useState(true)
-  const [saveStatus, setSaveStatus] = useState('saved') // 'saved' | 'saving' | 'error'
+  const [saveStatus, setSaveStatus] = useState('saved')
   const saveTimer = useRef(null)
 
   // Load project data on mount
@@ -53,11 +55,11 @@ export default function Graph({ projectId, projectName, onBack }) {
   const setDrillRoot  = useGraphStore(s => s.setDrillRoot)
   const exitDrill     = useGraphStore(s => s.exitDrill)
 
-  const activeView   = views.find(v => v.id === activeViewId) || views[0]
+  const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
-  const drillRoot    = activeView?.drillRoot || null
+  const drillRoot     = activeView?.drillRoot || null
 
-  // Auto-save (debounced 1.5s after last change, skip while loading)
+  // Auto-save (debounced 1.5s)
   useEffect(() => {
     if (loading) return
     setSaveStatus('saving')
@@ -78,7 +80,7 @@ export default function Graph({ projectId, projectName, onBack }) {
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
   }), [viewNodeProps])
 
-  // Visible node IDs: drill mode or individual hide
+  // Visible node IDs
   const visibleNodeIds = useMemo(() => {
     if (drillRoot) {
       const desc = new Set([drillRoot])
@@ -135,9 +137,9 @@ export default function Graph({ projectId, projectName, onBack }) {
         .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(150).strength(0.4))
         .alpha(0.4).restart()
     }
-  }, [storeNodes, storeEdges, scheduleRender]) // intentionally exclude viewNodeProps
+  }, [storeNodes, storeEdges, scheduleRender]) // eslint-disable-line
 
-  // View switch → reload anchors from new view
+  // View switch → reload anchors
   useEffect(() => {
     const { views, activeViewId } = useGraphStore.getState()
     const vp = views.find(v => v.id === activeViewId)?.nodeProps || {}
@@ -149,7 +151,7 @@ export default function Graph({ projectId, projectName, onBack }) {
     if (simRef.current) simRef.current.alpha(0.3).restart()
   }, [activeViewId])
 
-  // Zoom setup
+  // Zoom setup — filter on background rect OR svg element so nodes don't trigger pan
   useEffect(() => {
     if (!svgRef.current) return
     const svg = d3.select(svgRef.current)
@@ -157,7 +159,9 @@ export default function Graph({ projectId, projectName, onBack }) {
       .scaleExtent([0.08, 4])
       .filter(e => {
         if (e.type === 'wheel') return true
-        if (e.type === 'mousedown') return e.target === svgRef.current
+        if (e.type === 'mousedown') {
+          return e.target === svgRef.current || e.target === bgRectRef.current
+        }
         return true
       })
       .on('zoom', e => { zoomTransformRef.current = e.transform; scheduleRender() })
@@ -166,7 +170,7 @@ export default function Graph({ projectId, projectName, onBack }) {
     return () => svg.on('.zoom', null)
   }, [scheduleRender])
 
-  // Keyboard: Delete selected / Escape to deselect
+  // Keyboard
   useEffect(() => {
     const onKey = e => {
       if (document.activeElement?.tagName === 'INPUT') return
@@ -211,7 +215,7 @@ export default function Graph({ projectId, projectName, onBack }) {
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, setAnchor])
 
-  // Drag connector → connect or create new node
+  // Drag connector → connect or create
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
@@ -228,12 +232,8 @@ export default function Graph({ projectId, projectName, onBack }) {
         const dx = (n.x || 0) - sx, dy = (n.y || 0) - sy
         return Math.sqrt(dx * dx + dy * dy) < NODE_R + 20
       })
-      if (target) {
-        addEdge(sourceId, target.id)
-      } else {
-        // Drop on empty space → spawn new node at that position
-        addNode('New node', sourceId, sx, sy)
-      }
+      if (target) addEdge(sourceId, target.id)
+      else addNode('New node', sourceId, sx, sy)
       setConnecting(null)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -242,7 +242,30 @@ export default function Graph({ projectId, projectName, onBack }) {
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, addEdge, addNode])
 
-  // Release anchor: clear sim node fx/fy immediately + update store
+  // Scale handle drag
+  const handleScaleMouseDown = useCallback((e, nodeId, currentScale) => {
+    e.stopPropagation(); e.preventDefault()
+    const simNode = simNodesRef.current.find(n => n.id === nodeId)
+    if (!simNode) return
+    const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
+    const startDist = Math.sqrt((sx0 - simNode.x) ** 2 + (sy0 - simNode.y) ** 2)
+    const startScale = currentScale
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const dist = Math.sqrt((sx - simNode.x) ** 2 + (sy - simNode.y) ** 2)
+      if (startDist < 1) return
+      const newScale = Math.max(0.3, Math.min(3, startScale * dist / startDist))
+      setNodeViewProp(nodeId, 'scale', Math.round(newScale * 10) / 10)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
+  // Release anchor
   const handleRelease = useCallback((nodeId) => {
     releaseAnchor(nodeId)
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
@@ -265,6 +288,19 @@ export default function Graph({ projectId, projectName, onBack }) {
     scheduleRender()
   }, [visibleNodeIds, scheduleRender])
 
+  // Sidebar resize
+  const handleSplitMouseDown = useCallback(() => {
+    const onMove = e => setSidebarWidth(Math.max(140, Math.min(500, e.clientX)))
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+    }
+    document.body.style.cursor = 'col-resize'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node'
     ? simNodesRef.current.find(n => n.id === selected.id)
@@ -279,13 +315,21 @@ export default function Graph({ projectId, projectName, onBack }) {
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left sidebar */}
-      <div style={sidebarStyle}>
+      <div style={{ width: sidebarWidth, minWidth: sidebarWidth, display: 'flex', flexDirection: 'column', background: '#111118', overflow: 'hidden' }}>
         <OutlinePanel
           selectedNodeId={selected?.type === 'node' ? selected.id : null}
           onSelectNode={id => setSelected({ id, type: 'node' })}
         />
         <ViewManager />
       </div>
+
+      {/* Resize handle */}
+      <div
+        style={{ width: 4, cursor: 'col-resize', background: '#1e1e2e', flexShrink: 0, transition: 'background 0.15s' }}
+        onMouseDown={handleSplitMouseDown}
+        onMouseEnter={e => e.currentTarget.style.background = '#5b6af0'}
+        onMouseLeave={e => e.currentTarget.style.background = '#1e1e2e'}
+      />
 
       {/* Canvas */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
@@ -301,6 +345,9 @@ export default function Graph({ projectId, projectName, onBack }) {
               <path d="M0,0 L0,7 L7,3.5 z" fill="#5b6af0" />
             </marker>
           </defs>
+
+          {/* Background rect — pan target, fills canvas */}
+          <rect ref={bgRectRef} width="100%" height="100%" fill="transparent" />
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
             {/* Edges */}
@@ -321,7 +368,6 @@ export default function Graph({ projectId, projectName, onBack }) {
                   onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }}
                   style={{ cursor: 'pointer' }}
                 >
-                  {/* Wide invisible hit area */}
                   <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={12} />
                   <line x1={x1} y1={y1} x2={x2} y2={y2}
                     stroke={isSel ? '#5b6af0' : '#334155'}
@@ -356,6 +402,7 @@ export default function Graph({ projectId, projectName, onBack }) {
                   isSelected={selected?.id === n.id && selected?.type === 'node'}
                   onMouseDown={handleNodeMouseDown}
                   onConnectorMouseDown={handleConnectorMouseDown}
+                  onScaleMouseDown={handleScaleMouseDown}
                   onRelease={handleRelease}
                   onDelete={deleteNode}
                   onLabelChange={updateLabel}
@@ -371,15 +418,13 @@ export default function Graph({ projectId, projectName, onBack }) {
             y={T.y + (selectedNode.y || 0) * T.k + NODE_R * (getVP(selectedNode.id).scale || 1) * T.k + 12}
             viewProps={getVP(selectedNode.id)}
             onSetProp={(p, v) => setNodeViewProp(selectedNode.id, p, v)}
-            onRelease={() => releaseAnchor(selectedNode.id)}
             onDrill={() => { setDrillRoot(selectedNode.id); setSelected(null) }}
             onHide={() => { setNodeViewProp(selectedNode.id, 'visible', false); setSelected(null) }}
           />
         )}
 
-        {/* Project name + save status (top-left of canvas) */}
+        {/* Save status */}
         <div style={{ position: 'absolute', top: 10, left: 12, display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}>
-          <span style={{ fontSize: '0.75rem', color: '#333', fontWeight: 600 }}>{projectName}</span>
           <span style={{ fontSize: '0.68rem', color: saveStatus === 'error' ? '#f87171' : saveStatus === 'saving' ? '#5b6af0' : '#2a3a2a' }}>
             {saveStatus === 'error' ? '● save failed' : saveStatus === 'saving' ? '● saving…' : '● saved'}
           </span>
@@ -387,9 +432,7 @@ export default function Graph({ projectId, projectName, onBack }) {
 
         {/* Canvas buttons */}
         <div style={canvasBtnsStyle}>
-          {drillRoot && (
-            <button style={canvasBtnStyle} onClick={exitDrill}>↑ Exit Drill</button>
-          )}
+          {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>↑ Exit Drill</button>}
           <button style={canvasBtnStyle} onClick={zoomExtents}>⊡ Fit</button>
           <button style={canvasBtnStyle} onClick={() => addNode('New node')}>+ Node</button>
         </div>
@@ -400,13 +443,12 @@ export default function Graph({ projectId, projectName, onBack }) {
 
 // ─── NodeShape ────────────────────────────────────────────────────────────────
 
-function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseDown, onRelease, onDelete, onLabelChange }) {
+function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onRelease, onDelete, onLabelChange }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
 
   useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
-  // Select all text when editing starts
   useEffect(() => { if (editing) inputRef.current?.select() }, [editing])
 
   const commitEdit = () => { onLabelChange(node.id, draft); setEditing(false) }
@@ -416,8 +458,12 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
   const r = NODE_R * scale
   const fontSize = Math.max(8, Math.round(11.5 * scale))
   const fill = viewProps.fillColor || DEFAULT_NODE_PROPS.fillColor
-  const stroke = isAnchored ? '#f6ad55' : isSelected ? '#5b6af0' : (viewProps.strokeColor || DEFAULT_NODE_PROPS.strokeColor)
+  // Ring color: user's chosen color always; selection shown via glow ring only
+  const stroke = isAnchored ? '#f6ad55' : (viewProps.strokeColor || DEFAULT_NODE_PROPS.strokeColor)
   const x = node.x ?? 0, y = node.y ?? 0
+
+  // Scale handle at bottom-right of circle (45°)
+  const hx = r * 0.707, hy = r * 0.707
 
   return (
     <g transform={`translate(${x},${y})`}
@@ -427,14 +473,14 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
     >
       {/* Selection / anchor glow */}
       {(isSelected || isAnchored) && (
-        <circle r={r + 5} fill="none"
+        <circle r={r + 6} fill="none"
           stroke={isAnchored ? '#f6ad55' : '#5b6af0'}
-          strokeWidth={1} opacity={0.2}
+          strokeWidth={1.5} opacity={0.35}
         />
       )}
 
       {/* Main body */}
-      <circle r={r} fill={fill} stroke={stroke} strokeWidth={isAnchored || isSelected ? 2 : 1.5} />
+      <circle r={r} fill={fill} stroke={stroke} strokeWidth={isAnchored ? 2.5 : 1.5} />
 
       {/* Label */}
       {editing ? (
@@ -456,7 +502,7 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
         </text>
       )}
 
-      {/* Invisible overlay: double-click to edit */}
+      {/* Double-click to edit */}
       <circle r={r} fill="transparent"
         onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true) }}
         style={{ cursor: 'text' }}
@@ -469,7 +515,19 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
         style={{ cursor: 'crosshair' }}
       />
 
-      {/* Release anchor (top-left, only when anchored) */}
+      {/* Scale handle (bottom-right, only when selected) */}
+      {isSelected && (
+        <g transform={`translate(${hx},${hy})`}
+          onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
+          style={{ cursor: 'nwse-resize' }}
+        >
+          <circle r={6} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} />
+          <line x1={-3} y1={-3} x2={3} y2={3} stroke="#5b6af0" strokeWidth={1.5} />
+          <line x1={0} y1={-3} x2={3} y2={0} stroke="#5b6af0" strokeWidth={1} />
+        </g>
+      )}
+
+      {/* Release anchor */}
       {isAnchored && (
         <g transform={`translate(${-r + 2},${-r + 2})`}
           onMouseDown={e => e.stopPropagation()}
@@ -498,7 +556,7 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
 
 // ─── NodeToolbar ──────────────────────────────────────────────────────────────
 
-function NodeToolbar({ x, y, viewProps, onSetProp, onRelease, onDrill, onHide }) {
+function NodeToolbar({ x, y, viewProps, onSetProp, onDrill, onHide }) {
   const scale = viewProps.scale || 1
   return (
     <div
@@ -519,7 +577,7 @@ function NodeToolbar({ x, y, viewProps, onSetProp, onRelease, onDrill, onHide })
       </Row>
       <Row label="Ring">
         {STROKE_COLORS.map(c => (
-          <Swatch key={c} bg="transparent" border={c} active={viewProps.strokeColor === c} onClick={() => onSetProp('strokeColor', c)} />
+          <Swatch key={c} bg={c} border={c} active={viewProps.strokeColor === c} onClick={() => onSetProp('strokeColor', c)} />
         ))}
       </Row>
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
@@ -528,8 +586,8 @@ function NodeToolbar({ x, y, viewProps, onSetProp, onRelease, onDrill, onHide })
         <span style={{ fontSize: 10, color: '#888', minWidth: 32, textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
         <button style={tlBtn} onClick={() => onSetProp('scale', +(Math.min(3, scale + 0.2)).toFixed(1))}>+</button>
         <div style={{ flex: 1 }} />
-        <button style={{ ...tlBtn, color: '#666' }} onClick={onHide} title="Hide in this view">Hide</button>
-        <button style={{ ...tlBtn, color: '#5b6af0' }} onClick={onDrill} title="Show only this subtree">⊳ Drill</button>
+        <button style={{ ...tlBtn, color: '#666' }} onClick={onHide}>Hide</button>
+        <button style={{ ...tlBtn, color: '#5b6af0' }} onClick={onDrill}>⊳ Drill</button>
       </div>
     </div>
   )
@@ -547,26 +605,17 @@ function Row({ label, children }) {
 function Swatch({ bg, border, active, onClick }) {
   return (
     <div onClick={onClick} style={{
-      width: 15, height: 15, borderRadius: '50%', background: bg,
-      border: active ? '2px solid #fff' : `2px solid ${border || bg}`,
+      width: 16, height: 16, borderRadius: '50%', background: bg,
+      border: active ? '2.5px solid #fff' : `1.5px solid ${border || bg}`,
       cursor: 'pointer', flexShrink: 0,
+      boxShadow: active ? '0 0 0 1px #5b6af0' : 'none',
     }} />
   )
 }
 
 const tlLabel = { fontSize: 9, color: '#555', width: 22, flexShrink: 0 }
 const tlBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aaa', cursor: 'pointer', fontSize: '0.72rem', padding: '1px 6px', borderRadius: 4 }
-
-const sidebarStyle = {
-  width: 220, minWidth: 220, display: 'flex', flexDirection: 'column',
-  background: '#111118', borderRight: '1px solid #1e1e2e',
-}
-
-const canvasBtnsStyle = {
-  position: 'absolute', bottom: '1.25rem', right: '1.25rem',
-  display: 'flex', gap: 8,
-}
-
+const canvasBtnsStyle = { position: 'absolute', bottom: '1.25rem', right: '1.25rem', display: 'flex', gap: 8 }
 const canvasBtnStyle = {
   padding: '0.45rem 0.85rem', borderRadius: 7,
   border: '1px solid #2d3a6a', background: '#12122a',
