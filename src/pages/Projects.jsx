@@ -90,6 +90,8 @@ function ProjectRow({ project, onOpen, onRename, onDelete }) {
   const [draft, setDraft] = useState(project.name)
   const inputRef = useRef()
 
+  // Sync draft when project name changes externally (fixes stale rename)
+  useEffect(() => { if (!editing) setDraft(project.name) }, [project.name, editing])
   useEffect(() => { if (editing) { inputRef.current?.focus(); inputRef.current?.select() } }, [editing])
 
   const commit = () => {
@@ -131,13 +133,17 @@ function ProjectRow({ project, onOpen, onRename, onDelete }) {
 }
 
 function formatAge(iso) {
-  const diff = Date.now() - new Date(iso).getTime()
+  if (!iso) return ''
+  const d = new Date(iso)
+  const diff = Date.now() - d.getTime()
   const m = Math.floor(diff / 60000)
   if (m < 1) return 'just now'
   if (m < 60) return `${m}m ago`
   const h = Math.floor(m / 60)
   if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  const days = Math.floor(h / 24)
+  if (days < 7) return `${days}d ago`
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined })
 }
 
 const styles = {

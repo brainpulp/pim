@@ -11,7 +11,10 @@ export const DEFAULT_NODE_PROPS = {
   visible: true,
   fx: null,
   fy: null,
+  shape: 'circle', // 'circle' | 'ellipse' | 'roundrect' | 'diamond' | 'none'
 }
+
+export const SHAPES = ['circle', 'ellipse', 'roundrect', 'diamond', 'none']
 
 export const FILL_COLORS = [
   '#1d4ed8', '#2563eb', '#0f766e', '#0d9488',
@@ -48,10 +51,14 @@ const useGraphStore = create((set, get) => ({
   }),
 
   // ── Node ops ──────────────────────────────────────────────────
+  updateNotes: (id, notes) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, notes } : n),
+  })),
+
   addNode: (label = 'New node', parentId = null, x = null, y = null) => {
     const id = uid()
     set(s => ({
-      nodes: [...s.nodes, { id, label }],
+      nodes: [...s.nodes, { id, label, notes: '' }],
       edges: parentId ? [...s.edges, { id: uid(), source: parentId, target: id }] : s.edges,
       views: s.views.map(v => v.id !== s.activeViewId ? v : {
         ...v,
