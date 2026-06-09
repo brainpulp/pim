@@ -203,6 +203,14 @@ export default function Graph() {
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, addEdge, addNode])
 
+  // Release anchor: clear sim node fx/fy immediately + update store
+  const handleRelease = useCallback((nodeId) => {
+    releaseAnchor(nodeId)
+    const simNode = simNodesRef.current.find(n => n.id === nodeId)
+    if (simNode) { simNode.fx = null; simNode.fy = null }
+    if (simRef.current) simRef.current.alpha(0.3).restart()
+  }, [releaseAnchor])
+
   // Zoom extents
   const zoomExtents = useCallback(() => {
     const vis = simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && n.x != null)
@@ -227,7 +235,10 @@ export default function Graph() {
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left sidebar */}
       <div style={sidebarStyle}>
-        <OutlinePanel />
+        <OutlinePanel
+          selectedNodeId={selected?.type === 'node' ? selected.id : null}
+          onSelectNode={id => setSelected({ id, type: 'node' })}
+        />
         <ViewManager />
       </div>
 
@@ -300,7 +311,7 @@ export default function Graph() {
                   isSelected={selected?.id === n.id && selected?.type === 'node'}
                   onMouseDown={handleNodeMouseDown}
                   onConnectorMouseDown={handleConnectorMouseDown}
-                  onRelease={releaseAnchor}
+                  onRelease={handleRelease}
                   onDelete={deleteNode}
                   onLabelChange={updateLabel}
                 />
@@ -358,6 +369,7 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
   return (
     <g transform={`translate(${x},${y})`}
       onMouseDown={e => onMouseDown(e, node.id)}
+      onClick={e => e.stopPropagation()}
       style={{ cursor: isAnchored ? 'move' : 'grab' }}
     >
       {/* Selection / anchor glow */}
@@ -407,6 +419,7 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
       {/* Release anchor (top-left, only when anchored) */}
       {isAnchored && (
         <g transform={`translate(${-r + 2},${-r + 2})`}
+          onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); onRelease(node.id) }}
           style={{ cursor: 'pointer' }}
         >
@@ -415,14 +428,17 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
         </g>
       )}
 
-      {/* Delete (top-right) */}
-      <g transform={`translate(${r - 2},${-r + 2})`}
-        onClick={e => { e.stopPropagation(); onDelete(node.id) }}
-        style={{ cursor: 'pointer' }}
-      >
-        <circle r={8} fill="#1a1a2e" stroke="#4a3a3a" strokeWidth={1.5} />
-        <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
-      </g>
+      {/* Delete (top-right, only when selected) */}
+      {isSelected && (
+        <g transform={`translate(${r - 2},${-r + 2})`}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); onDelete(node.id) }}
+          style={{ cursor: 'pointer' }}
+        >
+          <circle r={8} fill="#1a1a2e" stroke="#4a3a3a" strokeWidth={1.5} />
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
+        </g>
+      )}
     </g>
   )
 }

@@ -14,12 +14,12 @@ export const DEFAULT_NODE_PROPS = {
 }
 
 export const FILL_COLORS = [
-  '#12122a', '#0c2044', '#0c3028', '#2a1a08',
-  '#2a0c14', '#1e0c2a', '#252525', '#0c1a10',
+  '#1d4ed8', '#0f766e', '#7e22ce', '#b45309',
+  '#be185d', '#0e7490', '#15803d', '#374151',
 ]
 export const STROKE_COLORS = [
-  '#2d3a6a', '#5b6af0', '#10b981', '#f59e0b',
-  '#f87171', '#e879f9', '#38bdf8', '#84cc16',
+  '#60a5fa', '#34d399', '#c084fc', '#fbbf24',
+  '#f472b6', '#22d3ee', '#4ade80', '#f87171',
 ]
 
 // Helper: update nodeProps for a specific node in the active view
@@ -79,6 +79,13 @@ const useGraphStore = create((set, get) => ({
   },
 
   removeEdge: (id) => set(s => ({ edges: s.edges.filter(e => e.id !== id) })),
+
+  // Remove all parent edges for nodeId, optionally set a new parent
+  reparentNode: (nodeId, newParentId) => set(s => {
+    const edges = s.edges.filter(e => e.target !== nodeId)
+    if (newParentId && newParentId !== nodeId) edges.push({ id: uid(), source: newParentId, target: nodeId })
+    return { edges }
+  }),
 
   // ── View-dependent node props ─────────────────────────────────
   setNodeViewProp: (nodeId, prop, value) => set(s => ({

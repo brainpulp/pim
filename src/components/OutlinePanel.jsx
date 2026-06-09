@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import useGraphStore from '../lib/graphStore'
 
-// Build display tree. After building from real roots, append any unseen
-// nodes as extra top-level items (handles cycles + fully disconnected nodes).
 function buildTree(nodes, edges) {
   const childrenOf = {}
   const parentCount = {}
@@ -33,15 +31,11 @@ function buildTree(nodes, edges) {
   }
 
   const items = roots.map(n => buildItem(n.id, new Set()))
-
-  // Orphans and nodes in pure cycles (never seen after root traversal)
   nodes.forEach(n => {
     if (!seen.has(n.id)) {
       seen.add(n.id)
       items.push({
-        id: n.id,
-        label: n.label,
-        isClone: false,
+        id: n.id, label: n.label, isClone: false,
         children: (childrenOf[n.id] || [])
           .filter(cid => !seen.has(cid))
           .map(cid => buildItem(cid, new Set([n.id])))
@@ -49,25 +43,36 @@ function buildTree(nodes, edges) {
       })
     }
   })
-
   return items
 }
 
-export default function OutlinePanel() {
-  const nodes       = useGraphStore(s => s.nodes)
-  const edges       = useGraphStore(s => s.edges)
-  const addNode     = useGraphStore(s => s.addNode)
-  const updateLabel = useGraphStore(s => s.updateLabel)
-  const deleteNode  = useGraphStore(s => s.deleteNode)
+export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
+  const nodes         = useGraphStore(s => s.nodes)
+  const edges         = useGraphStore(s => s.edges)
+  const addNode       = useGraphStore(s => s.addNode)
+  const updateLabel   = useGraphStore(s => s.updateLabel)
+  const deleteNode    = useGraphStore(s => s.deleteNode)
+  const reparentNode  = useGraphStore(s => s.reparentNode)
   const activeViewId  = useGraphStore(s => s.activeViewId)
   const views         = useGraphStore(s => s.views)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setDrillRoot  = useGraphStore(s => s.setDrillRoot)
 
-  const activeView = views.find(v => v.id === activeViewId) || views[0]
+  const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
 
+  // Drag-drop state: which node id is being dragged
+  const [dragId, setDragId] = useState(null)
+  const [dropTargetId, setDropTargetId] = useState(null) // 'root' | nodeId
+
   const tree = buildTree(nodes, edges)
+
+  const handleDrop = (targetId) => {
+    if (!dragId || dragId === targetId) return
+    reparentNode(dragId, targetId === 'root' ? null : targetId)
+    setDragId(null)
+    setDropTargetId(null)
+  }
 
   return (
     <div style={styles.panel}>
@@ -75,6 +80,22 @@ export default function OutlinePanel() {
         <span style={styles.headerLabel}>OUTLINE</span>
         <button style={styles.addRootBtn} onClick={() => addNode('New node')}>+ Root</button>
       </div>
+
+      {/* Root drop zone */}
+      <div
+        style={{
+          ...styles.dropZone,
+          opacity: dragId ? 1 : 0,
+          background: dropTargetId === 'root' ? '#1a2a1a' : 'transparent',
+          borderColor: dropTargetId === 'root' ? '#4ade80' : '#2d3a6a',
+        }}
+        onDragOver={e => { e.preventDefault(); setDropTargetId('root') }}
+        onDragLeave={() => setDropTargetId(null)}
+        onDrop={() => handleDrop('root')}
+      >
+        ↑ make root
+      </div>
+
       <div style={styles.tree}>
         {tree.length === 0 && (
           <div style={styles.empty}>No nodes yet.<br />Click + Root to start.</div>
@@ -84,12 +105,20 @@ export default function OutlinePanel() {
             key={root.id + '-' + i}
             item={root}
             depth={0}
+            selectedNodeId={selectedNodeId}
+            onSelect={onSelectNode}
             onAddChild={parentId => addNode('New node', parentId)}
             onRename={updateLabel}
             onDelete={deleteNode}
             onToggleVisible={(id, val) => setNodeViewProp(id, 'visible', val)}
-            onDrill={id => setDrillRoot(id)}
+            onDrill={setDrillRoot}
             viewNodeProps={viewNodeProps}
+            dragId={dragId}
+            dropTargetId={dropTargetId}
+            onDragStart={setDragId}
+            onDragOver={setDropTargetId}
+            onDrop={handleDrop}
+            onDragEnd={() => { setDragId(null); setDropTargetId(null) }}
           />
         ))}
       </div>
@@ -97,27 +126,50 @@ export default function OutlinePanel() {
   )
 }
 
-function OutlineItem({ item, depth, onAddChild, onRename, onDelete, onToggleVisible, onDrill, viewNodeProps }) {
+function OutlineItem({
+  item, depth, selectedNodeId, onSelect,
+  onAddChild, onRename, onDelete, onToggleVisible, onDrill,
+  viewNodeProps, dragId, dropTargetId, onDragStart, onDragOver, onDrop, onDragEnd,
+}) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(item.label)
   const [expanded, setExpanded] = useState(true)
   const inputRef = useRef()
   const hasChildren = item.children.length > 0
   const isHidden = viewNodeProps[item.id]?.visible === false
+  const isSelected = item.id === selectedNodeId
+  const isDropTarget = dropTargetId === item.id
 
-  // Sync label from store (e.g. renamed in graph)
   useEffect(() => { if (!editing) setDraft(item.label) }, [item.label, editing])
-  // Select all text when editing starts
-  useEffect(() => { if (editing) inputRef.current?.select() }, [editing])
+  useEffect(() => { if (editing) { inputRef.current?.focus(); inputRef.current?.select() } }, [editing])
 
   const commitEdit = () => { onRename(item.id, draft); setEditing(false) }
 
   return (
     <div style={{ paddingLeft: depth * 14 }}>
-      <div className="outline-row" style={isHidden ? { opacity: 0.4 } : {}}>
+      <div
+        className="outline-row"
+        draggable
+        style={{
+          opacity: isHidden ? 0.4 : 1,
+          background: isSelected
+            ? '#1e2048'
+            : isDropTarget
+            ? '#1a2a3a'
+            : undefined,
+          borderLeft: isSelected ? '2px solid #5b6af0' : isDropTarget ? '2px solid #38bdf8' : '2px solid transparent',
+          cursor: 'grab',
+        }}
+        onClick={() => onSelect?.(item.id)}
+        onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; onDragStart(item.id) }}
+        onDragOver={e => { e.preventDefault(); e.stopPropagation(); onDragOver(item.id) }}
+        onDragLeave={e => { e.stopPropagation(); onDragOver(null) }}
+        onDrop={e => { e.preventDefault(); e.stopPropagation(); onDrop(item.id) }}
+        onDragEnd={onDragEnd}
+      >
         <span
           style={{ ...styles.chevron, opacity: hasChildren ? 1 : 0 }}
-          onClick={() => setExpanded(e => !e)}
+          onClick={e => { e.stopPropagation(); setExpanded(v => !v) }}
         >
           {expanded ? '▾' : '▸'}
         </span>
@@ -129,15 +181,15 @@ function OutlineItem({ item, depth, onAddChild, onRename, onDelete, onToggleVisi
             ref={inputRef}
             style={styles.input}
             value={draft}
-            autoFocus
             onChange={e => setDraft(e.target.value)}
             onBlur={commitEdit}
+            onClick={e => e.stopPropagation()}
             onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditing(false) }}
           />
         ) : (
           <span
             style={styles.label}
-            onDoubleClick={() => { setDraft(item.label); setEditing(true) }}
+            onDoubleClick={e => { e.stopPropagation(); setDraft(item.label); setEditing(true) }}
             title={item.label}
           >
             {item.label}
@@ -145,12 +197,12 @@ function OutlineItem({ item, depth, onAddChild, onRename, onDelete, onToggleVisi
         )}
 
         <div className="outline-actions">
-          <button style={styles.iconBtn} onClick={() => onDrill(item.id)} title="Drill into this node">⊳</button>
-          <button style={styles.iconBtn} onClick={() => onToggleVisible(item.id, isHidden ? true : false)} title={isHidden ? 'Show' : 'Hide'}>
+          <button style={styles.iconBtn} onClick={e => { e.stopPropagation(); onDrill(item.id) }} title="Drill">⊳</button>
+          <button style={styles.iconBtn} onClick={e => { e.stopPropagation(); onToggleVisible(item.id, isHidden ? true : false) }} title={isHidden ? 'Show' : 'Hide'}>
             {isHidden ? '◌' : '●'}
           </button>
-          <button style={styles.iconBtn} onClick={() => onAddChild(item.id)} title="Add child">+</button>
-          <button style={{ ...styles.iconBtn, color: '#f87171' }} onClick={() => onDelete(item.id)} title="Delete">×</button>
+          <button style={styles.iconBtn} onClick={e => { e.stopPropagation(); onAddChild(item.id) }} title="Add child">+</button>
+          <button style={{ ...styles.iconBtn, color: '#f87171' }} onClick={e => { e.stopPropagation(); onDelete(item.id) }} title="Delete">×</button>
         </div>
       </div>
 
@@ -159,12 +211,20 @@ function OutlineItem({ item, depth, onAddChild, onRename, onDelete, onToggleVisi
           key={child.id + '-' + depth + '-' + i}
           item={child}
           depth={depth + 1}
+          selectedNodeId={selectedNodeId}
+          onSelect={onSelect}
           onAddChild={onAddChild}
           onRename={onRename}
           onDelete={onDelete}
           onToggleVisible={onToggleVisible}
           onDrill={onDrill}
           viewNodeProps={viewNodeProps}
+          dragId={dragId}
+          dropTargetId={dropTargetId}
+          onDragStart={onDragStart}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          onDragEnd={onDragEnd}
         />
       ))}
     </div>
@@ -172,9 +232,7 @@ function OutlineItem({ item, depth, onAddChild, onRename, onDelete, onToggleVisi
 }
 
 const styles = {
-  panel: {
-    flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden',
-  },
+  panel: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '0.6rem 0.75rem', borderBottom: '1px solid #1e1e2e', flexShrink: 0,
@@ -184,7 +242,12 @@ const styles = {
     fontSize: '0.72rem', padding: '2px 7px', borderRadius: 4,
     border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer',
   },
-  tree: { flex: 1, overflowY: 'auto', padding: '0.4rem 0.25rem' },
+  dropZone: {
+    fontSize: '0.68rem', color: '#4ade80', textAlign: 'center', padding: '3px 0',
+    border: '1px dashed', borderRadius: 4, margin: '2px 8px', transition: 'all 0.1s',
+    pointerEvents: 'auto',
+  },
+  tree: { flex: 1, overflowY: 'auto', padding: '0.25rem 0.25rem' },
   empty: { color: '#444', fontSize: '0.78rem', textAlign: 'center', padding: '2rem 1rem', lineHeight: 1.6 },
   chevron: { fontSize: 9, color: '#555', cursor: 'pointer', width: 10, flexShrink: 0, userSelect: 'none' },
   cloneTag: { fontSize: 9, color: '#5b6af0', flexShrink: 0 },
