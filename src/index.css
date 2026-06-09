@@ -7,3 +7,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .outline-row:hover { background: #1a1a2e; }
 .outline-actions { display: flex; gap: 2px; opacity: 0; flex-shrink: 0; }
 .outline-row:hover .outline-actions { opacity: 1; }
+
+/* View manager rows */
+.view-row { display: flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 4px; cursor: pointer; min-height: 26px; }
+.view-row:hover { background: #1a1a2e; }
+.view-row-active { background: #16162e; }
+.view-actions { display: flex; gap: 2px; opacity: 0; flex-shrink: 0; }
+.view-row:hover .view-actions { opacity: 1; }
