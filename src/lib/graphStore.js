@@ -34,12 +34,20 @@ const patchViewNode = (views, activeViewId, nodeId, patch) =>
 
 const useGraphStore = create((set, get) => ({
   // ── View-independent ──────────────────────────────────────────
-  nodes: [{ id: 'root-1', label: 'Root' }],
+  nodes: [],
   edges: [],
 
   // ── Views ─────────────────────────────────────────────────────
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null }],
   activeViewId: 'view-default',
+
+  // ── Load a full project snapshot ──────────────────────────────
+  loadProjectData: ({ nodes, edges, views, activeViewId }) => set({
+    nodes: nodes || [],
+    edges: edges || [],
+    views: views?.length ? views : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null }],
+    activeViewId: activeViewId || 'view-default',
+  }),
 
   // ── Node ops ──────────────────────────────────────────────────
   addNode: (label = 'New node', parentId = null, x = null, y = null) => {

@@ -3,8 +3,9 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, STROKE_COLORS } from '../lib/graphStore'
 import OutlinePanel from '../components/OutlinePanel'
 import ViewManager from '../components/ViewManager'
+import { loadProject, saveProject } from '../lib/db'
 
-export default function Graph() {
+export default function Graph({ projectId, projectName, onBack }) {
   const svgRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
@@ -15,6 +16,27 @@ export default function Graph() {
   const [tick, setTick] = useState(0)
   const [connecting, setConnecting] = useState(null)
   const [selected, setSelected] = useState(null) // { id, type: 'node'|'edge' }
+
+  const loadProjectData = useGraphStore(s => s.loadProjectData)
+  const [loading, setLoading] = useState(true)
+  const [saveStatus, setSaveStatus] = useState('saved') // 'saved' | 'saving' | 'error'
+  const saveTimer = useRef(null)
+
+  // Load project data on mount
+  useEffect(() => {
+    setLoading(true)
+    loadProject(projectId)
+      .then(data => {
+        loadProjectData({
+          nodes: data.nodes,
+          edges: data.edges,
+          views: data.views,
+          activeViewId: data.active_view_id,
+        })
+      })
+      .catch(e => console.error('Failed to load project:', e))
+      .finally(() => setLoading(false))
+  }, [projectId]) // eslint-disable-line
 
   const storeNodes   = useGraphStore(s => s.nodes)
   const storeEdges   = useGraphStore(s => s.edges)
@@ -34,6 +56,23 @@ export default function Graph() {
   const activeView   = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
   const drillRoot    = activeView?.drillRoot || null
+
+  // Auto-save (debounced 1.5s after last change, skip while loading)
+  useEffect(() => {
+    if (loading) return
+    setSaveStatus('saving')
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId })
+        setSaveStatus('saved')
+      } catch (e) {
+        console.error('Save failed:', e)
+        setSaveStatus('error')
+      }
+    }, 1500)
+    return () => clearTimeout(saveTimer.current)
+  }, [storeNodes, storeEdges, views, activeViewId, projectId, loading]) // eslint-disable-line
 
   const getVP = useCallback((nodeId) => ({
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
@@ -231,6 +270,12 @@ export default function Graph() {
     ? simNodesRef.current.find(n => n.id === selected.id)
     : null
 
+  if (loading) return (
+    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#444', background: '#0c0c1a' }}>
+      Loading project…
+    </div>
+  )
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left sidebar */}
@@ -331,6 +376,14 @@ export default function Graph() {
             onHide={() => { setNodeViewProp(selectedNode.id, 'visible', false); setSelected(null) }}
           />
         )}
+
+        {/* Project name + save status (top-left of canvas) */}
+        <div style={{ position: 'absolute', top: 10, left: 12, display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}>
+          <span style={{ fontSize: '0.75rem', color: '#333', fontWeight: 600 }}>{projectName}</span>
+          <span style={{ fontSize: '0.68rem', color: saveStatus === 'error' ? '#f87171' : saveStatus === 'saving' ? '#5b6af0' : '#2a3a2a' }}>
+            {saveStatus === 'error' ? '● save failed' : saveStatus === 'saving' ? '● saving…' : '● saved'}
+          </span>
+        </div>
 
         {/* Canvas buttons */}
         <div style={canvasBtnsStyle}>
