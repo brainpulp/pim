@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
 import Auth from './components/Auth'
-import Canvas from './pages/Canvas'
+import Graph from './pages/Graph'
 import Table from './pages/Table'
 
-const VIEWS = ['canvas', 'table']
+const VIEWS = ['graph', 'table']
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = loading
@@ -39,7 +39,7 @@ export default function App() {
         </button>
       </nav>
       <div style={{ flex: 1, overflow: 'hidden' }}>
-        {view === 'canvas' && <Canvas />}
+        {view === 'graph' && <Graph />}
         {view === 'table' && <Table />}
       </div>
     </div>
