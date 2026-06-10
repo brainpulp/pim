@@ -62,8 +62,18 @@ export default function Graph({ projectId, projectName }) {
   const [tick, setTick] = useState(0)
   const [connecting, setConnecting] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [hoveredNodeId, setHoveredNodeId] = useState(null)
+  const hideTimerRef = useRef(null)
   const [sidebarWidth, setSidebarWidth] = useState(220)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
+
+  const showToolbar = useCallback((nodeId) => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    setHoveredNodeId(nodeId)
+  }, [])
+  const hideToolbar = useCallback(() => {
+    hideTimerRef.current = setTimeout(() => setHoveredNodeId(null), 180)
+  }, [])
 
   const loadProjectData   = useGraphStore(s => s.loadProjectData)
   const [loading, setLoading] = useState(true)
@@ -217,6 +227,7 @@ export default function Graph({ projectId, projectName }) {
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
     setSelected({ id: nodeId, type: 'node' })
+    setHoveredNodeId(null) // hide toolbar while dragging
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
     simRef.current.alphaTarget(0.3).restart()
@@ -372,33 +383,44 @@ export default function Graph({ projectId, projectName }) {
               <NodeShape key={n.id} node={n}
                 viewProps={getVP(n.id)}
                 isSelected={selected?.id === n.id && selected?.type === 'node'}
+                isHovered={hoveredNodeId === n.id}
                 onMouseDown={handleNodeMouseDown}
                 onConnectorMouseDown={handleConnectorMouseDown}
                 onScaleMouseDown={handleScaleMouseDown}
                 onDelete={id => setConfirmDelete(id)}
                 onLabelChange={updateLabel}
+                onMouseEnter={() => showToolbar(n.id)}
+                onMouseLeave={hideToolbar}
               />
             ))}
           </g>
         </svg>
 
-        {/* Node toolbar */}
-        {selectedNode && selectedStoreNode && visibleNodeIds.has(selectedNode.id) && (
-          <NodeToolbar
-            x={T.x + (selectedNode.x||0) * T.k}
-            y={T.y + (selectedNode.y||0) * T.k + shapeDims(getVP(selectedNode.id).shape||'circle', NODE_R*(getVP(selectedNode.id).scale||1)).halfH * T.k + 14}
-            viewProps={getVP(selectedNode.id)}
-            notes={selectedStoreNode.notes || ''}
-            onSetFill={c => setNodeViewProp(selectedNode.id, 'fillColor', c)}
-            onSetShape={s => setNodeViewProp(selectedNode.id, 'shape', s)}
-            onDrill={() => { setDrillRoot(selectedNode.id); setSelected(null) }}
-            onHide={() => { setNodeViewProp(selectedNode.id, 'visible', false); setSelected(null) }}
-            onRelease={() => handleRelease(selectedNode.id)}
-            onDelete={() => setConfirmDelete(selectedNode.id)}
-            onNotesChange={notes => updateNotes(selectedNode.id, notes)}
-            isAnchored={selectedNode.fx != null}
-          />
-        )}
+        {/* Node toolbar — shows on hover */}
+        {(() => {
+          const hn = hoveredNodeId && simNodesRef.current.find(n => n.id === hoveredNodeId)
+          const hs = hn && storeNodes.find(n => n.id === hn.id)
+          if (!hn || !hs || !visibleNodeIds.has(hn.id)) return null
+          const vp = getVP(hn.id)
+          return (
+            <NodeToolbar
+              x={T.x + (hn.x||0) * T.k}
+              y={T.y + (hn.y||0) * T.k + shapeDims(vp.shape||'circle', NODE_R*(vp.scale||1)).halfH * T.k + 14}
+              viewProps={vp}
+              notes={hs.notes || ''}
+              onSetFill={c => setNodeViewProp(hn.id, 'fillColor', c)}
+              onSetShape={s => setNodeViewProp(hn.id, 'shape', s)}
+              onDrill={() => { setDrillRoot(hn.id); setHoveredNodeId(null) }}
+              onHide={() => { setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
+              onRelease={() => handleRelease(hn.id)}
+              onDelete={() => { setConfirmDelete(hn.id); setHoveredNodeId(null) }}
+              onNotesChange={notes => updateNotes(hn.id, notes)}
+              isAnchored={hn.fx != null}
+              onMouseEnter={() => showToolbar(hn.id)}
+              onMouseLeave={hideToolbar}
+            />
+          )
+        })()}
 
         {/* Delete confirm */}
         {confirmDelete && (
@@ -436,7 +458,7 @@ export default function Graph({ projectId, projectName }) {
 
 // ─── NodeShape ────────────────────────────────────────────────────────────────
 
-function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onMouseEnter, onMouseLeave }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
@@ -462,6 +484,8 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
       data-node="true"
       onMouseDown={e => onMouseDown(e, node.id)}
       onClick={e => e.stopPropagation()}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
       style={{ cursor: isAnchored ? 'move' : 'grab' }}
     >
       {/* Selection glow (no anchor glow — only selection) */}
@@ -505,8 +529,8 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
         style={{ cursor:'crosshair' }}
       />
 
-      {/* Scale handle (selected only) */}
-      {isSelected && (
+      {/* Scale handle (hovered) */}
+      {isHovered && (
         <g transform={`translate(${halfW},${halfH})`}
           onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
           style={{ cursor:'nwse-resize' }}>
@@ -516,8 +540,8 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
         </g>
       )}
 
-      {/* Delete (top-right, selected only) */}
-      {isSelected && (
+      {/* Delete (top-right, hovered) */}
+      {isHovered && (
         <g transform={`translate(${halfW - 2},${-halfH + 2})`}
           onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); onDelete(node.id) }}
@@ -541,7 +565,7 @@ function EyeIcon() {
 
 // ─── NodeToolbar ──────────────────────────────────────────────────────────────
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored }) {
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave }) {
   const shape = viewProps.shape || 'circle'
   const [notesOpen, setNotesOpen] = useState(false)
   const [notesDraft, setNotesDraft] = useState(notes)
@@ -561,6 +585,8 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetShape, onDrill, o
       }}
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       {/* Fill */}
       <Row label="Fill">
