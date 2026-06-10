@@ -191,7 +191,7 @@ export default function Graph({ projectId, projectName }) {
     if (!svgRef.current) return
     const svg = d3.select(svgRef.current)
     zoomBehaviorRef.current = d3.zoom()
-      .scaleExtent([0.08, 4])
+      .scaleExtent([0.04, 10])
       .filter(e => !e.target.closest?.('[data-node]'))
       .on('zoom', e => { zoomTransformRef.current = e.transform; scheduleRender() })
     svg.call(zoomBehaviorRef.current)
@@ -279,7 +279,7 @@ export default function Graph({ projectId, projectName }) {
       const [sx, sy] = clientToSim(me.clientX, me.clientY)
       const d = Math.sqrt((sx - simNode.x)**2 + (sy - simNode.y)**2)
       if (startDist < 1) return
-      setNodeViewProp(nodeId, 'scale', Math.max(0.3, Math.min(3, Math.round(currentScale * d / startDist * 10) / 10)))
+      setNodeViewProp(nodeId, 'scale', Math.max(0.3, Math.min(6, Math.round(currentScale * d / startDist * 10) / 10)))
     }
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
     document.addEventListener('mousemove', onMove)
@@ -312,6 +312,21 @@ export default function Graph({ projectId, projectName }) {
     zoomTransformRef.current = t
     scheduleRender()
   }, [visibleNodeIds, scheduleRender])
+
+  const handleNodeTab = useCallback((nodeId) => {
+    const parentEdge = storeEdges.find(e => e.target === nodeId)
+    const parentId = parentEdge?.source || null
+    let siblings
+    if (parentId) {
+      siblings = storeEdges.filter(e => e.source === parentId).map(e => e.target)
+    } else {
+      const hasParent = new Set(storeEdges.map(e => e.target))
+      siblings = storeNodes.filter(n => !hasParent.has(n.id)).map(n => n.id)
+    }
+    const idx = siblings.indexOf(nodeId)
+    const nextId = siblings[idx + 1]
+    setPendingEditId(nextId ?? addNode('', parentId))
+  }, [storeEdges, storeNodes, addNode])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -371,6 +386,7 @@ export default function Graph({ projectId, projectName }) {
                 onScaleMouseDown={handleScaleMouseDown}
                 onDelete={id => setConfirmDelete(id)}
                 onLabelChange={updateLabel}
+                onTab={handleNodeTab}
                 onMouseEnter={() => showToolbar(n.id)}
                 onMouseLeave={hideToolbar}
               />
@@ -445,7 +461,7 @@ export default function Graph({ projectId, projectName }) {
 
 // ─── NodeShape ────────────────────────────────────────────────────────────────
 
-function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onMouseEnter, onMouseLeave }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onTab, onMouseEnter, onMouseLeave }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
@@ -469,9 +485,8 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
   const r = NODE_R * scale
   const shape = viewProps.shape || 'circle'
   const { halfW, halfH } = shapeDims(shape, r)
-  const fontSize = Math.max(8, Math.round(11 * scale))
+  const fontSize = Math.max(9, Math.round(12 * scale))
   const fill = viewProps.fillColor || DEFAULT_NODE_PROPS.fillColor
-  const stroke = isAnchored ? '#f6ad55' : (viewProps.strokeColor || DEFAULT_NODE_PROPS.strokeColor)
   const hasNotes = !!(node.notes && node.notes.length > 0)
   const x = node.x ?? 0, y = node.y ?? 0
 
@@ -484,12 +499,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
       onMouseLeave={onMouseLeave}
       style={{ cursor: isAnchored ? 'move' : 'grab' }}
     >
-      {/* Selection glow (no anchor glow — only selection) */}
-      {isSelected && (
-        <ellipse rx={halfW + 6} ry={halfH + 6} fill="none" stroke="#5b6af0" strokeWidth={1.5} opacity={0.35} />
-      )}
-
-      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke={stroke} strokeWidth={isAnchored ? 2.5 : 1.5} />
+      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} />
 
       {/* Label (foreignObject for word-wrap) */}
       {!editing && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} editing={false} />}
@@ -501,7 +511,11 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
           <input ref={inputRef} value={draft} autoFocus
             onChange={e => setDraft(e.target.value)}
             onBlur={commitEdit}
-            onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditing(false) }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
+              if (e.key === 'Escape') setEditing(false)
+              if (e.key === 'Tab') { e.preventDefault(); commitEdit(); onTab?.(node.id) }
+            }}
             style={{ width:'100%', height:'100%', background:'#1e1e3a', border:'none', outline:'1px solid #5b6af0', borderRadius:4, color:'#fff', textAlign:'center', fontSize: fontSize-1, padding:'2px 4px', boxSizing:'border-box' }}
           />
         </foreignObject>
@@ -536,16 +550,6 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
         </g>
       )}
 
-      {/* Delete (top-right, hovered) */}
-      {isHovered && (
-        <g transform={`translate(${halfW - 2},${-halfH + 2})`}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => { e.stopPropagation(); onDelete(node.id) }}
-          style={{ cursor:'pointer' }}>
-          <circle r={8} fill="#1a1a2e" stroke="#4a3a3a" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#f87171" style={{ userSelect:'none' }}>×</text>
-        </g>
-      )}
     </g>
   )
 }

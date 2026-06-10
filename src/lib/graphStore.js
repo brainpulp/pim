@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 const uid = () => crypto.randomUUID()
 
-export const NODE_R = 34
+export const NODE_R = 44
 
 export const DEFAULT_NODE_PROPS = {
   scale: 1,
