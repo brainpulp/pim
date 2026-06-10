@@ -40,9 +40,10 @@ function NodeLabel({ label, halfW, halfH, fontSize, editing }) {
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         width: '100%', height: '100%',
-        color: '#c7d0f8', fontSize, fontFamily: '-apple-system, sans-serif',
+        color: '#fff', fontSize, fontFamily: '-apple-system, sans-serif',
         wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.25,
         overflow: 'hidden', userSelect: 'none',
+        textShadow: '0 1px 3px rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.4)',
       }}>
         {label}
       </div>
@@ -339,8 +340,8 @@ export default function Graph({ projectId, projectName }) {
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef} style={{ width: '100%', height: '100%', background: '#0c0c1a', display: 'block' }} onClick={() => setSelected(null)}>
           <defs>
-            <marker id="arr" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#334155" /></marker>
-            <marker id="arr-sel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#5b6af0" /></marker>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
+            <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
           </defs>
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
@@ -356,7 +357,7 @@ export default function Graph({ projectId, projectName }) {
               const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
               const ux = dx/dist, uy = dy/dist
               const x1 = s.x + ux*sw, y1 = s.y + uy*sw
-              const x2 = t.x - ux*tw, y2 = t.y - uy*tw
+              const x2 = t.x - ux*(tw - 2), y2 = t.y - uy*(tw - 2)
               const mx=(x1+x2)/2, my=(y1+y2)/2
               return (
                 <g key={e.id} onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
