@@ -522,12 +522,12 @@ function NodeShape({ node, viewProps, isSelected, isHovered, onMouseDown, onConn
         <circle cx={halfW * 0.5} cy={halfH + 5} r={3} fill="#5b6af0" opacity={0.7} style={{ pointerEvents:'none' }} />
       )}
 
-      {/* Connector handle */}
-      <circle cx={halfW + 7} cy={0} r={5}
+      {/* Connector handle — hover only */}
+      {isHovered && <circle cx={halfW + 7} cy={0} r={5}
         fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5}
         onMouseDown={e => { e.stopPropagation(); onConnectorMouseDown(e, node.id) }}
         style={{ cursor:'crosshair' }}
-      />
+      />}
 
       {/* Scale handle (hovered) */}
       {isHovered && (
