@@ -7,7 +7,13 @@ import Table from './pages/Table'
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = loading
-  const [project, setProject] = useState(null)      // { id, name } or null
+  // Initialize project synchronously from localStorage — avoids race with onAuthStateChange
+  const [project, setProject] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pim_last_project')
+      return saved ? JSON.parse(saved) : null
+    } catch { return null }
+  })
   const [view, setView] = useState('graph')
 
   const openProject = (id, name) => {
@@ -20,16 +26,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      // Restore last project if session exists
-      if (data.session) {
-        try {
-          const saved = localStorage.getItem('pim_last_project')
-          if (saved) setProject(JSON.parse(saved))
-        } catch {}
-      }
-    })
+    supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s)
       if (!s) { setProject(null); localStorage.removeItem('pim_last_project') }
