@@ -110,7 +110,10 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
 
   const startDrag = useCallback((nodeId) => {
     dragging.current = { nodeId }
-    setDraggingId(nodeId)
+    // Directly set pointer-events:none on the DOM element so elementFromPoint
+    // can see through it immediately — don't wait for React re-render
+    const rowEl = containerRef.current?.querySelector(`[data-outline-id="${nodeId}"]`)
+    if (rowEl) { rowEl.style.pointerEvents = 'none'; rowEl.style.opacity = '0.3' }
     document.body.style.cursor = 'grabbing'
 
     const onMove = e => {
@@ -122,6 +125,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       document.body.style.cursor = ''
+      if (rowEl) { rowEl.style.pointerEvents = ''; rowEl.style.opacity = '' }
       const drop = getDropFromPoint(e.clientX, e.clientY)
       if (drop && drop.id !== dragging.current.nodeId) {
         const { id: targetId, position } = drop

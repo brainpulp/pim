@@ -188,7 +188,7 @@ export default function Graph({ projectId, projectName }) {
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
     return () => svg.on('.zoom', null)
-  }, [scheduleRender])
+  }, [scheduleRender, loading])
 
   // Keyboard shortcuts
   useEffect(() => {
