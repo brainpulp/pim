@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, SHAPES } from '../lib/graphStore'
-import OutlinePanel from '../components/OutlinePanel'
 import ViewManager from '../components/ViewManager'
 import { loadProject, saveProject } from '../lib/db'
 
@@ -64,7 +63,6 @@ export default function Graph({ projectId, projectName }) {
   const [selected, setSelected] = useState(null)
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const hideTimerRef = useRef(null)
-  const [sidebarWidth, setSidebarWidth] = useState(220)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
 
   const showToolbar = useCallback((nodeId) => {
@@ -314,14 +312,6 @@ export default function Graph({ projectId, projectName }) {
     scheduleRender()
   }, [visibleNodeIds, scheduleRender])
 
-  const handleSplitMouseDown = useCallback(() => {
-    const onMove = e => setSidebarWidth(Math.max(140, Math.min(500, e.clientX)))
-    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); document.body.style.cursor = '' }
-    document.body.style.cursor = 'col-resize'
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [])
-
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
   const selectedStoreNode = selectedNode ? storeNodes.find(n => n.id === selectedNode.id) : null
@@ -330,22 +320,11 @@ export default function Graph({ projectId, projectName }) {
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      <div style={{ width: sidebarWidth, minWidth: sidebarWidth, display: 'flex', flexDirection: 'column', background: '#111118', overflow: 'hidden' }}>
-        <OutlinePanel selectedNodeId={selected?.type === 'node' ? selected.id : null} onSelectNode={id => setSelected({ id, type: 'node' })} />
-        <ViewManager />
-      </div>
-
-      <div style={{ width: 4, cursor: 'col-resize', background: '#1e1e2e', flexShrink: 0 }}
-        onMouseDown={handleSplitMouseDown}
-        onMouseEnter={e => e.currentTarget.style.background = '#5b6af0'}
-        onMouseLeave={e => e.currentTarget.style.background = '#1e1e2e'}
-      />
-
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef} style={{ width: '100%', height: '100%', background: '#0c0c1a', display: 'block' }} onClick={() => setSelected(null)}>
           <defs>
-            <marker id="arr" markerWidth="7" markerHeight="7" refX="20" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#334155" /></marker>
-            <marker id="arr-sel" markerWidth="7" markerHeight="7" refX="20" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#5b6af0" /></marker>
+            <marker id="arr" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#334155" /></marker>
+            <marker id="arr-sel" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="#5b6af0" /></marker>
           </defs>
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
@@ -360,8 +339,8 @@ export default function Graph({ projectId, projectName }) {
               const { halfW: tw } = shapeDims(tvp.shape || 'circle', NODE_R * (tvp.scale||1))
               const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
               const ux = dx/dist, uy = dy/dist
-              const x1 = s.x + ux*(sw+2), y1 = s.y + uy*(sw+2)
-              const x2 = t.x - ux*(tw+2), y2 = t.y - uy*(tw+2)
+              const x1 = s.x + ux*sw, y1 = s.y + uy*sw
+              const x2 = t.x - ux*tw, y2 = t.y - uy*tw
               const mx=(x1+x2)/2, my=(y1+y2)/2
               return (
                 <g key={e.id} onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
@@ -449,7 +428,12 @@ export default function Graph({ projectId, projectName }) {
           {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>↑ Exit Drill</button>}
           <button style={canvasBtnStyle} onClick={handleReleaseAll}>⊙ Free All</button>
           <button style={canvasBtnStyle} onClick={zoomExtents}>⊡ Fit</button>
-          <button style={canvasBtnStyle} onClick={() => addNode('New node')}>+ Node</button>
+          <button style={canvasBtnStyle} onClick={() => addNode('New node', selected?.type === 'node' ? selected.id : null)}>+ Node</button>
+        </div>
+
+        {/* Views floating panel — bottom left */}
+        <div style={{ position:'absolute', bottom:'1.25rem', left:'1rem', zIndex:20 }}>
+          <ViewManager />
         </div>
       </div>
     </div>
