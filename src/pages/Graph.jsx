@@ -183,11 +183,7 @@ export default function Graph({ projectId, projectName }) {
     const svg = d3.select(svgRef.current)
     zoomBehaviorRef.current = d3.zoom()
       .scaleExtent([0.08, 4])
-      .filter(e => {
-        if (e.type === 'wheel') return true
-        if (e.type === 'mousedown') return !e.target.closest?.('[data-node]')
-        return true
-      })
+      .filter(e => !e.target.closest?.('[data-node]'))
       .on('zoom', e => { zoomTransformRef.current = e.transform; scheduleRender() })
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
@@ -205,7 +201,7 @@ export default function Graph({ projectId, projectName }) {
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
-        addNode('New node')
+        addNode('New node', selected?.type === 'node' ? selected.id : null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -379,9 +375,7 @@ export default function Graph({ projectId, projectName }) {
                 onMouseDown={handleNodeMouseDown}
                 onConnectorMouseDown={handleConnectorMouseDown}
                 onScaleMouseDown={handleScaleMouseDown}
-                onRelease={handleRelease}
                 onDelete={id => setConfirmDelete(id)}
-                onHide={id => { setNodeViewProp(id, 'visible', false); setSelected(null) }}
                 onLabelChange={updateLabel}
               />
             ))}
@@ -442,7 +436,7 @@ export default function Graph({ projectId, projectName }) {
 
 // ─── NodeShape ────────────────────────────────────────────────────────────────
 
-function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onRelease, onDelete, onHide, onLabelChange }) {
+function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
@@ -519,28 +513,6 @@ function NodeShape({ node, viewProps, isSelected, onMouseDown, onConnectorMouseD
           <circle r={6} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} />
           <line x1={-3} y1={-3} x2={3} y2={3} stroke="#5b6af0" strokeWidth={1.5} />
           <line x1={0} y1={-3} x2={3} y2={0} stroke="#5b6af0" strokeWidth={1} />
-        </g>
-      )}
-
-      {/* Release anchor (top-left, anchored) */}
-      {isAnchored && (
-        <g transform={`translate(${-halfW + 2},${-halfH + 2})`}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => { e.stopPropagation(); onRelease(node.id) }}
-          style={{ cursor:'pointer' }}>
-          <circle r={9} fill="#1a1a2e" stroke="#f6ad55" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#f6ad55" style={{ userSelect:'none' }}>⊙</text>
-        </g>
-      )}
-
-      {/* Eye/hide (top-left, selected + not anchored) */}
-      {isSelected && !isAnchored && (
-        <g transform={`translate(${-halfW + 2},${-halfH + 2})`}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => { e.stopPropagation(); onHide(node.id) }}
-          style={{ cursor:'pointer' }}>
-          <circle r={9} fill="#1a1a2e" stroke="#555" strokeWidth={1.5} />
-          <EyeIcon />
         </g>
       )}
 

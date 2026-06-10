@@ -74,6 +74,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
 
   const [expanded, setExpanded] = useState(() => new Set()) // expanded by default (empty = all shown)
   const [dropTarget, setDropTarget] = useState(null) // { id, position: 'before'|'after'|'into' }
+  const [draggingId, setDraggingId] = useState(null)
 
   // Mouse drag state
   const dragging = useRef(null) // { nodeId }
@@ -109,6 +110,8 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
 
   const startDrag = useCallback((nodeId) => {
     dragging.current = { nodeId }
+    setDraggingId(nodeId)
+    document.body.style.cursor = 'grabbing'
 
     const onMove = e => {
       const drop = getDropFromPoint(e.clientX, e.clientY)
@@ -118,6 +121,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
     const onUp = e => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
       const drop = getDropFromPoint(e.clientX, e.clientY)
       if (drop && drop.id !== dragging.current.nodeId) {
         const { id: targetId, position } = drop
@@ -129,6 +133,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
         }
       }
       dragging.current = null
+      setDraggingId(null)
       setDropTarget(null)
     }
 
@@ -175,6 +180,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
             onDrill={setDrillRoot}
             viewNodeProps={viewNodeProps}
             dropTarget={dropTarget}
+            draggingId={draggingId}
             onStartDrag={startDrag}
             isExpanded={isExpanded}
             onToggleExpand={toggleExpand}
@@ -189,7 +195,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
 function OutlineItem({
   item, depth, selectedNodeId, onSelect,
   onAddChild, onRename, onDelete, onToggleVisible, onDrill,
-  viewNodeProps, dropTarget, onStartDrag, isExpanded, onToggleExpand,
+  viewNodeProps, dropTarget, draggingId, onStartDrag, isExpanded, onToggleExpand,
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(item.label)
@@ -216,22 +222,22 @@ function OutlineItem({
         className="outline-row"
         data-outline-id={item.id}
         onMouseDown={e => {
-          // Start drag only from the drag handle (left portion), not from buttons/input
           if (e.target.closest('button') || e.target.closest('input')) return
           if (e.button !== 0) return
-          e.preventDefault() // prevent text selection during drag
+          e.preventDefault()
           onStartDrag(item.id)
         }}
         onClick={() => onSelect?.(item.id)}
         style={{
           paddingLeft: depth * 14 + 4,
-          opacity: (isHidden && !isSelected) ? 0.4 : 1,
+          opacity: item.id === draggingId ? 0.3 : (isHidden && !isSelected) ? 0.4 : 1,
+          pointerEvents: item.id === draggingId ? 'none' : undefined,
           background: isSelected ? '#1e2048' : isDropInto ? '#1a2a3a' : undefined,
           borderLeft: isSelected
             ? '2px solid #5b6af0'
             : isDropInto ? '2px solid #38bdf8'
             : '2px solid transparent',
-          cursor: 'default',
+          cursor: draggingId ? 'grabbing' : 'default',
         }}
       >
         {/* Chevron */}
@@ -295,6 +301,7 @@ function OutlineItem({
           onDrill={onDrill}
           viewNodeProps={viewNodeProps}
           dropTarget={dropTarget}
+          draggingId={draggingId}
           onStartDrag={onStartDrag}
           isExpanded={isExpanded}
           onToggleExpand={onToggleExpand}
