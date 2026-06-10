@@ -10,11 +10,29 @@ export default function App() {
   const [project, setProject] = useState(null)      // { id, name } or null
   const [view, setView] = useState('graph')
 
+  const openProject = (id, name) => {
+    localStorage.setItem('pim_last_project', JSON.stringify({ id, name }))
+    setProject({ id, name })
+  }
+  const closeProject = () => {
+    localStorage.removeItem('pim_last_project')
+    setProject(null)
+  }
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      // Restore last project if session exists
+      if (data.session) {
+        try {
+          const saved = localStorage.getItem('pim_last_project')
+          if (saved) setProject(JSON.parse(saved))
+        } catch {}
+      }
+    })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s)
-      if (!s) setProject(null) // clear project on sign-out
+      if (!s) { setProject(null); localStorage.removeItem('pim_last_project') }
     })
     return () => subscription.unsubscribe()
   }, [])
@@ -23,7 +41,7 @@ export default function App() {
   if (!session) return <Auth />
   if (!project) return (
     <Projects
-      onOpen={(id, name) => setProject({ id, name })}
+      onOpen={openProject}
       onSignOut={() => supabase.auth.signOut()}
     />
   )
@@ -31,7 +49,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
       <nav style={navStyle}>
-        <button style={backBtnStyle} onClick={() => setProject(null)} title="All projects">← Projects</button>
+        <button style={backBtnStyle} onClick={closeProject} title="All projects">← Projects</button>
         <span style={projectNameStyle}>{project.name}</span>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {['graph', 'table'].map(v => (
