@@ -64,6 +64,7 @@ export default function Graph({ projectId, projectName }) {
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const hideTimerRef = useRef(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
+  const [pendingEditId, setPendingEditId] = useState(null)
 
   const showToolbar = useCallback((nodeId) => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
@@ -209,7 +210,7 @@ export default function Graph({ projectId, projectName }) {
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
-        addNode('New node', selected?.type === 'node' ? selected.id : null)
+        setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))
       }
     }
     window.addEventListener('keydown', onKey)
@@ -259,7 +260,7 @@ export default function Graph({ projectId, projectName }) {
         return Math.sqrt(dx*dx+dy*dy) < NODE_R + 20
       })
       if (hit) addEdge(sourceId, hit.id)
-      else addNode('New node', sourceId, sx, sy)
+      else setPendingEditId(addNode('New node', sourceId, sx, sy))
       setConnecting(null)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -363,6 +364,8 @@ export default function Graph({ projectId, projectName }) {
                 viewProps={getVP(n.id)}
                 isSelected={selected?.id === n.id && selected?.type === 'node'}
                 isHovered={hoveredNodeId === n.id}
+                autoEdit={pendingEditId === n.id}
+                onAutoEditDone={() => setPendingEditId(null)}
                 onMouseDown={handleNodeMouseDown}
                 onConnectorMouseDown={handleConnectorMouseDown}
                 onScaleMouseDown={handleScaleMouseDown}
@@ -428,7 +431,7 @@ export default function Graph({ projectId, projectName }) {
           {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>↑ Exit Drill</button>}
           <button style={canvasBtnStyle} onClick={handleReleaseAll}>⊙ Free All</button>
           <button style={canvasBtnStyle} onClick={zoomExtents}>⊡ Fit</button>
-          <button style={canvasBtnStyle} onClick={() => addNode('New node', selected?.type === 'node' ? selected.id : null)}>+ Node</button>
+          <button style={canvasBtnStyle} onClick={() => setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))}>+ Node</button>
         </div>
 
         {/* Views floating panel — bottom left */}
@@ -442,7 +445,7 @@ export default function Graph({ projectId, projectName }) {
 
 // ─── NodeShape ────────────────────────────────────────────────────────────────
 
-function NodeShape({ node, viewProps, isSelected, isHovered, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onMouseEnter, onMouseLeave }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onMouseEnter, onMouseLeave }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
@@ -450,7 +453,16 @@ function NodeShape({ node, viewProps, isSelected, isHovered, onMouseDown, onConn
   useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
   useEffect(() => { if (editing) inputRef.current?.select() }, [editing])
 
-  const commitEdit = () => { onLabelChange(node.id, draft); setEditing(false) }
+  // Auto-enter edit on creation
+  useEffect(() => {
+    if (autoEdit) {
+      setDraft('')
+      setEditing(true)
+      onAutoEditDone?.()
+    }
+  }, []) // eslint-disable-line
+
+  const commitEdit = () => { onLabelChange(node.id, draft.trim() || 'New node'); setEditing(false) }
 
   const isAnchored = node.fx != null
   const scale = viewProps.scale || 1
