@@ -229,7 +229,21 @@ function OutlineItem({
           if (e.target.closest('button') || e.target.closest('input')) return
           if (e.button !== 0) return
           e.preventDefault()
-          onStartDrag(item.id)
+          // Only start drag after actual mouse movement (preserves double-click for editing)
+          const startX = e.clientX, startY = e.clientY
+          const onMove = mv => {
+            if (Math.abs(mv.clientX - startX) > 4 || Math.abs(mv.clientY - startY) > 4) {
+              document.removeEventListener('mousemove', onMove)
+              document.removeEventListener('mouseup', onCancel)
+              onStartDrag(item.id)
+            }
+          }
+          const onCancel = () => {
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onCancel)
+          }
+          document.addEventListener('mousemove', onMove)
+          document.addEventListener('mouseup', onCancel)
         }}
         onClick={() => onSelect?.(item.id)}
         style={{

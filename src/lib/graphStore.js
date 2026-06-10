@@ -7,12 +7,18 @@ export const NODE_R = 44
 export const DEFAULT_NODE_PROPS = {
   scale: 1,
   fillColor: '#12122a',
+  textColor: '#ffffff',
   strokeColor: '#2d3a6a',
   visible: true,
   fx: null,
   fy: null,
   shape: 'circle', // 'circle' | 'ellipse' | 'roundrect' | 'diamond' | 'none'
 }
+
+export const TEXT_COLORS = [
+  '#ffffff', '#e2e8f0', '#fbbf24', '#34d399',
+  '#60a5fa', '#f87171', '#c084fc', '#fb923c',
+]
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'diamond', 'none']
 

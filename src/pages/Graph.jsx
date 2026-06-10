@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
-import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, SHAPES } from '../lib/graphStore'
+import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, TEXT_COLORS, SHAPES } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
+import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject } from '../lib/db'
 
 // ── Shape geometry ────────────────────────────────────────────────────────────
@@ -14,6 +15,14 @@ function shapeDims(shape, r) {
     case 'none':      return { halfW: r * 1.2,  halfH: r * 0.55 }
     default:          return { halfW: r,         halfH: r }
   }
+}
+
+// ── Direction-aware clip distance (how far from center to node edge along dir) ─
+function clipDist(shape, halfW, halfH, ux, uy) {
+  if (shape === 'circle') return halfW
+  // Ellipse formula works well as approximation for all shapes
+  const denom = Math.sqrt((ux / halfW) ** 2 + (uy / halfH) ** 2)
+  return denom > 0 ? 1 / denom : halfW
 }
 
 // ── Shape SVG body ────────────────────────────────────────────────────────────
@@ -32,18 +41,17 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth }) {
 // ── Label rendering (foreignObject for word-wrap) ─────────────────────────────
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
-function NodeLabel({ label, halfW, halfH, fontSize, editing }) {
-  if (editing) return null
+function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   return (
     <foreignObject x={-halfW + 5} y={-halfH + 3} width={(halfW - 5) * 2} height={(halfH - 3) * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         width: '100%', height: '100%',
-        color: '#fff', fontSize, fontFamily: '-apple-system, sans-serif',
+        color: textColor || '#fff', fontSize, fontFamily: '-apple-system, sans-serif',
         wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.25,
         overflow: 'hidden', userSelect: 'none',
-        textShadow: '0 1px 3px rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.4)',
+        textShadow: '0 1px 3px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)',
       }}>
         {label}
       </div>
@@ -231,18 +239,50 @@ export default function Graph({ projectId, projectName }) {
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
     simRef.current.alphaTarget(0.3).restart()
-    const onMove = me => { const [sx, sy] = clientToSim(me.clientX, me.clientY); simNode.fx = sx; simNode.fy = sy }
+
+    // Shift-drag: collect exclusive descendants (children with only one parent)
+    let dragGroup = [simNode]
+    if (e.shiftKey) {
+      const parentCount = {}
+      storeEdges.forEach(ed => { parentCount[ed.target] = (parentCount[ed.target] || 0) + 1 })
+      const exclusiveDescendants = (id) => {
+        storeEdges.forEach(ed => {
+          if (ed.source === id && parentCount[ed.target] === 1) {
+            const child = simNodesRef.current.find(n => n.id === ed.target)
+            if (child) { dragGroup.push(child); exclusiveDescendants(ed.target) }
+          }
+        })
+      }
+      exclusiveDescendants(nodeId)
+    }
+
+    const [startSx, startSy] = clientToSim(e.clientX, e.clientY)
+    const startPositions = dragGroup.map(n => ({ node: n, ox: n.fx ?? n.x ?? 0, oy: n.fy ?? n.y ?? 0 }))
+    let didDrag = false
+
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const ddx = sx - startSx, ddy = sy - startSy
+      if (!didDrag && Math.abs(ddx) < 2 && Math.abs(ddy) < 2) return
+      didDrag = true
+      startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
+    }
     const onUp = ue => {
       simRef.current.alphaTarget(0)
-      const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
-      simNode.fx = sx; simNode.fy = sy
-      setAnchor(nodeId, sx, sy)
+      if (didDrag) {
+        const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
+        const ddx = sx - startSx, ddy = sy - startSy
+        startPositions.forEach(({ node, ox, oy }) => {
+          node.fx = ox + ddx; node.fy = oy + ddy
+          setAnchor(node.id, node.fx, node.fy)
+        })
+      }
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor])
+  }, [clientToSim, setAnchor, storeEdges])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -337,11 +377,15 @@ export default function Graph({ projectId, projectName }) {
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      {/* Outline sidebar */}
+      <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid #1e1e2e', background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <OutlinePanel selectedNodeId={selected?.type === 'node' ? selected.id : null} onSelectNode={id => setSelected({ id, type: 'node' })} />
+      </div>
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef} style={{ width: '100%', height: '100%', background: '#0c0c1a', display: 'block' }} onClick={() => setSelected(null)}>
           <defs>
-            <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
-            <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
+            <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
           </defs>
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
@@ -352,12 +396,15 @@ export default function Graph({ projectId, projectName }) {
               if (!visibleNodeIds.has(s.id) || !visibleNodeIds.has(t.id)) return null
               const isSel = selected?.id === e.id && selected?.type === 'edge'
               const svp = getVP(s.id), tvp = getVP(t.id)
-              const { halfW: sw } = shapeDims(svp.shape || 'circle', NODE_R * (svp.scale||1))
-              const { halfW: tw } = shapeDims(tvp.shape || 'circle', NODE_R * (tvp.scale||1))
+              const { halfW: swW, halfH: swH } = shapeDims(svp.shape || 'circle', NODE_R * (svp.scale||1))
+              const { halfW: twW, halfH: twH } = shapeDims(tvp.shape || 'circle', NODE_R * (tvp.scale||1))
               const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
               const ux = dx/dist, uy = dy/dist
-              const x1 = s.x + ux*sw, y1 = s.y + uy*sw
-              const x2 = t.x - ux*(tw - 2), y2 = t.y - uy*(tw - 2)
+              const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
+              const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy)
+              const x1 = s.x + ux*sd, y1 = s.y + uy*sd
+              // Pull endpoint 8 units inside the node so arrowhead overlaps fill — no gap
+              const x2 = t.x - ux*(td - 8), y2 = t.y - uy*(td - 8)
               const mx=(x1+x2)/2, my=(y1+y2)/2
               return (
                 <g key={e.id} onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
@@ -408,6 +455,7 @@ export default function Graph({ projectId, projectName }) {
               viewProps={vp}
               notes={hs.notes || ''}
               onSetFill={c => setNodeViewProp(hn.id, 'fillColor', c)}
+              onSetTextColor={c => setNodeViewProp(hn.id, 'textColor', c)}
               onSetShape={s => setNodeViewProp(hn.id, 'shape', s)}
               onDrill={() => { setDrillRoot(hn.id); setHoveredNodeId(null) }}
               onHide={() => { setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
@@ -454,6 +502,11 @@ export default function Graph({ projectId, projectName }) {
         {/* Views floating panel — bottom left */}
         <div style={{ position:'absolute', bottom:'1.25rem', left:'1rem', zIndex:20 }}>
           <ViewManager />
+        </div>
+
+        {/* Build timestamp — bottom right */}
+        <div style={{ position:'absolute', bottom:'0.5rem', right:'0.75rem', zIndex:20, fontSize:'0.62rem', color:'#333', fontFamily:'monospace', userSelect:'none' }}>
+          {new Date(__BUILD_TIME__).toISOString().slice(0,16).replace('T',' ')}
         </div>
       </div>
     </div>
@@ -503,7 +556,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
       <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} />
 
       {/* Label (foreignObject for word-wrap) */}
-      {!editing && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} editing={false} />}
+      {!editing && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />}
 
       {/* Edit input */}
       {editing && (
@@ -566,7 +619,7 @@ function EyeIcon() {
 
 // ─── NodeToolbar ──────────────────────────────────────────────────────────────
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave }) {
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave }) {
   const shape = viewProps.shape || 'circle'
   const [notesOpen, setNotesOpen] = useState(false)
   const [notesDraft, setNotesDraft] = useState(notes)
@@ -597,6 +650,18 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetShape, onDrill, o
               width:14, height:14, borderRadius:'50%', background:c, cursor:'pointer', flexShrink:0,
               border: viewProps.fillColor===c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.12)',
               boxShadow: viewProps.fillColor===c ? '0 0 0 1px #5b6af0' : 'none',
+            }} />
+          ))}
+        </div>
+      </Row>
+
+      {/* Text color */}
+      <Row label="Text">
+        <div style={{ display:'flex', gap:3, flexWrap:'wrap', flex:1 }}>
+          {TEXT_COLORS.map(c => (
+            <div key={c} onClick={() => onSetTextColor(c)} style={{
+              width:14, height:14, borderRadius:'50%', background:c, cursor:'pointer', flexShrink:0,
+              border: (viewProps.textColor||'#ffffff')===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)',
             }} />
           ))}
         </div>
