@@ -710,78 +710,109 @@ function EyeIcon() {
   )
 }
 
+// ─── ColorSubPopup ────────────────────────────────────────────────────────────
+function ColorSubPopup({ colors, current, onPick, label }) {
+  return (
+    <div style={{
+      position:'absolute', bottom:'110%', left:'50%', transform:'translateX(-50%)',
+      background:'#16162a', border:'1px solid #2d3a6a', borderRadius:7,
+      padding:'6px 7px', zIndex:30, boxShadow:'0 4px 20px rgba(0,0,0,0.7)',
+      display:'flex', flexDirection:'column', gap:4,
+    }}>
+      <div style={{ fontSize:'0.6rem', color:'#555', letterSpacing:'0.06em' }}>{label}</div>
+      <div style={{ display:'flex', gap:4, flexWrap:'wrap', width: 176 }}>
+        {colors.map(c => (
+          <div key={c} onClick={() => onPick(c)} style={{
+            width:16, height:16, borderRadius:'50%', background:c, cursor:'pointer', flexShrink:0,
+            border: current===c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.1)',
+            boxShadow: current===c ? '0 0 0 1.5px #5b6af0' : 'none',
+          }} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── NodeToolbar ──────────────────────────────────────────────────────────────
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave }) {
   const shape = viewProps.shape || 'circle'
   const [notesOpen, setNotesOpen] = useState(false)
   const [notesDraft, setNotesDraft] = useState(notes)
+  const [colorPopup, setColorPopup] = useState(null) // 'fill' | 'text' | null
 
   useEffect(() => { setNotesDraft(notes) }, [notes])
 
   const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', diamond:'◇', none:'╌' }
+  const fillColor = viewProps.fillColor || DEFAULT_NODE_PROPS.fillColor
+  const textColor = viewProps.textColor || '#ffffff'
 
   return (
     <div
       style={{
         position:'absolute', left: x, top: y, transform:'translateX(-50%)',
         background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
-        padding:'7px 9px', display:'flex', flexDirection:'column', gap:6,
+        padding:'6px 8px', display:'flex', flexDirection:'column', gap:5,
         boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:20, pointerEvents:'all',
-        minWidth: 230,
       }}
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      {/* Fill */}
-      <Row label="Fill">
-        <div style={{ display:'flex', gap:3, flexWrap:'wrap', flex:1 }}>
-          {FILL_COLORS.map(c => (
-            <div key={c} onClick={() => onSetFill(c)} style={{
-              width:14, height:14, borderRadius:'50%', background:c, cursor:'pointer', flexShrink:0,
-              border: viewProps.fillColor===c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.12)',
-              boxShadow: viewProps.fillColor===c ? '0 0 0 1px #5b6af0' : 'none',
-            }} />
-          ))}
+      {/* Row 1: color swatches + shape */}
+      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+        {/* Fill swatch */}
+        <div style={{ position:'relative' }}>
+          <div title="Fill color" onClick={() => setColorPopup(p => p==='fill' ? null : 'fill')} style={{
+            width:18, height:18, borderRadius:'50%', background:fillColor, cursor:'pointer',
+            border: colorPopup==='fill' ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.2)',
+            boxShadow:'0 1px 4px rgba(0,0,0,0.5)',
+          }} />
+          {colorPopup === 'fill' && (
+            <ColorSubPopup colors={FILL_COLORS} current={fillColor} label="FILL" onPick={c => { onSetFill(c); setColorPopup(null) }} />
+          )}
         </div>
-      </Row>
 
-      {/* Text color */}
-      <Row label="Text">
-        <div style={{ display:'flex', gap:3, flexWrap:'wrap', flex:1 }}>
-          {TEXT_COLORS.map(c => (
-            <div key={c} onClick={() => onSetTextColor(c)} style={{
-              width:14, height:14, borderRadius:'50%', background:c, cursor:'pointer', flexShrink:0,
-              border: (viewProps.textColor||'#ffffff')===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)',
-            }} />
-          ))}
+        {/* Text color swatch — letter A with color */}
+        <div style={{ position:'relative' }}>
+          <div title="Text color" onClick={() => setColorPopup(p => p==='text' ? null : 'text')} style={{
+            width:18, height:18, borderRadius:'50%', background:'#1e1e38', cursor:'pointer',
+            border: colorPopup==='text' ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.2)',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:11, fontWeight:700, color: textColor, lineHeight:1,
+          }}>A</div>
+          {colorPopup === 'text' && (
+            <ColorSubPopup colors={TEXT_COLORS} current={textColor} label="TEXT" onPick={c => { onSetTextColor(c); setColorPopup(null) }} />
+          )}
         </div>
-      </Row>
 
-      {/* Shape */}
-      <Row label="Shape">
-        <div style={{ display:'flex', gap:3 }}>
-          {SHAPES.map(s => (
-            <button key={s} onClick={() => onSetShape(s)} title={s} style={{
-              background: shape===s ? '#2d3a6a' : 'transparent',
-              border: `1px solid ${shape===s ? '#5b6af0' : '#2d3a6a'}`,
-              color: shape===s ? '#fff' : '#666',
-              borderRadius:4, cursor:'pointer', fontSize:'0.9rem', padding:'1px 5px', lineHeight:1.4,
-            }}>
-              {shapeIcons[s]}
-            </button>
-          ))}
-        </div>
-      </Row>
+        <div style={{ width:1, height:14, background:'#2d3a6a', flexShrink:0 }} />
 
-      {/* Notes */}
-      <Row label="Note">
-        <button style={{ ...tlBtn, flex:1, textAlign:'left' }} onClick={() => setNotesOpen(o => !o)}>
-          {notesOpen ? '▾ close' : (notes ? '✎ edit note' : '✎ add note')}
-        </button>
-      </Row>
+        {/* Shape buttons */}
+        {SHAPES.map(s => (
+          <button key={s} onClick={() => onSetShape(s)} title={s} style={{
+            background: shape===s ? '#2d3a6a' : 'transparent',
+            border: `1px solid ${shape===s ? '#5b6af0' : 'transparent'}`,
+            color: shape===s ? '#fff' : '#555',
+            borderRadius:4, cursor:'pointer', fontSize:'0.85rem', padding:'1px 4px', lineHeight:1.4,
+          }}>
+            {shapeIcons[s]}
+          </button>
+        ))}
+      </div>
+
+      {/* Row 2: actions */}
+      <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+        {isAnchored && <button style={{ ...tlBtn, color:'#f6ad55' }} onClick={onRelease}>⊙ Free</button>}
+        <button style={{ ...tlBtn, color:'#888' }} onClick={onHide}>◌ Hide</button>
+        <button style={{ ...tlBtn, color:'#5b6af0' }} onClick={onDrill}>⊳ Drill</button>
+        <button style={{ ...tlBtn, color: notesOpen ? '#5b6af0' : '#666' }} onClick={() => setNotesOpen(o => !o)}>✎ Note</button>
+        <div style={{ flex:1 }} />
+        <button style={{ ...tlBtn, color:'#f87171' }} onClick={onDelete}>✕</button>
+      </div>
+
+      {/* Notes textarea */}
       {notesOpen && (
         <textarea
           value={notesDraft}
@@ -797,17 +828,6 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           }}
         />
       )}
-
-      {/* Actions row */}
-      <div style={{ display:'flex', gap:5, marginTop:2 }}>
-        {isAnchored && (
-          <button style={{ ...tlBtn, color:'#f6ad55' }} onClick={onRelease}>⊙ Free</button>
-        )}
-        <button style={{ ...tlBtn, color:'#888' }} onClick={onHide}>◌ Hide</button>
-        <button style={{ ...tlBtn, color:'#5b6af0' }} onClick={onDrill}>⊳ Drill</button>
-        <div style={{ flex:1 }} />
-        <button style={{ ...tlBtn, color:'#f87171' }} onClick={onDelete}>✕ Delete</button>
-      </div>
     </div>
   )
 }
