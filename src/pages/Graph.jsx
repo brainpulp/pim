@@ -429,12 +429,12 @@ export default function Graph({ projectId, projectName }) {
             <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
             <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
             <filter id="edge-shadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="1" stdDeviation="3" floodColor="#000" floodOpacity="0.9" />
-              <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#000" floodOpacity="0.7" />
+              <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.6" />
+              <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#000" floodOpacity="0.4" />
             </filter>
             <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="2" stdDeviation="6" floodColor="#000" floodOpacity="0.8" />
-              <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#000" floodOpacity="0.5" />
+              <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="#000" floodOpacity="0.5" />
+              <feDropShadow dx="0" dy="0" stdDeviation="8" floodColor="#000" floodOpacity="0.3" />
             </filter>
           </defs>
 
