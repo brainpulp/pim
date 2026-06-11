@@ -15,22 +15,22 @@ export const DEFAULT_NODE_PROPS = {
   shape: 'circle', // 'circle' | 'ellipse' | 'roundrect' | 'diamond' | 'none'
 }
 
-export const TEXT_COLORS = [
-  '#ffffff', '#e2e8f0', '#cbd5e1', '#94a3b8',
-  '#fbbf24', '#facc15', '#fb923c', '#f97316',
-  '#34d399', '#4ade80', '#86efac', '#6ee7b7',
-  '#60a5fa', '#38bdf8', '#c084fc', '#f472b6',
-  '#f87171', '#fca5a5', '#a78bfa', '#2dd4bf',
+// Unified palette used for fill colors, text colors, and background colors
+export const PALETTE = [
+  '#ffffff', '#e2e8f0', '#94a3b8', '#475569',
+  '#fbbf24', '#f97316', '#ef4444', '#f472b6',
+  '#34d399', '#10b981', '#0d9488', '#06b6d4',
+  '#60a5fa', '#3b82f6', '#6366f1', '#8b5cf6',
+  '#c084fc', '#a78bfa', '#1d4ed8', '#0f766e',
+  '#15803d', '#16a34a', '#b45309', '#dc2626',
+  '#7e22ce', '#be185d', '#0e7490', '#374151',
+  '#0c0c1a', '#0a1628', '#0a1a0a', '#1a0a1a',
 ]
+
+export const FILL_COLORS = PALETTE
+export const TEXT_COLORS = PALETTE
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'diamond', 'none']
-
-export const FILL_COLORS = [
-  '#1d4ed8', '#2563eb', '#0f766e', '#0d9488',
-  '#7e22ce', '#9333ea', '#b45309', '#d97706',
-  '#be185d', '#db2777', '#0e7490', '#0284c7',
-  '#15803d', '#16a34a', '#dc2626', '#374151',
-]
 
 // Helper: update nodeProps for a specific node in the active view
 const patchViewNode = (views, activeViewId, nodeId, patch) =>

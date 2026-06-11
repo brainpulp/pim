@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
-import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, TEXT_COLORS, SHAPES } from '../lib/graphStore'
+import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, TEXT_COLORS, SHAPES, PALETTE } from '../lib/graphStore'
 
-const BG_COLORS = [
-  '#0c0c1a', '#0a1628', '#0a1a0a', '#1a0a0a',
-  '#1a0a1a', '#0f0f0f', '#1a1a0a', '#0a1a1a',
-]
+const BG_COLORS = PALETTE
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject } from '../lib/db'
@@ -272,10 +269,12 @@ export default function Graph({ projectId, projectName }) {
       const [sx, sy] = clientToSim(me.clientX, me.clientY)
       const ddx = sx - startSx, ddy = sy - startSy
       if (!didDrag && Math.abs(ddx) < 2 && Math.abs(ddy) < 2) return
+      if (!didDrag) document.body.style.cursor = 'grabbing'
       didDrag = true
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
     }
     const onUp = ue => {
+      document.body.style.cursor = ''
       simRef.current.alphaTarget(0)
       if (didDrag) {
         const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
@@ -575,7 +574,7 @@ function BgColorPicker({ current, onChange }) {
           onMouseLeave={() => setOpen(false)}
         >
           <div style={{ fontSize:'0.65rem', color:'#555', marginBottom:2 }}>BACKGROUND</div>
-          <div style={{ display:'flex', gap:5, flexWrap:'wrap', width:120 }}>
+          <div style={{ display:'flex', gap:4, flexWrap:'wrap', width:184 }}>
             {BG_COLORS.map(c => (
               <div key={c} onClick={() => { onChange(c); setOpen(false) }} style={{
                 width:20, height:20, borderRadius:4, background:c, cursor:'pointer',
