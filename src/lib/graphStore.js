@@ -45,14 +45,14 @@ const useGraphStore = create((set, get) => ({
   edges: [],
 
   // ── Views ─────────────────────────────────────────────────────
-  views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null }],
+  views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a' }],
   activeViewId: 'view-default',
 
   // ── Load a full project snapshot ──────────────────────────────
   loadProjectData: ({ nodes, edges, views, activeViewId }) => set({
     nodes: nodes || [],
     edges: edges || [],
-    views: views?.length ? views : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null }],
+    views: views?.length ? views : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a' }],
     activeViewId: activeViewId || 'view-default',
   }),
 
@@ -166,6 +166,10 @@ const useGraphStore = create((set, get) => ({
   }),
 
   setActiveView: (viewId) => set({ activeViewId: viewId }),
+
+  setViewBgColor: (color) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, bgColor: color }),
+  })),
 
   setDrillRoot: (nodeId) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, drillRoot: nodeId } : v),

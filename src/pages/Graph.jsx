@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, TEXT_COLORS, SHAPES } from '../lib/graphStore'
+
+const BG_COLORS = [
+  '#0c0c1a', '#0a1628', '#0a1a0a', '#1a0a0a',
+  '#1a0a1a', '#0f0f0f', '#1a1a0a', '#0a1a1a',
+]
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject } from '../lib/db'
@@ -112,10 +117,12 @@ export default function Graph({ projectId, projectName }) {
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setDrillRoot    = useGraphStore(s => s.setDrillRoot)
   const exitDrill       = useGraphStore(s => s.exitDrill)
+  const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
 
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
   const drillRoot     = activeView?.drillRoot || null
+  const bgColor       = activeView?.bgColor || '#0c0c1a'
 
   useEffect(() => {
     if (loading) return
@@ -382,7 +389,7 @@ export default function Graph({ projectId, projectName }) {
         <OutlinePanel selectedNodeId={selected?.type === 'node' ? selected.id : null} onSelectNode={id => setSelected({ id, type: 'node' })} />
       </div>
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <svg ref={svgRef} style={{ width: '100%', height: '100%', background: '#0c0c1a', display: 'block' }} onClick={() => setSelected(null)}>
+        <svg ref={svgRef} style={{ width: '100%', height: '100%', background: bgColor, display: 'block', transition: 'background 0.3s' }} onClick={() => setSelected(null)}>
           <defs>
             <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
             <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
@@ -403,8 +410,8 @@ export default function Graph({ projectId, projectName }) {
               const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
               const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy)
               const x1 = s.x + ux*sd, y1 = s.y + uy*sd
-              // Pull endpoint 8 units inside the node so arrowhead overlaps fill — no gap
-              const x2 = t.x - ux*(td - 8), y2 = t.y - uy*(td - 8)
+              // Endpoint exactly at node surface; arrowhead tip (refX=8) placed here, body extends toward source
+              const x2 = t.x - ux*td, y2 = t.y - uy*td
               const mx=(x1+x2)/2, my=(y1+y2)/2
               return (
                 <g key={e.id} onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
@@ -496,6 +503,7 @@ export default function Graph({ projectId, projectName }) {
           {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>↑ Exit Drill</button>}
           <button style={canvasBtnStyle} onClick={handleReleaseAll}>⊙ Free All</button>
           <button style={canvasBtnStyle} onClick={zoomExtents}>⊡ Fit</button>
+          <BgColorPicker current={bgColor} onChange={setViewBgColor} />
           <button style={canvasBtnStyle} onClick={() => setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))}>+ Node</button>
         </div>
 
@@ -509,6 +517,45 @@ export default function Graph({ projectId, projectName }) {
           {new Date(__BUILD_TIME__).toISOString().slice(0,16).replace('T',' ')}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── BgColorPicker ────────────────────────────────────────────────────────────
+function BgColorPicker({ current, onChange }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative' }}>
+      <button style={{ ...canvasBtnStyle, display:'flex', alignItems:'center', gap:5 }}
+        onClick={() => setOpen(o => !o)}>
+        <span style={{ width:12, height:12, borderRadius:3, background:current, border:'1px solid #5b6af0', display:'inline-block', flexShrink:0 }} />
+        BG
+      </button>
+      {open && (
+        <div style={{
+          position:'absolute', bottom:'110%', right:0,
+          background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
+          padding:8, display:'flex', flexDirection:'column', gap:6,
+          boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:30,
+        }}
+          onMouseLeave={() => setOpen(false)}
+        >
+          <div style={{ fontSize:'0.65rem', color:'#555', marginBottom:2 }}>BACKGROUND</div>
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap', width:120 }}>
+            {BG_COLORS.map(c => (
+              <div key={c} onClick={() => { onChange(c); setOpen(false) }} style={{
+                width:20, height:20, borderRadius:4, background:c, cursor:'pointer',
+                border: current===c ? '2px solid #5b6af0' : '1px solid #333',
+              }} />
+            ))}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ fontSize:'0.65rem', color:'#555' }}>custom</span>
+            <input type="color" value={current} onChange={e => onChange(e.target.value)}
+              style={{ width:24, height:20, border:'none', background:'none', cursor:'pointer', padding:0 }} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -553,6 +600,9 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
       onMouseLeave={onMouseLeave}
       style={{ cursor: isAnchored ? 'move' : 'grab' }}
     >
+      {/* Selection ring */}
+      {isSelected && <ShapeBody shape={shape} halfW={halfW + 5} halfH={halfH + 5} r={r + 5} fill="none" stroke="#5b6af0" strokeWidth={2.5} />}
+
       <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} />
 
       {/* Label (foreignObject for word-wrap) */}
