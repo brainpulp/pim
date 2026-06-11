@@ -428,6 +428,10 @@ export default function Graph({ projectId, projectName }) {
           <defs>
             <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
             <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
+            <filter id="edge-shadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="1" stdDeviation="3" floodColor="#000" floodOpacity="0.9" />
+              <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#000" floodOpacity="0.7" />
+            </filter>
           </defs>
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
@@ -451,7 +455,7 @@ export default function Graph({ projectId, projectName }) {
               return (
                 <g key={e.id} onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
                   <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={12} />
-                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isSel?'#5b6af0':'#334155'} strokeWidth={isSel?2.5:1.5} markerEnd={`url(#${isSel?'arr-sel':'arr'})`} />
+                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isSel?'#5b6af0':'#334155'} strokeWidth={isSel?2.5:1.5} markerEnd={`url(#${isSel?'arr-sel':'arr'})`} filter="url(#edge-shadow)" />
                   {isSel && (
                     <g transform={`translate(${mx},${my})`} onClick={ev => { ev.stopPropagation(); removeEdge(e.id); setSelected(null) }} style={{ cursor:'pointer' }}>
                       <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
