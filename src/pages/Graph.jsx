@@ -29,16 +29,16 @@ function clipDist(shape, halfW, halfH, ux, uy) {
 }
 
 // ── Shape SVG body ────────────────────────────────────────────────────────────
-function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth }) {
+function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter }) {
   if (shape === 'none') return null
   if (shape === 'roundrect')
-    return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={10} ry={10} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+    return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={10} ry={10} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
   if (shape === 'ellipse')
-    return <ellipse rx={halfW} ry={halfH} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+    return <ellipse rx={halfW} ry={halfH} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
   if (shape === 'diamond')
-    return <polygon points={`0,${-halfH} ${halfW},0 0,${halfH} ${-halfW},0`} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+    return <polygon points={`0,${-halfH} ${halfW},0 0,${halfH} ${-halfW},0`} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
   // default: circle
-  return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+  return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
 }
 
 // ── Label rendering (foreignObject for word-wrap) ─────────────────────────────
@@ -432,6 +432,10 @@ export default function Graph({ projectId, projectName }) {
               <feDropShadow dx="0" dy="1" stdDeviation="3" floodColor="#000" floodOpacity="0.9" />
               <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#000" floodOpacity="0.7" />
             </filter>
+            <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="2" stdDeviation="6" floodColor="#000" floodOpacity="0.8" />
+              <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#000" floodOpacity="0.5" />
+            </filter>
           </defs>
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
@@ -642,7 +646,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
       {/* Selection ring */}
       {isSelected && <ShapeBody shape={shape} halfW={halfW + 5} halfH={halfH + 5} r={r + 5} fill="none" stroke="#5b6af0" strokeWidth={2.5} />}
 
-      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} />
+      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} filter="url(#node-shadow)" />
 
       {/* Label (foreignObject for word-wrap) */}
       {!editing && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />}
