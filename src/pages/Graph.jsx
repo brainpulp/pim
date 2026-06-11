@@ -289,11 +289,15 @@ export default function Graph({ projectId, projectName }) {
           return Math.abs(sx - nx) < halfW && Math.abs(sy - ny) < halfH
         })
         if (dropTarget) {
-          // Dropped onto a node: make it a child (alt = sever other parents first)
           if (ue.altKey) {
-            useGraphStore.getState().reparentNode(nodeId, dropTarget.id)
+            // Alt: sever ALL links of dragged node, then make child of target
+            const st = useGraphStore.getState()
+            st.edges.filter(e => e.source === nodeId || e.target === nodeId)
+              .forEach(e => st.removeEdge(e.id))
+            useGraphStore.getState().addEdge(dropTarget.id, nodeId)
           } else {
-            addEdge(nodeId, dropTarget.id)
+            // Default: sever other parent links, make exclusively child of target
+            useGraphStore.getState().reparentNode(nodeId, dropTarget.id)
           }
           // Restore node position (don't anchor at drop point)
           startPositions.forEach(({ node, ox, oy }) => { node.fx = ox; node.fy = oy })
