@@ -21,8 +21,9 @@ function shapeDims(shape, r) {
 
 // ── Direction-aware clip distance (how far from center to node edge along dir) ─
 function clipDist(shape, halfW, halfH, ux, uy) {
+  if (shape === 'none') return 0   // no visible body — point straight to center
   if (shape === 'circle') return halfW
-  // Ellipse formula works well as approximation for all shapes
+  // Ellipse formula works well as approximation for all other shapes
   const denom = Math.sqrt((ux / halfW) ** 2 + (uy / halfH) ** 2)
   return denom > 0 ? 1 / denom : halfW
 }
@@ -45,7 +46,7 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth }) {
 // It scales correctly with SVG zoom transforms in all modern browsers.
 function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   return (
-    <foreignObject x={-halfW + 2} y={-halfH + 2} width={(halfW - 2) * 2} height={(halfH - 2) * 2}
+    <foreignObject x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -442,9 +443,9 @@ export default function Graph({ projectId, projectName }) {
               const ux = dx/dist, uy = dy/dist
               const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
               const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy)
-              const x1 = s.x + ux*sd, y1 = s.y + uy*sd
-              // Endpoint exactly at node surface; arrowhead tip (refX=8) placed here, body extends toward source
-              const x2 = t.x - ux*td, y2 = t.y - uy*td
+              const x1 = s.x + ux*(sd - 2), y1 = s.y + uy*(sd - 2)
+              // Pull 2px inside surface so fill guarantees no sub-pixel gap at arrowhead
+              const x2 = t.x - ux*(td - 2), y2 = t.y - uy*(td - 2)
               const mx=(x1+x2)/2, my=(y1+y2)/2
               return (
                 <g key={e.id} onClick={ev => { ev.stopPropagation(); setSelected({ id: e.id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
@@ -643,7 +644,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
 
       {/* Edit input */}
       {editing && (
-        <foreignObject x={-halfW + 2} y={-halfH + 2} width={(halfW-2)*2} height={(halfH-2)*2}
+        <foreignObject x={-halfW} y={-halfH} width={halfW*2} height={halfH*2}
           onMouseDown={e => e.stopPropagation()}>
           <input ref={inputRef} value={draft} autoFocus
             onChange={e => setDraft(e.target.value)}
