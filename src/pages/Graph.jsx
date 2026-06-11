@@ -48,7 +48,7 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth }) {
 // It scales correctly with SVG zoom transforms in all modern browsers.
 function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   return (
-    <foreignObject x={-halfW + 5} y={-halfH + 3} width={(halfW - 5) * 2} height={(halfH - 3) * 2}
+    <foreignObject x={-halfW + 2} y={-halfH + 2} width={(halfW - 2) * 2} height={(halfH - 2) * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -79,6 +79,7 @@ export default function Graph({ projectId, projectName }) {
   const hideTimerRef = useRef(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [pendingEditId, setPendingEditId] = useState(null)
+  const [sidebarWidth, setSidebarWidth] = useState(220)
 
   const showToolbar = useCallback((nodeId) => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
@@ -279,17 +280,36 @@ export default function Graph({ projectId, projectName }) {
       if (didDrag) {
         const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
         const ddx = sx - startSx, ddy = sy - startSy
-        startPositions.forEach(({ node, ox, oy }) => {
-          node.fx = ox + ddx; node.fy = oy + ddy
-          setAnchor(node.id, node.fx, node.fy)
+        // Check if dropped onto another node → reparent
+        const dropTarget = simNodesRef.current.find(n => {
+          if (n.id === nodeId) return false
+          const vp = { ...DEFAULT_NODE_PROPS, ...(useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.nodeProps[n.id] || {}) }
+          const { halfW, halfH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1))
+          const nx = n.x ?? 0, ny = n.y ?? 0
+          return Math.abs(sx - nx) < halfW && Math.abs(sy - ny) < halfH
         })
+        if (dropTarget) {
+          // Dropped onto a node: make it a child (alt = sever other parents first)
+          if (ue.altKey) {
+            useGraphStore.getState().reparentNode(nodeId, dropTarget.id)
+          } else {
+            addEdge(nodeId, dropTarget.id)
+          }
+          // Restore node position (don't anchor at drop point)
+          startPositions.forEach(({ node, ox, oy }) => { node.fx = ox; node.fy = oy })
+        } else {
+          startPositions.forEach(({ node, ox, oy }) => {
+            node.fx = ox + ddx; node.fy = oy + ddy
+            setAnchor(node.id, node.fx, node.fy)
+          })
+        }
       }
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, storeEdges])
+  }, [clientToSim, setAnchor, addEdge, storeEdges])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -385,9 +405,23 @@ export default function Graph({ projectId, projectName }) {
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Outline sidebar */}
-      <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid #1e1e2e', background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <OutlinePanel selectedNodeId={selected?.type === 'node' ? selected.id : null} onSelectNode={id => setSelected({ id, type: 'node' })} />
       </div>
+
+      {/* Resize handle */}
+      <div
+        style={{ width: 5, flexShrink: 0, cursor: 'col-resize', background: '#1e1e2e', zIndex: 10 }}
+        onMouseDown={e => {
+          e.preventDefault()
+          const startX = e.clientX, startW = sidebarWidth
+          const onMove = mv => setSidebarWidth(Math.max(120, Math.min(500, startW + mv.clientX - startX)))
+          const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+          document.addEventListener('mousemove', onMove)
+          document.addEventListener('mouseup', onUp)
+        }}
+      />
+
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef} style={{ width: '100%', height: '100%', background: bgColor, display: 'block', transition: 'background 0.3s' }} onClick={() => setSelected(null)}>
           <defs>
@@ -610,7 +644,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, autoEdit, onAutoEdi
 
       {/* Edit input */}
       {editing && (
-        <foreignObject x={-halfW + 5} y={-halfH + 3} width={(halfW-5)*2} height={(halfH-3)*2}
+        <foreignObject x={-halfW + 2} y={-halfH + 2} width={(halfW-2)*2} height={(halfH-2)*2}
           onMouseDown={e => e.stopPropagation()}>
           <input ref={inputRef} value={draft} autoFocus
             onChange={e => setDraft(e.target.value)}

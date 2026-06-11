@@ -16,8 +16,11 @@ export const DEFAULT_NODE_PROPS = {
 }
 
 export const TEXT_COLORS = [
-  '#ffffff', '#e2e8f0', '#fbbf24', '#34d399',
-  '#60a5fa', '#f87171', '#c084fc', '#fb923c',
+  '#ffffff', '#e2e8f0', '#cbd5e1', '#94a3b8',
+  '#fbbf24', '#facc15', '#fb923c', '#f97316',
+  '#34d399', '#4ade80', '#86efac', '#6ee7b7',
+  '#60a5fa', '#38bdf8', '#c084fc', '#f472b6',
+  '#f87171', '#fca5a5', '#a78bfa', '#2dd4bf',
 ]
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'diamond', 'none']
