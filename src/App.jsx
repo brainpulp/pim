@@ -1,9 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, Component } from 'react'
 import { supabase } from './lib/supabase'
+import { renameProject } from './lib/db'
 import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
 import Table from './pages/Table'
+
+class AppErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { err: null } }
+  static getDerivedStateFromError(e) { return { err: e } }
+  render() {
+    if (this.state.err) return (
+      <div style={{ padding: 24, color: '#f87171', fontFamily: 'monospace', fontSize: 13, background: '#0f0f0f', height: '100%', overflow: 'auto' }}>
+        <div style={{ marginBottom: 8, color: '#fff', fontSize: 15 }}>App crashed — error details:</div>
+        <div style={{ color: '#fbbf24', marginBottom: 8 }}>{String(this.state.err.message)}</div>
+        <pre style={{ color: '#aaa', whiteSpace: 'pre-wrap' }}>{this.state.err.stack}</pre>
+      </div>
+    )
+    return this.props.children
+  }
+}
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = loading
@@ -16,6 +32,9 @@ export default function App() {
   })
   const [view, setView] = useState('graph')
   const [navActions, setNavActions] = useState(null)
+  const [renamingProject, setRenamingProject] = useState(false)
+  const [projectDraft, setProjectDraft] = useState('')
+  const renameInputRef = useRef()
 
   const openProject = (id, name) => {
     localStorage.setItem('pim_last_project', JSON.stringify({ id, name }))
@@ -48,7 +67,36 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
       <nav style={navStyle}>
         <button style={backBtnStyle} onClick={closeProject} title="All projects">← Projects</button>
-        <span style={projectNameStyle}>{project.name}</span>
+        {renamingProject ? (
+          <input
+            ref={renameInputRef}
+            value={projectDraft}
+            onChange={e => setProjectDraft(e.target.value)}
+            onBlur={async () => {
+              const name = projectDraft.trim() || project.name
+              if (name !== project.name) {
+                await renameProject(project.id, name)
+                const updated = { ...project, name }
+                localStorage.setItem('pim_last_project', JSON.stringify(updated))
+                setProject(updated)
+              }
+              setRenamingProject(false)
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Escape') { setRenamingProject(false) }
+              e.stopPropagation()
+            }}
+            style={projectRenameInputStyle}
+            autoFocus
+          />
+        ) : (
+          <span
+            style={projectNameStyle}
+            title="Double-click to rename"
+            onDoubleClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
+          >{project.name}</span>
+        )}
         {view === 'graph' && navActions && (
           <div style={{ display: 'flex', gap: 5, marginLeft: 8 }}>
             <div style={{ width: 1, background: '#2a2a3e', alignSelf: 'stretch', margin: '4px 2px' }} />
@@ -74,12 +122,14 @@ export default function App() {
       </nav>
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {view === 'graph' && (
+          <AppErrorBoundary>
           <Graph
             projectId={project.id}
             projectName={project.name}
             onBack={() => setProject(null)}
             onSetNavActions={setNavActions}
           />
+          </AppErrorBoundary>
         )}
         {view === 'table' && <Table />}
       </div>
@@ -99,6 +149,12 @@ const backBtnStyle = {
 const projectNameStyle = {
   fontSize: '0.85rem', color: '#888', fontWeight: 500,
   maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  cursor: 'default',
+}
+const projectRenameInputStyle = {
+  fontSize: '0.85rem', color: '#fff', fontWeight: 500,
+  background: '#1a1a2e', border: '1px solid #5b6af0', borderRadius: 4,
+  padding: '1px 6px', outline: 'none', width: 160,
 }
 const navBtnStyle = {
   padding: '0.25rem 0.75rem', borderRadius: 6, border: '1px solid #2a2a3e',

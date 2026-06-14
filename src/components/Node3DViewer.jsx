@@ -40,16 +40,35 @@ function ThumbnailCapture({ onCapture }) {
   return null
 }
 
-// Restores camera on mount; saves position+target on orbit end
+// Restores camera on mount; saves position+target on orbit end and on unmount
 function CameraController({ camState, onCamEnd }) {
   const { camera } = useThree()
   const ref = useRef()
+  const onCamEndRef = useRef(onCamEnd)
+  useEffect(() => { onCamEndRef.current = onCamEnd })
+
+  // Freeze camState at mount — prop changes from onCamEnd store updates must not re-apply camera
+  const initStateRef = useRef(camState)
 
   useEffect(() => {
-    if (!ref.current || !camState?.pos) return
-    camera.position.set(...camState.pos)
-    ref.current.target.set(...(camState.target || [0, 0, 0]))
-    ref.current.update()
+    const state = initStateRef.current
+    if (!state?.pos) return
+    const t = setTimeout(() => {
+      if (!ref.current) return
+      camera.position.set(...state.pos)
+      ref.current.target.set(...(state.target || [0, 0, 0]))
+      ref.current.update()
+    }, 0)
+    return () => clearTimeout(t)
+  }, []) // eslint-disable-line
+
+  // Save camera on unmount (handles deselect before onEnd fires)
+  useEffect(() => {
+    return () => {
+      try {
+        if (ref.current) onCamEndRef.current?.({ pos: camera.position.toArray(), target: ref.current.target.toArray() })
+      } catch (_) {}
+    }
   }, []) // eslint-disable-line
 
   return (
@@ -62,7 +81,7 @@ function CameraController({ camState, onCamEnd }) {
       touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
       onEnd={() => {
         if (!ref.current) return
-        onCamEnd?.({
+        onCamEndRef.current?.({
           pos: camera.position.toArray(),
           target: ref.current.target.toArray(),
         })
@@ -85,10 +104,10 @@ class ErrorBoundary extends Component {
   }
 }
 
-// Blob URL that lives until replaced or unmounted — avoids async loader race with revocation
+// Returns a usable URL for the model — either the storage URL directly, or a blob URL from base64
 function useStagedBlobUrl(modelData, modelType) {
   const [url, setUrl] = useState(null)
-  const prevUrl = useRef(null)
+  const prevUrl = useRef(null) // only tracks blob: URLs we created
 
   useEffect(() => {
     if (!modelData || !modelType) {
@@ -96,14 +115,19 @@ function useStagedBlobUrl(modelData, modelType) {
       setUrl(null)
       return
     }
+    // Storage URL — use directly, no blob creation needed
+    if (modelData.startsWith('https://')) {
+      if (prevUrl.current) { URL.revokeObjectURL(prevUrl.current); prevUrl.current = null }
+      setUrl(modelData)
+      return
+    }
+    // Legacy base64 — convert to blob URL
     const mime = modelType === 'glb' ? 'model/gltf-binary' : 'text/plain'
     try {
       const bin = atob(modelData)
       const bytes = new Uint8Array(bin.length)
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
       const next = URL.createObjectURL(new Blob([bytes], { type: mime }))
-      // Don't revoke previous yet — loader may still be reading it.
-      // Schedule revocation after a safe delay.
       const old = prevUrl.current
       if (old) setTimeout(() => URL.revokeObjectURL(old), 5000)
       prevUrl.current = next
@@ -111,7 +135,7 @@ function useStagedBlobUrl(modelData, modelType) {
     } catch (e) { console.error('blob url:', e) }
   }, [modelData, modelType])
 
-  // Revoke on unmount
+  // Revoke blob URLs on unmount (storage URLs need no cleanup)
   useEffect(() => () => { if (prevUrl.current) URL.revokeObjectURL(prevUrl.current) }, [])
 
   return url
@@ -129,7 +153,7 @@ export default function Node3DViewer({ modelData, modelType, camState, onCamEnd,
 
   if (!modelData) {
     return (
-      <div style={{ width:'100%', height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12 }}>
+      <div style={{ width:'100%', height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, background:'#12122a', borderRadius:12 }}>
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#2d3a6a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
           <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>

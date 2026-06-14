@@ -153,7 +153,22 @@ Repo: https://github.com/brainpulp/pim
 - Node margins too large → D3 force values were too strong; current values: `charge(-300)`, `link distance(120)`, `forceCollide(NODE_R+8)` — do not increase these
 
 ## Last session (2026-06-14)
-- Fixed wheel zoom on NodeToolbar overlay (forwarding to SVG)
-- Fixed D3 force spacing (nodes too far apart after device switch)
-- Verified: popup, pan, 3D nodes, zoom all working on live site
-- Next up: animated view transitions, slideshow manager (project-level), 3D model z/transparency (minor)
+- Added multiple named slideshows per view (slideshows array + activeSlideshowId)
+- Added AppErrorBoundary in App.jsx to show crash details instead of blank page
+- Fixed 3D viewer: moved from SVG foreignObject to absolute div outside SVG
+- Fixed model data storage leak: saveProject now strips base64 blobs (only persists https:// storage URLs)
+- Added uploadModel / uploadThumbnail to db.js (Supabase Storage, bucket: pim-models)
+- handleImport3d: optimistically loads in-memory, uploads to Storage in background, replaces with URL
+- Node3DViewer: useStagedBlobUrl handles both https:// URLs (pass-through) and base64 (blob URL)
+
+## PENDING — requires Supabase compute upgrade
+- Supabase Nano compute is exhausted (HTTP 522 / DB connection timeouts). User must:
+  1. Go to Supabase Dashboard → Project fnzdkqrkranedtgysqcf → Settings → Infrastructure → Compute → upgrade Nano→Micro (free on Pro plan)
+  2. After DB is healthy, run this migration to create the storage bucket:
+     INSERT INTO storage.buckets (id, name, public, file_size_limit) VALUES ('pim-models', 'pim-models', true, 52428800) ON CONFLICT (id) DO NOTHING;
+     CREATE POLICY "pim_models_public_read" ON storage.objects FOR SELECT TO public USING (bucket_id = 'pim-models');
+     CREATE POLICY "pim_models_auth_insert" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'pim-models');
+     CREATE POLICY "pim_models_auth_update" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = 'pim-models');
+     CREATE POLICY "pim_models_auth_delete" ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'pim-models');
+  3. Until then: 3D models load fine in-session but upload to Storage fails silently (model works, doesn't persist across refresh)
+  4. The blank page issue couldn't be tested yet (Supabase down = can't log in)

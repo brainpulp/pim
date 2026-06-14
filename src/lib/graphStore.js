@@ -64,7 +64,7 @@ const useGraphStore = create((set, get) => ({
   edges: [],
 
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [] }],
+  views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
   activeViewId: 'view-default',
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -73,14 +73,18 @@ const useGraphStore = create((set, get) => ({
     edges: edges || [],
     views: views?.length ? views.map(v => {
       const merged = { bgColor: '#0c0c1a', images: [], ...v }
-      // Initialize slides from frame nodeProps if not explicitly set
       if (!merged.slides) {
         merged.slides = Object.entries(merged.nodeProps || {})
           .filter(([, p]) => p.shape === 'frame')
           .map(([id]) => id)
       }
+      // Migrate old per-view slides to slideshows format
+      if (!merged.slideshows) {
+        merged.slideshows = [{ id: 'ss-default', name: 'Default', slides: merged.slides || [] }]
+        merged.activeSlideshowId = 'ss-default'
+      }
       return merged
-    }) : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [] }],
+    }) : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
     activeViewId: activeViewId || 'view-default',
   }),
 
@@ -122,7 +126,11 @@ const useGraphStore = create((set, get) => ({
     edges: s.edges.filter(e => e.source !== id && e.target !== id),
     views: s.views.map(v => {
       const { [id]: _, ...rest } = v.nodeProps
-      return { ...v, nodeProps: rest, slides: (v.slides || []).filter(sid => sid !== id) }
+      return {
+        ...v, nodeProps: rest,
+        slides: (v.slides || []).filter(sid => sid !== id),
+        slideshows: (v.slideshows || []).map(ss => ({ ...ss, slides: ss.slides.filter(sid => sid !== id) })),
+      }
     }),
   })),
 
@@ -167,21 +175,67 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
-  // â”€â”€ Slide ops (per view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ Slide ops (operate on the active slideshow of the active view) â”€â”€â”€â”€
   addSlide: (frameId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
-      ...v, slides: (v.slides || []).includes(frameId) ? (v.slides || []) : [...(v.slides || []), frameId],
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
+        ...ss, slides: ss.slides.includes(frameId) ? ss.slides : [...ss.slides, frameId],
+      }),
     }),
   })),
 
   removeSlide: (frameId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
-      ...v, slides: (v.slides || []).filter(id => id !== frameId),
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
+        ...ss, slides: ss.slides.filter(id => id !== frameId),
+      }),
     }),
   })),
 
   reorderSlides: (newSlides) => set(s => ({
-    views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, slides: newSlides }),
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : { ...ss, slides: newSlides }),
+    }),
+  })),
+
+  // â”€â”€ Slideshow management (per view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  addSlideshow: (name = 'New Slideshow') => {
+    const id = uid()
+    set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v,
+        slideshows: [...(v.slideshows || []), { id, name, slides: [] }],
+        activeSlideshowId: id,
+      }),
+    }))
+    return id
+  },
+
+  deleteSlideshow: (ssId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const remaining = (v.slideshows || []).filter(ss => ss.id !== ssId)
+      if (!remaining.length) return v
+      return {
+        ...v,
+        slideshows: remaining,
+        activeSlideshowId: v.activeSlideshowId === ssId ? remaining[0].id : v.activeSlideshowId,
+      }
+    }),
+  })),
+
+  renameSlideshow: (ssId, name) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== ssId ? ss : { ...ss, name }),
+    }),
+  })),
+
+  setActiveSlideshowId: (ssId) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, activeSlideshowId: ssId }),
   })),
 
   // â”€â”€ Image ops (per view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

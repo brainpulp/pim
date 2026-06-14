@@ -4,7 +4,7 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
-import { loadProject, saveProject } from '../lib/db'
+import { loadProject, saveProject, uploadModel, uploadThumbnail } from '../lib/db'
 
 // â”€â”€ Text measurement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _measureCanvas = null
@@ -183,9 +183,13 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const addImage        = useGraphStore(s => s.addImage)
   const updateImage     = useGraphStore(s => s.updateImage)
   const deleteImage     = useGraphStore(s => s.deleteImage)
-  const addSlide        = useGraphStore(s => s.addSlide)
-  const removeSlide     = useGraphStore(s => s.removeSlide)
-  const reorderSlides   = useGraphStore(s => s.reorderSlides)
+  const addSlide            = useGraphStore(s => s.addSlide)
+  const removeSlide         = useGraphStore(s => s.removeSlide)
+  const reorderSlides       = useGraphStore(s => s.reorderSlides)
+  const addSlideshow        = useGraphStore(s => s.addSlideshow)
+  const deleteSlideshow     = useGraphStore(s => s.deleteSlideshow)
+  const renameSlideshow     = useGraphStore(s => s.renameSlideshow)
+  const setActiveSlideshowId = useGraphStore(s => s.setActiveSlideshowId)
   const setDrillRoot    = useGraphStore(s => s.setDrillRoot)
   const exitDrill       = useGraphStore(s => s.exitDrill)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
@@ -222,7 +226,10 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const viewNodeProps = activeView?.nodeProps || {}
   const drillRoot     = activeView?.drillRoot || null
   const bgColor       = activeView?.bgColor || '#0c0c1a'
-  const slideIds      = activeView?.slides || []
+  const slideshows    = activeView?.slideshows || [{ id: 'ss-default', name: 'Default', slides: [] }]
+  const activeSlideshowId = activeView?.activeSlideshowId || slideshows[0]?.id
+  const activeSlideshow   = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
+  const slideIds      = activeSlideshow?.slides || []
 
   // Mutable ref so D3 forces can always read the latest view props without stale closure
   const viewNodePropsRef = useRef(viewNodeProps)
@@ -263,7 +270,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     frameRef.current = requestAnimationFrame(() => { frameRef.current = null; setTick(t => t + 1) })
   }, [])
 
-  // Topology â†’ sim
+  // Topology → sim
   useEffect(() => {
     const posById = {}
     simNodesRef.current.forEach(n => { posById[n.id] = { x: n.x, y: n.y, vx: n.vx, vy: n.vy } })
@@ -364,7 +371,8 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
       .filter(e => e.type === 'wheel' || (
         !e.target.closest?.('[data-node]') &&
         !e.target.closest?.('[data-frame]') &&
-        !e.target.closest?.('[data-img]')
+        !e.target.closest?.('[data-img]') &&
+        !e.target.closest?.('[data-3d-canvas]')
       ))
       .on('zoom', e => { zoomTransformRef.current = e.transform; scheduleRender() })
     svg.call(zoomBehaviorRef.current)
@@ -391,7 +399,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // Enter â†’ create sister node (double-click to edit label)
+      // Enter → create sister node (double-click to edit label)
       if (e.key === 'Enter' && selected?.type === 'node') {
         e.preventDefault()
         handleCreateSister(selected.id)
@@ -405,7 +413,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // Ctrl/Cmd+Shift+Enter â†’ create sister node
+      // Ctrl/Cmd+Shift+Enter → create sister node
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
         e.preventDefault()
         if (selected?.type === 'node') {
@@ -417,7 +425,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // Ctrl/Cmd+Enter â†’ create child node
+      // Ctrl/Cmd+Enter → create child node
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
         if (selected?.type === 'node') {
@@ -428,14 +436,14 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // Tab â†’ cycle to next sibling (enter edit mode)
+      // Tab → cycle to next sibling (enter edit mode)
       if (e.key === 'Tab' && selected?.type === 'node') {
         e.preventDefault()
         handleNodeTab(selected.id)
         return
       }
 
-      // ArrowUp â†’ select parent
+      // ArrowUp → select parent
       if (e.key === 'ArrowUp' && selected?.type === 'node') {
         e.preventDefault()
         const parentEdge = storeEdges.find(ed => ed.target === selected.id)
@@ -443,7 +451,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // ArrowDown â†’ select first child
+      // ArrowDown → select first child
       if (e.key === 'ArrowDown' && selected?.type === 'node') {
         e.preventDefault()
         const childEdge = storeEdges.find(ed => ed.source === selected.id)
@@ -451,7 +459,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // ArrowLeft/Right â†’ cycle siblings
+      // ArrowLeft/Right → cycle siblings
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && selected?.type === 'node') {
         e.preventDefault()
         const { siblings } = getSiblings(selected.id)
@@ -524,7 +532,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         for (const n of simNodesRef.current) {
           if (n.id === nodeId) continue
           const nvp = viewNodePropsRef.current[n.id] || {}
-          if (nvp.shape === 'frame' || nvp.visible === false) continue
+          if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
           const nr = NODE_R * (nvp.scale || 1)
           const nLabel = n.label || ''
           const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
@@ -558,7 +566,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           for (const n of simNodesRef.current) {
             if (n.id === nodeId) continue
             const nvp = viewNodePropsRef.current[n.id] || {}
-            if (nvp.shape === 'frame' || nvp.visible === false) continue
+            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
             const nr = NODE_R * (nvp.scale || 1)
             const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', Math.max(9, Math.round(12 * (nvp.scale || 1))))
             const sp = startPositions.find(p => p.node.id === nodeId)
@@ -590,7 +598,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           }
         })
 
-        // For regular nodes: check if dropped inside a frame â†’ update containedIn
+        // For regular nodes: check if dropped inside a frame → update containedIn
         if (!isFrame) {
           const sp = startPositions.find(p => p.node.id === nodeId)
           const dropX = sp ? sp.ox + ddx : sx
@@ -809,7 +817,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
   const selectedStoreNode = selectedNode ? storeNodes.find(n => n.id === selectedNode.id) : null
 
-  if (loading) return <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#444', background:'#0c0c1a' }}>Loading projectâ€¦</div>
+  if (loading) return <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#444', background:'#0c0c1a' }}>Loading project…</div>
 
   // Pre-compute edge geometry for two-pass rendering (lines behind nodes, arrowheads on top)
   const edgeData = simEdgesRef.current.map(e => {
@@ -919,7 +927,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 {isSel && (
                   <g transform={`translate(${mx},${my})`} onClick={ev => { ev.stopPropagation(); removeEdge(id); setSelected(null) }} style={{ cursor:'pointer' }}>
                     <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
-                    <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect:'none' }}>Ã—</text>
+                    <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect:'none' }}>{'\xD7'}</text>
                   </g>
                 )}
               </g>
@@ -935,41 +943,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
               />
             ))}
 
-            {/* 3b. 3D live canvas â€” foreignObject so regular nodes paint on top */}
-            {selected?.type === 'node' && (() => {
-              const n3d = simNodesRef.current.find(nd => nd.id === selected.id)
-              if (!n3d || !visibleNodeIds.has(selected.id)) return null
-              const vp3d = getVP(selected.id)
-              if (vp3d.shape !== '3d') return null
-              const r3d = NODE_R * (vp3d.scale || 1)
-              const { halfW: hw3d, halfH: hh3d } = shapeDims('3d', r3d)
-              const storeNode3d = storeNodes.find(s => s.id === selected.id)
-              const handleImport3d = file => {
-                const reader = new FileReader()
-                reader.onload = ev => {
-                  set3DModel(selected.id, ev.target.result.split(',')[1], file.name.split('.').pop().toLowerCase())
-                }
-                reader.readAsDataURL(file)
-              }
-              return (
-                <foreignObject key={selected.id}
-                  x={(n3d.x||0) - hw3d} y={(n3d.y||0) - hh3d}
-                  width={hw3d * 2} height={hh3d * 2}
-                  style={{ borderRadius: 12, overflow: 'hidden' }}>
-                  <div style={{ width:'100%', height:'100%', borderRadius:12, overflow:'hidden' }}
-                    onPointerDown={e => { e.stopPropagation(); canvasFocused.current = true }}>
-                    <Node3DViewer
-                      modelData={storeNode3d?.modelData}
-                      modelType={storeNode3d?.modelType}
-                      camState={vp3d.model3dCam}
-                      onCamEnd={cam => setNodeViewProp(selected.id, 'model3dCam', cam)}
-                      onThumbnailCapture={thumb => setModelThumb(selected.id, thumb)}
-                      onImport={handleImport3d}
-                    />
-                  </div>
-                </foreignObject>
-              )
-            })()}
+            {/* 3b placeholder — 3D viewer is rendered as absolute div outside SVG below */}
 
             {/* 4. Regular nodes on top */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame').map(n => (
@@ -997,6 +971,58 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
 
           </g>
         </svg>
+
+        {/* 3D viewer — absolute div outside SVG, no event interference */}
+        {selected?.type === 'node' && (() => {
+          const n3d = simNodesRef.current.find(nd => nd.id === selected.id)
+          if (!n3d || !visibleNodeIds.has(selected.id)) return null
+          const vp3d = getVP(selected.id)
+          if (vp3d.shape !== '3d') return null
+          const r3d = NODE_R * (vp3d.scale || 1)
+          const { halfW: hw3d, halfH: hh3d } = shapeDims('3d', r3d)
+          const storeNode3d = storeNodes.find(s => s.id === selected.id)
+          const screenX = T.x + (n3d.x || 0) * T.k
+          const screenY = T.y + (n3d.y || 0) * T.k
+          const screenW = hw3d * 2 * T.k
+          const screenH = hh3d * 2 * T.k
+          const handleImport3d = async file => {
+            const nodeId = selected.id
+            const ext = file.name.split('.').pop().toLowerCase()
+            // Optimistically load in-memory so the viewer shows immediately
+            const reader = new FileReader()
+            reader.onload = ev => set3DModel(nodeId, ev.target.result.split(',')[1], ext)
+            reader.readAsDataURL(file)
+            // Upload to storage in the background; replace in-memory blob with persistent URL
+            try {
+              const { url, type } = await uploadModel(file, projectId, nodeId)
+              set3DModel(nodeId, url, type)
+            } catch (e) {
+              console.warn('Model storage upload failed, keeping in-memory:', e)
+            }
+          }
+          return (
+            <div key={selected.id}
+              onMouseDown={e => { e.stopPropagation(); if (e.button === 1) e.preventDefault(); canvasFocused.current = true }}
+              style={{ position:'absolute',
+                left: screenX - screenW / 2, top: screenY - screenH / 2,
+                width: screenW, height: screenH,
+                borderRadius: 12, overflow: 'hidden',
+                zIndex: 5 }}>
+              <Node3DViewer
+                modelData={storeNode3d?.modelData}
+                modelType={storeNode3d?.modelType}
+                camState={vp3d.model3dCam}
+                onCamEnd={cam => setNodeViewProp(selected.id, 'model3dCam', cam)}
+                onThumbnailCapture={thumb => {
+                  uploadThumbnail(thumb, projectId, selected.id)
+                    .then(url => { if (url) setModelThumb(selected.id, url) })
+                    .catch(() => {})
+                }}
+                onImport={handleImport3d}
+              />
+            </div>
+          )
+        })()}
 
         {/* Node toolbar â€” shows on hover */}
         {(() => {
@@ -1042,11 +1068,11 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 <button onClick={() => updateImage(selectedImageId, { visible: img.visible === false ? true : false })}
                   title={img.visible === false ? 'Show' : 'Hide'}
                   style={{ ...tlBtn, color: img.visible === false ? '#f6ad55' : '#aaa' }}>
-                  {img.visible === false ? 'â—Œ Show' : 'â—Œ Hide'}
+                  {img.visible === false ? '◌ Show' : '◌ Hide'}
                 </button>
                 <div style={{ flex: 1 }} />
                 <button onClick={() => { setConfirmDeleteImage(selectedImageId) }}
-                  style={{ ...tlBtn, color: '#f87171' }}>âœ• Delete</button>
+                  style={{ ...tlBtn, color: '#f87171' }}>✕ Delete</button>
               </div>
               {/* BG color row */}
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', width: 168 }}>
@@ -1098,17 +1124,16 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         {/* Save status */}
         {!isPresenting && <div style={{ position:'absolute', top:10, left:12, pointerEvents:'none' }}>
           <span style={{ fontSize:'0.68rem', color: saveStatus==='error'?'#f87171':saveStatus==='saving'?'#5b6af0':'#2a3a2a' }}>
-            {saveStatus==='error'?'â— save failed':saveStatus==='saving'?'â— savingâ€¦':'â— saved'}
+            {saveStatus==='error'?'● save failed':saveStatus==='saving'?'● saving…':'● saved'}
           </span>
         </div>}
 
 
         {/* Canvas buttons */}
         {!isPresenting && <div style={canvasBtnsStyle}>
-          {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>â†‘ Exit Drill</button>}
-          <button style={canvasBtnStyle} onClick={handleReleaseAll}>âŠ™ Free All</button>
-          <button style={canvasBtnStyle} onClick={zoomExtents}>âŠ¡ Fit</button>
-          <BgColorPicker current={bgColor} onChange={setViewBgColor} />
+          {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>→ Exit Drill</button>}
+          <button style={canvasBtnStyle} onClick={handleReleaseAll}>⊙ Free All</button>
+          <button style={canvasBtnStyle} onClick={zoomExtents}>⊡ Fit</button>
           <button style={canvasBtnStyle} onClick={() => setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))}>+ Node</button>
           <button style={canvasBtnStyle} onClick={() => {
             const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
@@ -1121,7 +1146,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
               if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
               scheduleRender()
             }, 0)
-          }}>âŠž Frame</button>
+          }}>⊞ Frame</button>
           {/* BG color picker */}
           <div style={{ position: 'relative' }}>
             <button style={{ ...canvasBtnStyle, paddingLeft: 6, display: 'flex', alignItems: 'center', gap: 5 }}
@@ -1203,11 +1228,11 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
             <div style={{ position:'absolute', bottom:24, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
               background:'rgba(10,10,24,0.88)', border:'1px solid #2d3a6a', borderRadius:10,
               padding:'8px 18px', display:'flex', gap:14, alignItems:'center', boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}>
-              <button style={canvasBtnStyle} onClick={() => navigateSlide(-1)}>â† Prev</button>
+              <button style={canvasBtnStyle} onClick={() => navigateSlide(-1)}>← Prev</button>
               <span style={{ color:'#88b4e8', fontSize:'0.85rem', minWidth:60, textAlign:'center' }}>
                 {(presentingSlideIdx ?? 0) + 1} / {slideSimNodes.length}
               </span>
-              <button style={canvasBtnStyle} onClick={() => navigateSlide(1)}>Next â†’</button>
+              <button style={canvasBtnStyle} onClick={() => navigateSlide(1)}>Next →</button>
             </div>
           </div>
         )}
@@ -1221,7 +1246,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
             writingMode:'vertical-rl', textOrientation:'mixed', letterSpacing:'0.1em',
             color:'#5b6af0', fontSize:'0.72rem', fontWeight:600, userSelect:'none',
             gap:0, paddingTop:6 }}>
-          â–¸ SLIDES
+          ▸ SLIDES
         </div>
       )}
 
@@ -1233,6 +1258,8 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           frameSimNodes={frameSimNodes}
           viewImages={activeView?.images || []}
           slideIds={slideIds}
+          slideshows={slideshows}
+          activeSlideshowId={activeSlideshowId}
           presentingSlideIdx={presentingSlideIdx}
           getVP={getVP}
           zoomToFrame={zoomToFrame}
@@ -1240,6 +1267,10 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           removeSlide={removeSlide}
           addSlide={addSlide}
           reorderSlides={reorderSlides}
+          addSlideshow={addSlideshow}
+          deleteSlideshow={deleteSlideshow}
+          renameSlideshow={renameSlideshow}
+          setActiveSlideshowId={setActiveSlideshowId}
           onClose={() => setShowSlideSidebar(false)}
           canvasBtnStyle={canvasBtnStyle}
         />
@@ -1248,10 +1279,32 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   )
 }
 
+// Stops native mousedown/wheel from bubbling to D3's SVG listeners (React synthetic events can't do this)
+function ThreeDWrapper({ children, onFocus }) {
+  const ref = useRef()
+  const onFocusRef = useRef(onFocus)
+  useEffect(() => { onFocusRef.current = onFocus })
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const onMD = e => { e.stopPropagation(); onFocusRef.current?.() }
+    const onWH = e => { e.stopPropagation(); e.preventDefault() }
+    el.addEventListener('mousedown', onMD)
+    el.addEventListener('wheel', onWH, { passive: false })
+    return () => {
+      el.removeEventListener('mousedown', onMD)
+      el.removeEventListener('wheel', onWH)
+    }
+  }, []) // eslint-disable-line
+  return <div ref={ref} data-3d-canvas="true" style={{ width:'100%', height:'100%', borderRadius:12, overflow:'hidden' }}>{children}</div>
+}
+
 // â”€â”€â”€ SlideSidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, onClose, canvasBtnStyle }) {
   const [dragIdx, setDragIdx] = useState(null)
   const [dropIdx, setDropIdx] = useState(null)
+  const [renamingId, setRenamingId] = useState(null)
+  const [renameVal, setRenameVal] = useState('')
   const containerRef = useRef()
 
   // Whole-card drag with click threshold â€” click zooms, drag reorders
@@ -1312,14 +1365,46 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
     <div ref={containerRef} onMouseDown={e => e.stopPropagation()}
       style={{ width: 190, flexShrink: 0, borderLeft: '1px solid #1e1e2e', background: '#0d0d1a',
         overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px 8px 16px' }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8, paddingBottom:6, borderBottom:'1px solid #1e1e2e' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, paddingBottom:6, borderBottom:'1px solid #1e1e2e' }}>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <button onClick={onClose} style={{ background:'transparent', border:'none', color:'#445', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1 }}>â€¹</button>
-          <span style={{ fontSize:'0.68rem', color:'#556', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
+          <button onClick={onClose} style={{ background:'transparent', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1 }}>‹</button>
+          <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
         </div>
         <button style={{ ...canvasBtnStyle, fontSize:'0.7rem', padding:'2px 6px' }}
           onClick={() => { if (slideSimNodes.length) { setPresentingSlideIdx(0); zoomToFrame(slideSimNodes[0]) } }}
-          disabled={!slideSimNodes.length}>â–¶ Present</button>
+          disabled={!slideSimNodes.length}>▶ Present</button>
+      </div>
+
+      {/* Slideshow selector */}
+      <div style={{ marginBottom:10 }}>
+        {slideshows.map(ss => (
+          renamingId === ss.id ? (
+            <input key={ss.id} autoFocus value={renameVal}
+              onChange={e => setRenameVal(e.target.value)}
+              onBlur={() => { renameSlideshow(ss.id, renameVal || ss.name); setRenamingId(null) }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { renameSlideshow(ss.id, renameVal || ss.name); setRenamingId(null) } e.stopPropagation() }}
+              style={{ width:'100%', fontSize:'0.75rem', background:'#0d1020', border:'1px solid #4a5280', borderRadius:4, color:'#e0e4ff', padding:'3px 7px', outline:'none', marginBottom:2, boxSizing:'border-box' }}
+            />
+          ) : (
+            <div key={ss.id} style={{ display:'flex', alignItems:'center', marginBottom:2 }}>
+              <button
+                onDoubleClick={() => { setRenamingId(ss.id); setRenameVal(ss.name) }}
+                onClick={() => setActiveSlideshowId(ss.id)}
+                style={{ flex:1, textAlign:'left', fontSize:'0.75rem', padding:'4px 8px', borderRadius:4, border:'none',
+                  background: ss.id === activeSlideshowId ? '#222a5a' : 'transparent',
+                  color: ss.id === activeSlideshowId ? '#ffffff' : '#9aa0c8',
+                  cursor:'pointer', fontWeight: ss.id === activeSlideshowId ? 600 : 400 }}>
+                {ss.name}
+              </button>
+              {slideshows.length > 1 && (
+                <button onClick={() => deleteSlideshow(ss.id)} title="Delete slideshow"
+                  style={{ background:'transparent', border:'none', color:'#6070a0', cursor:'pointer', fontSize:14, padding:'0 4px', lineHeight:1, flexShrink:0 }}>×</button>
+              )}
+            </div>
+          )
+        ))}
+        <button onClick={() => addSlideshow()}
+          style={{ fontSize:'0.72rem', padding:'3px 8px', borderRadius:4, border:'1px solid #3a4878', background:'transparent', color:'#9aa0c8', cursor:'pointer', marginTop:2 }}>+ new slideshow</button>
       </div>
 
       {slideSimNodes.map((fn, i) => {
@@ -1380,7 +1465,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                 <button data-remove="true" title="Remove from slideshow"
                   onMouseDown={e => e.stopPropagation()}
                   onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
-                  style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:13, padding:'0 2px', lineHeight:1, flexShrink:0 }}>Ã—</button>
+                  style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:13, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
               </div>
             </div>
           </div>
@@ -1431,14 +1516,14 @@ function ImageNode({ img, isSelected, onMouseDown }) {
         <g transform={`translate(${hw},${hh})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize') }} style={{ cursor: 'nwse-resize' }}>
           <circle r={8} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>â¤¡</text>
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>⤡</text>
         </g>
         {/* Rotate â€” top-center */}
         <line x1={0} y1={-hh} x2={0} y2={-hh - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
         <g transform={`translate(0,${-hh - 28})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'rotate') }} style={{ cursor: 'grab' }}>
           <circle r={8} fill="#16162a" stroke="#a78bfa" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#a78bfa" style={{ userSelect: 'none' }}>â†»</text>
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#a78bfa" style={{ userSelect: 'none' }}>↻</text>
         </g>
       </>)}
     </g>
@@ -1513,13 +1598,13 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
         </foreignObject>
       )}
 
-      {/* Ã— delete (top-right) */}
+      {/* × delete (top-right) */}
       {isSelected && (
         <g transform={`translate(${halfW - 12},${-halfH + 12})`}
           onClick={e => { e.stopPropagation(); onDelete(node.id) }}
           style={{ cursor: 'pointer' }}>
           <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect: 'none' }}>Ã—</text>
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
         </g>
       )}
 
@@ -1531,7 +1616,7 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
           title={inSlides ? 'Remove from slideshow' : 'Add to slideshow'}>
           <circle r={9} fill="#1a1a2e" stroke={inSlides ? '#5b6af0' : '#445'} strokeWidth={1.5} />
           <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill={inSlides ? '#5b6af0' : '#667'} style={{ userSelect: 'none' }}>
-            {inSlides ? 'âŠŸ' : 'âŠž'}
+            {inSlides ? '⊟' : '⊞'}
           </text>
         </g>
       )}
@@ -1542,7 +1627,7 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
           onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id) }}
           style={{ cursor: cur }}>
           <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>â¤¡</text>
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>⤡</text>
         </g>
       ))}
     </g>
@@ -1761,7 +1846,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
   useEffect(() => { setNotesDraft(notes) }, [notes])
 
-  const shapeIcons = { circle:'â—‹', ellipse:'â¬­', roundrect:'â–­', rect:'â–¡', diamond:'â—‡', none:'â•Œ', '3d':'â¬¡' }
+  const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
 
   const wrap = {
     position:'absolute', left: x, top: y, transform:'translateX(-50%)',
@@ -1795,15 +1880,15 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       {/* â”€â”€ Main icon row â”€â”€ */}
       {panel === null && (
         <div style={{ display:'flex', gap:4, alignItems:'center' }}>
-          <button style={iconBtn(false)} title="Color" onClick={() => setPanel('color')}>ðŸŽ¨</button>
-          <button style={iconBtn(false)} title="Shape" onClick={() => setPanel('shape')}>â—¯</button>
+          <button style={iconBtn(false)} title="Color" onClick={() => setPanel('color')}>🎨</button>
+          <button style={iconBtn(false)} title="Shape" onClick={() => setPanel('shape')}>◯</button>
           {divider}
-          <button style={iconBtn(false)} title="Show/hide" onClick={onHide}>ðŸ‘</button>
-          <button style={iconBtn(false)} title="Drill" onClick={onDrill}>âŠ•</button>
-          <button style={iconBtn(false)} title="Note" onClick={() => setPanel('note')}>âœŽ</button>
-          {isAnchored && <button style={{ ...iconBtn(false), color:'#f6ad55' }} title="Release anchor" onClick={onRelease}>âŠ™</button>}
+          <button style={iconBtn(false)} title="Show/hide" onClick={onHide}>👁</button>
+          <button style={iconBtn(false)} title="Drill" onClick={onDrill}>⊕</button>
+          <button style={iconBtn(false)} title="Note" onClick={() => setPanel('note')}>✎</button>
+          {isAnchored && <button style={{ ...iconBtn(false), color:'#f6ad55' }} title="Release anchor" onClick={onRelease}>⊙</button>}
           {divider}
-          <button style={{ ...iconBtn(false), color:'#f87171' }} title="Delete" onClick={onDelete}>âœ•</button>
+          <button style={{ ...iconBtn(false), color:'#f87171' }} title="Delete" onClick={onDelete}>✕</button>
         </div>
       )}
 
@@ -1811,7 +1896,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       {panel === 'color' && (
         <div style={{ display:'flex', flexDirection:'column', gap:7, minWidth:190 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
-            <button style={backBtn} onClick={() => setPanel(null)}>â€¹</button>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
             <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>COLOR</span>
           </div>
           <div>
@@ -1855,7 +1940,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       {panel === 'shape' && (
         <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:160 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
-            <button style={backBtn} onClick={() => setPanel(null)}>â€¹</button>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
             <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>SHAPE</span>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:5 }}>
@@ -1879,14 +1964,14 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       {panel === 'note' && (
         <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:210 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4 }}>
-            <button style={backBtn} onClick={() => setPanel(null)}>â€¹</button>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
             <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>NOTE</span>
           </div>
           <textarea
             value={notesDraft}
             onChange={e => setNotesDraft(e.target.value)}
             onBlur={() => onNotesChange(notesDraft)}
-            placeholder="Notesâ€¦"
+            placeholder="Notes…"
             rows={4}
             autoFocus
             style={{
