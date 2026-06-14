@@ -3,51 +3,43 @@ import { supabase } from '../lib/supabase'
 
 export default function Auth() {
   const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [mode, setMode] = useState('signin') // 'signin' | 'signup'
 
-  async function handleLogin(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
     setLoading(true)
     setError(null)
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin }
-    })
+    const { error } = mode === 'signin'
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password })
     if (error) setError(error.message)
-    else setSent(true)
     setLoading(false)
   }
-
-  if (sent) return (
-    <div style={styles.wrap}>
-      <div style={styles.card}>
-        <h2 style={styles.title}>Check your email</h2>
-        <p style={styles.sub}>We sent a magic link to <strong>{email}</strong></p>
-      </div>
-    </div>
-  )
 
   return (
     <div style={styles.wrap}>
       <div style={styles.card}>
         <h2 style={styles.title}>PIM</h2>
         <p style={styles.sub}>Personal Information Manager</p>
-        <form onSubmit={handleLogin} style={styles.form}>
-          <input
-            style={styles.input}
-            type="email"
-            placeholder="your@email.com"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            required
-          />
+        <form onSubmit={handleSubmit} style={styles.form}>
+          <input style={styles.input} type="email" placeholder="email" value={email}
+            onChange={e => setEmail(e.target.value)} required autoFocus />
+          <input style={styles.input} type="password" placeholder="password" value={password}
+            onChange={e => setPassword(e.target.value)} required />
           <button style={styles.btn} disabled={loading}>
-            {loading ? 'Sending…' : 'Send magic link'}
+            {loading ? '…' : mode === 'signin' ? 'Sign in' : 'Create account'}
           </button>
         </form>
         {error && <p style={styles.error}>{error}</p>}
+        <p style={styles.toggle}>
+          {mode === 'signin' ? "No account? " : "Already have one? "}
+          <span style={styles.link} onClick={() => { setMode(m => m === 'signin' ? 'signup' : 'signin'); setError(null) }}>
+            {mode === 'signin' ? 'Sign up' : 'Sign in'}
+          </span>
+        </p>
       </div>
     </div>
   )
@@ -61,5 +53,7 @@ const styles = {
   form: { display: 'flex', flexDirection: 'column', gap: '0.75rem' },
   input: { padding: '0.75rem 1rem', borderRadius: 8, border: '1px solid #333', background: '#111', color: '#fff', fontSize: '1rem', outline: 'none' },
   btn: { padding: '0.75rem', borderRadius: 8, border: 'none', background: '#5b6af0', color: '#fff', fontSize: '1rem', cursor: 'pointer', fontWeight: 600 },
-  error: { color: '#f87171', marginTop: '0.75rem', fontSize: '0.85rem' }
+  error: { color: '#f87171', marginTop: '0.75rem', fontSize: '0.85rem' },
+  toggle: { marginTop: '1rem', color: '#666', fontSize: '0.85rem' },
+  link: { color: '#5b6af0', cursor: 'pointer' },
 }

@@ -57,7 +57,7 @@ function flattenTree(tree, expandedSet) {
 }
 
 // ── OutlinePanel ──────────────────────────────────────────────────────────────
-export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
+export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNodeIds }) {
   const nodes         = useGraphStore(s => s.nodes)
   const edges         = useGraphStore(s => s.edges)
   const addNode       = useGraphStore(s => s.addNode)
@@ -188,6 +188,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
             onStartDrag={startDrag}
             isExpanded={isExpanded}
             onToggleExpand={toggleExpand}
+            containerNodeIds={containerNodeIds}
           />
         ))}
       </div>
@@ -199,7 +200,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode }) {
 function OutlineItem({
   item, depth, selectedNodeId, onSelect,
   onAddChild, onRename, onDelete, onToggleVisible, onDrill,
-  viewNodeProps, dropTarget, draggingId, onStartDrag, isExpanded, onToggleExpand,
+  viewNodeProps, dropTarget, draggingId, onStartDrag, isExpanded, onToggleExpand, containerNodeIds,
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(item.label)
@@ -271,6 +272,7 @@ function OutlineItem({
           {expanded ? '▾' : '▸'}
         </span>
 
+        {containerNodeIds?.has(item.id) && <span title="Frame container" style={{ fontSize: '0.7rem', marginRight: 3, opacity: 0.7 }}>⊞</span>}
         {item.isClone && <span style={styles.cloneTag} title="Multi-parent or cycle">⇢</span>}
 
         {editing ? (
@@ -323,6 +325,7 @@ function OutlineItem({
           onStartDrag={onStartDrag}
           isExpanded={isExpanded}
           onToggleExpand={onToggleExpand}
+          containerNodeIds={containerNodeIds}
         />
       ))}
     </div>
