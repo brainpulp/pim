@@ -125,10 +125,12 @@ loadProjectData({ nodes, edges, views, activeViewId })
 - **TDZ gotcha**: never reference a `const` declared later in the same function body inside a `useEffect` deps array — silent crash in production.
 
 ## Auth + Supabase — CRITICAL
-- Shared Supabase project with gastos (`fnzdkqrkranedtgysqcf`). **DO NOT touch gastos schema, auth site URL, or alphabiotec project.**
+- PIM now has its **own dedicated Supabase project** (`ikztpvxfgmhmrcwolwgx`, name: "pim"). No longer shared with gastos.
 - PIM uses **`public.pim_projects`** (NOT `pim.` schema).
 - `db.js` uses `supabase.from('pim_projects')` with no `.schema()` call.
 - Auth: email + password (`signInWithPassword` / `signUp`). User: maxi.goldschwartz@gmail.com.
+- Storage bucket: `pim-models` (public, 50MB limit) — for 3D model GLB/OBJ files and thumbnails.
+- Old broken project: `fnzdkqrkranedtgysqcf` (gastos) — still has gastos data on disk but DB is crash-looping from Nano compute exhaustion.
 
 ## Deploy
 ```bash
@@ -161,14 +163,8 @@ Repo: https://github.com/brainpulp/pim
 - handleImport3d: optimistically loads in-memory, uploads to Storage in background, replaces with URL
 - Node3DViewer: useStagedBlobUrl handles both https:// URLs (pass-through) and base64 (blob URL)
 
-## PENDING — requires Supabase compute upgrade
-- Supabase Nano compute is exhausted (HTTP 522 / DB connection timeouts). User must:
-  1. Go to Supabase Dashboard → Project fnzdkqrkranedtgysqcf → Settings → Infrastructure → Compute → upgrade Nano→Micro (free on Pro plan)
-  2. After DB is healthy, run this migration to create the storage bucket:
-     INSERT INTO storage.buckets (id, name, public, file_size_limit) VALUES ('pim-models', 'pim-models', true, 52428800) ON CONFLICT (id) DO NOTHING;
-     CREATE POLICY "pim_models_public_read" ON storage.objects FOR SELECT TO public USING (bucket_id = 'pim-models');
-     CREATE POLICY "pim_models_auth_insert" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'pim-models');
-     CREATE POLICY "pim_models_auth_update" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = 'pim-models');
-     CREATE POLICY "pim_models_auth_delete" ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'pim-models');
-  3. Until then: 3D models load fine in-session but upload to Storage fails silently (model works, doesn't persist across refresh)
-  4. The blank page issue couldn't be tested yet (Supabase down = can't log in)
+## PENDING / KNOWN ISSUES
+- PIM is on a fresh project — you need to sign up again (new account on the new Supabase project).
+- alphabiotec project is paused (to make room for the new pim project on free plan). To restore it you'll need to either delete the old gastos project or upgrade to Pro ($25/mo).
+- Old pim project data is gone (nodes/edges/views were lost when the DB crashed). Fresh start.
+- 3D models: upload to Supabase Storage works. Models persist via URL reference (no base64 in DB).
