@@ -154,17 +154,69 @@ Repo: https://github.com/brainpulp/pim
 - Wheel zoom broken on toolbar → NodeToolbar is an HTML div overlay after `</svg>`; wheel events never reach D3. Fix: `onWheel` on toolbar div dispatches `new WheelEvent('wheel', {...})` to `svgRef.current`
 - Node margins too large → D3 force values were too strong; current values: `charge(-300)`, `link distance(120)`, `forceCollide(NODE_R+8)` — do not increase these
 
-## Last session (2026-06-14)
-- Added multiple named slideshows per view (slideshows array + activeSlideshowId)
-- Added AppErrorBoundary in App.jsx to show crash details instead of blank page
-- Fixed 3D viewer: moved from SVG foreignObject to absolute div outside SVG
-- Fixed model data storage leak: saveProject now strips base64 blobs (only persists https:// storage URLs)
-- Added uploadModel / uploadThumbnail to db.js (Supabase Storage, bucket: pim-models)
-- handleImport3d: optimistically loads in-memory, uploads to Storage in background, replaces with URL
-- Node3DViewer: useStagedBlobUrl handles both https:// URLs (pass-through) and base64 (blob URL)
+## Last session (2026-06-15)
+- Migrated to dedicated Supabase project (ikztpvxfgmhmrcwolwgx)
+- Fixed 3D viewer positioning: absolute div with CSS transform for smooth GPU-composited movement
+- PNG thumbnails (replaces JPEG): preserves alpha so SVG fill color shows through
+- liveThumbsRef: thumbnail updates instantly on deselect without waiting for storage upload
+- Orbit-end thumbnail recapture: camera angle always reflected in thumbnail after orbit
+- Fixed Ctrl+Enter creating sister instead of child (Enter handler was missing modifier guard)
+- NodeToolbar for 3D nodes now appears above the box (not below) so caption text is editable
+- Transparent fill option added to NodeToolbar FILL palette (checkered swatch)
+- 3D nodes auto-set to transparent fill when shape is switched to '3d'
+- Project rename: stopPropagation on rowActions container; double-click on name span; single-click in nav
 
-## PENDING / KNOWN ISSUES
-- PIM is on a fresh project — you need to sign up again (new account on the new Supabase project).
-- alphabiotec project is paused (to make room for the new pim project on free plan). To restore it you'll need to either delete the old gastos project or upgrade to Pro ($25/mo).
-- Old pim project data is gone (nodes/edges/views were lost when the DB crashed). Fresh start.
-- 3D models: upload to Supabase Storage works. Models persist via URL reference (no base64 in DB).
+## TODO
+- [ ] Investigate and fix any remaining 3D node jerkiness during pan/zoom
+- [ ] Test project rename thoroughly on live site (Projects page + nav header)
+- [ ] Restore alphabiotec project (blocked: need to delete old gastos project or upgrade to Pro $25/mo)
+
+## KNOWN ISSUES
+- alphabiotec project is paused (to make room for pim on free plan). To restore: delete old gastos project or upgrade to Pro.
+- Old pim project data is gone (DB crash). Fresh start on new project.
+
+## BACKLOG
+
+### Notion-style node metadata
+**Priority:** medium | **Effort:** tags+status = ~1 day; full suite = ~1 week
+
+Add Notion-style fields to nodes. Data lives on the node object (already freeform JSONB in Supabase — zero schema migration needed). UI is the only work.
+
+**Phase 1 — Tags + Status (recommended starting point)**
+- `node.tags = string[]` — colored chips, add/remove from notes panel or a new "Fields" tab in NodeToolbar
+- `node.status = 'todo'|'doing'|'done'|null` — colored dot on node corner, dropdown in toolbar
+- Visual: tags render as chips below the node label; status as a small corner badge
+
+**Phase 2 — More field types**
+- URL/link — single string, opens in new tab, tiny input in toolbar
+- Date — native `<input type="date">`, shown as badge on node
+- Priority — high/medium/low, same pattern as status
+- Number — rating, score, weight
+- Custom key-value pairs — open-ended `{ key, value }[]`
+
+**Phase 3 — Power features**
+- Filter/hide graph nodes by field value (e.g. hide all where status !== 'done')
+- Sort outline by field
+- Relations — link node to another node (distinct from visual graph edges)
+- Formulas/rollups — computed fields from children values
+
+**Implementation notes**
+- All fields view-independent (shared across views), live on `nodes[]` in the store alongside `label`, `notes`
+- No DB migration needed — JSONB column already handles arbitrary keys
+- UI entry point: expand the existing notes panel into a "Fields" tab, or add a second tab to NodeToolbar color/shape/note panels
+- Avoid putting field values in `viewProps` — fields are about the node, not a particular view's presentation
+
+### Arrangement / Z-ordering
+**Priority:** low | **Effort:** ~2 hours
+
+Bring-to-front / send-to-back for overlapping nodes. SVG paint order = array order, so reorder `nodes[]` in the store. Could be a right-click context menu item or toolbar icon. Frame nodes always render first already (separate filter pass in Graph.jsx).
+
+### Edge labels
+**Priority:** low | **Effort:** ~3 hours
+
+Label text on edges (relationship type). Render as SVG `<text>` at the midpoint of the edge path.
+
+### Node search / spotlight
+**Priority:** medium | **Effort:** ~half day
+
+Cmd+K or `/` opens a fuzzy-search popup over all node labels. Selecting one selects + zooms to that node. Simple: filter `storeNodes` by label substring, render a floating list.
