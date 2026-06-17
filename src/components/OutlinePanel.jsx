@@ -357,7 +357,7 @@ const styles = {
   cloneTag: { fontSize: 9, color: '#5b6af0', flexShrink: 0 },
   label: {
     flex: 1, fontSize: '0.8rem', cursor: 'default',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', userSelect: 'none',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   input: {
     flex: 1, background: '#1a1a2e', border: '1px solid #5b6af0',

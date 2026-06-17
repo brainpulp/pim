@@ -118,13 +118,14 @@ function ProjectRow({ project, onOpen, onRename, onDelete }) {
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span style={styles.rowName}>{project.name}</span>
+          <span style={styles.rowName} onDoubleClick={e => { e.stopPropagation(); setEditing(true) }}>{project.name}</span>
         )}
         <span style={styles.rowAge}>{age}</span>
       </div>
-      <div style={styles.rowActions} className="project-row-actions">
+      <div style={styles.rowActions} className="project-row-actions"
+        onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
         <button style={styles.iconBtn} title="Rename"
-          onClick={e => { e.stopPropagation(); setEditing(true) }}>✎</button>
+          onClick={() => setEditing(true)}>✎</button>
         <button style={{ ...styles.iconBtn, color: '#f87171' }} title="Delete"
           onClick={e => { e.stopPropagation(); onDelete() }}>×</button>
       </div>

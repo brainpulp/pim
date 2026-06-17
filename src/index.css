@@ -18,3 +18,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .view-row-active { background: #16162e; }
 .view-actions { display: flex; gap: 2px; opacity: 0; flex-shrink: 0; }
 .view-row:hover .view-actions { opacity: 1; }
+
+/* Node color cycling */
+@keyframes pim-hue-cycle {
+  0%   { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}

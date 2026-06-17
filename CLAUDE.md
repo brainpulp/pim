@@ -165,6 +165,22 @@ Repo: https://github.com/brainpulp/pim
 - Wheel zoom broken on toolbar → NodeToolbar is an HTML div overlay after `</svg>`; wheel events never reach D3. Fix: `onWheel` on toolbar div dispatches `new WheelEvent('wheel', {...})` to `svgRef.current`
 - Node margins too large → D3 force values were too strong; current values: `charge(-300)`, `link distance(120)`, `forceCollide(NODE_R+8)` — do not increase these
 
+## Last session (2026-06-15) — continued
+
+### Changes
+- Moved canvas buttons (Free, Fit, +Node, +Frame, +Root, +View, BG picker) into left sidebar below ViewManager. ViewManager also moved from canvas overlay into sidebar.
+- Removed nav action buttons (+ View, + Frame, + Node, + Root) from App.jsx nav header.
+- `onSetNavActions` prop removed from Graph; `addFrameToCenter` is now a local `useCallback`.
+- Added `sideToolBtnStyle` constant for sidebar tool strip buttons.
+- Smart/curly quotes replaced with straight quotes throughout Graph.jsx (rolldown/Vite 8 is strict about these in JSX attribute positions).
+- Added `AnimatedG` SVG component: wraps node visual content with optional RAF-driven motion (shake/circle/jerk/updown/sideways/scale) and CSS `hue-rotate` color cycling. Pauses on hover/select.
+- NodeShape now reads `viewProps.nodeMotion` and `viewProps.nodeColorCycle`; passes them to AnimatedG.
+- NodeToolbar: added ✦ (motion) and ❋ (radiate) buttons to main icon row.
+  - Motion panel: type grid (○ ≋ ◎ ⚡ ↕ ↔ ⬡), speed+intensity +/- controls, color cycle toggle with speed.
+  - Radiate panel: propagates fillColor/shape/both to direct edge-children of the selected node.
+- CSS keyframe `pim-hue-cycle` added to index.css for color cycling.
+- viewProps keys: `nodeMotion: { type, speed, intensity } | null`, `nodeColorCycle: number (0=off, seconds)`
+
 ## Last session (2026-06-15)
 - Migrated to dedicated Supabase project (ikztpvxfgmhmrcwolwgx)
 - Fixed 3D viewer positioning: absolute div with CSS transform for smooth GPU-composited movement

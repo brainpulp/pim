@@ -30,17 +30,18 @@ export const PALETTE = [
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none', 'image']
 
-export const FILL_COLORS = [
-  '#1d4ed8', '#2563eb', '#0f766e', '#0d9488',
-  '#7e22ce', '#9333ea', '#b45309', '#d97706',
-  '#be185d', '#db2777', '#0e7490', '#0284c7',
-  '#15803d', '#16a34a', '#dc2626', '#374151',
+// Unified 36-color palette used everywhere in the app (fills, text, strokes, etc.)
+export const COLOR_PALETTE = [
+  '#ff1744', '#f44336', '#e91e63', '#ec407a', '#f48fb1', '#ffcdd2',
+  '#7c4dff', '#9c27b0', '#ab47bc', '#ce93d8', '#b39ddb', '#ea80fc',
+  '#1565c0', '#1e88e5', '#42a5f5', '#0288d1', '#00bcd4', '#4dd0e1',
+  '#1b5e20', '#43a047', '#66bb6a', '#00c853', '#69f0ae', '#ccff90',
+  '#e65100', '#fb8c00', '#ffa726', '#ffd740', '#ffe57f', '#fff176',
+  '#0a0a1a', '#37474f', '#78909c', '#b0bec5', '#eceff1', '#ffffff',
 ]
 
-export const TEXT_COLORS = [
-  '#ffffff', '#e2e8f0', '#fbbf24', '#34d399',
-  '#60a5fa', '#f87171', '#c084fc', '#fb923c',
-]
+export const FILL_COLORS = COLOR_PALETTE
+export const TEXT_COLORS = COLOR_PALETTE
 
 export const BG_COLORS = [
   '#0c0c1a', '#0a0a0a', '#0d1117', '#0f1923',
@@ -64,7 +65,7 @@ const useGraphStore = create((set, get) => ({
   edges: [],
 
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
+  views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
   activeViewId: 'view-default',
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -72,7 +73,7 @@ const useGraphStore = create((set, get) => ({
     nodes: nodes || [],
     edges: edges || [],
     views: views?.length ? views.map(v => {
-      const merged = { bgColor: '#0c0c1a', images: [], ...v }
+      const merged = { bgColor: '#0c0c1a', images: [], customEmojis: [], ...v }
       if (!merged.slides) {
         merged.slides = Object.entries(merged.nodeProps || {})
           .filter(([, p]) => p.shape === 'frame')
@@ -84,7 +85,7 @@ const useGraphStore = create((set, get) => ({
         merged.activeSlideshowId = 'ss-default'
       }
       return merged
-    }) : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
+    }) : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
     activeViewId: activeViewId || 'view-default',
   }),
 
@@ -205,6 +206,15 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
+  setSlideBgColor: (ssId, slideId, color) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== ssId ? ss : {
+        ...ss, slideBgColors: { ...(ss.slideBgColors || {}), [slideId]: color },
+      }),
+    }),
+  })),
+
   // â”€â”€ Slideshow management (per view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   addSlideshow: (name = 'New Slideshow') => {
     const id = uid()
@@ -265,11 +275,28 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
+  // ── Custom uploaded emojis (per view) ──────────────────────────
+  addCustomEmoji: (name, src) => {
+    const id = uid()
+    set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, customEmojis: [...(v.customEmojis || []), { id, name, src }],
+      }),
+    }))
+    return id
+  },
+
+  removeCustomEmoji: (emojiId) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v, customEmojis: (v.customEmojis || []).filter(e => e.id !== emojiId),
+    }),
+  })),
+
   // â”€â”€ View ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   addView: (name = 'New View') => {
     const id = uid()
     set(s => ({
-      views: [...s.views, { id, name, nodeProps: {}, drillRoot: null, images: [], slides: [] }],
+      views: [...s.views, { id, name, nodeProps: {}, drillRoot: null, images: [], customEmojis: [], slides: [] }],
       activeViewId: id,
     }))
     return id
@@ -307,6 +334,19 @@ const useGraphStore = create((set, get) => ({
 
   setViewBgColor: (color) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, bgColor: color } : v),
+  })),
+
+  setViewPan: (x, y, k) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, pan: { x, y, k } }),
+  })),
+
+  toggleCollapseNode: (nodeId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const c = new Set(v.collapsedNodeIds || [])
+      if (c.has(nodeId)) c.delete(nodeId); else c.add(nodeId)
+      return { ...v, collapsedNodeIds: [...c] }
+    })
   })),
 
   setDrillRoot: (nodeId) => set(s => ({

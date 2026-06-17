@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
-import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS } from '../lib/graphStore'
+import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject, uploadModel, uploadThumbnail } from '../lib/db'
 
-// â”€â”€ Text measurement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Text measurement â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 let _measureCanvas = null
 function measureTextWidth(text, fontSize) {
   if (!_measureCanvas) _measureCanvas = document.createElement('canvas')
@@ -15,23 +15,40 @@ function measureTextWidth(text, fontSize) {
   return ctx.measureText(text || ' ').width
 }
 
-// For rect/roundrect: box is sized to snugly fit the text content
-function getAutoSizeDims(label, fontSize) {
+// For rect/roundrect: box is sized to snugly fit the text content.
+// widthOverride (half-width, sim units) lets the user manually pin the paragraph
+// width via the drag handle in edit mode — line breaks then wrap to that width instead.
+function getAutoSizeDims(label, fontSize, widthOverride) {
   const PAD_X = 14, PAD_Y = 10, MAX_HALF_W = 180, MIN_HALF_W = 36
   const rawW = measureTextWidth(label, fontSize)
-  const halfW = Math.max(MIN_HALF_W, Math.min(MAX_HALF_W, rawW / 2 + PAD_X))
+  const halfW = widthOverride
+    ? Math.max(MIN_HALF_W, widthOverride)
+    : Math.max(MIN_HALF_W, Math.min(MAX_HALF_W, rawW / 2 + PAD_X))
   const lineWidth = halfW * 2 - PAD_X * 2
   const linesCount = Math.max(1, Math.ceil(rawW / lineWidth))
   const halfH = (linesCount * fontSize * 1.35) / 2 + PAD_Y
   return { halfW, halfH }
 }
 
-// â”€â”€ Shape geometry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Returns { halfW, halfH } â€” the bounding half-dimensions of a shape at scale r
+// ── Full emoji catalog, grouped by category ─────────────────────────
+const EMOJI_CATALOG = [
+  ['Smileys', ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🫢','🫣','🤫','🤔','🫡','🤐','🤨','😐','😑','😶','🫥','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','🫤','😟','🙁','😮','😯','😲','😳','🥺','🥹','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖','😺','😸','😹','😻','😼','😽','🙀','😿','😾']],
+  ['People', ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦾','🦵','🦿','🦶','👂','🦻','👃','🧠','🫀','🫁','🦷','🦴','👀','👁️','👅','👄','🫦','👶','🧒','👦','👧','🧑','👨','👩','🧓','👴','👵','🙍','🙎','🙅','🙆','💁','🙋','🧏','🙇','🤦','🤷','👮','🕵️','💂','👷','🤴','👸','👳','👲','🧕','🤵','👰','🤰','🤱','👼','🎅','🤶','🦸','🦹','🧙','🧚','🧛','🧜','🧝','🧞','🧟','💆','💇','🚶','🧍','🧎','🏃','💃','🕺','👯','🧖','🧗','🤺','🏇','⛷️','🏂','🏌️','🏄','🚣','🏊','⛹️','🏋️','🚴','🚵','🤸','🤼','🤽','🤾','🤹','🧘','🛀','🛌','👭','👫','👬','💏','💑','👪']],
+  ['Animals', ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐽','🐸','🐵','🙈','🙉','🙊','🐒','🐔','🐧','🐦','🐤','🐣','🐥','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🪱','🐛','🦋','🐌','🐞','🐜','🪰','🪲','🪳','🦟','🦗','🕷️','🕸️','🦂','🐢','🐍','🦎','🦖','🦕','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈','🐊','🐅','🐆','🦓','🦍','🦧','🦣','🐘','🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕','🐩','🦮','🐈','🐓','🦃','🦤','🦚','🦜','🦢','🦩','🕊️','🐇','🦝','🦨','🦡','🦫','🦦','🦥','🐁','🐀','🐿️','🦔']],
+  ['Food', ['🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥬','🥒','🌶️','🫑','🌽','🥕','🫒','🧄','🧅','🥔','🍠','🥐','🥯','🍞','🥖','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🦴','🌭','🍔','🍟','🍕','🫓','🥪','🥙','🧆','🌮','🌯','🫔','🥗','🥘','🫕','🥫','🍝','🍜','🍲','🍛','🍣','🍱','🥟','🦪','🍤','🍙','🍚','🍘','🍥','🥠','🥮','🍢','🍡','🍧','🍨','🍦','🥧','🧁','🍰','🎂','🍮','🍭','🍬','🍫','🍿','🍩','🍪','🌰','🥜','🍯','🥛','🍼','🫖','☕','🍵','🧃','🥤','🧋','🍶','🍺','🍻','🥂','🍷','🥃','🍸','🍹','🧉','🍾','🧊']],
+  ['Activities', ['⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🎱','🪀','🏓','🏸','🏒','🏑','🥍','🏏','🪃','🥅','⛳','🪁','🏹','🎣','🤿','🥊','🥋','🎽','🛹','🛼','🛷','⛸️','🥌','🎿','⛷️','🏂','🪂','🏋️','🤼','🤸','⛹️','🤺','🤾','🏌️','🏇','🧘','🏄','🏊','🤽','🚣','🧗','🚵','🚴','🏆','🥇','🥈','🥉','🏅','🎖️','🏵️','🎗️','🎫','🎟️','🎪','🤹','🎭','🩰','🎨','🎬','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🪗','🎸','🪕','🎻','🎲','♟️','🎯','🎳','🎮','🎰','🧩']],
+  ['Travel', ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🦯','🦽','🦼','🛴','🚲','🛵','🏍️','🛺','🚨','🚔','🚍','🚘','🚖','🚡','🚠','🚟','🚃','🚋','🚞','🚝','🚄','🚅','🚈','🚂','🚆','🚇','🚊','🚉','✈️','🛫','🛬','🛩️','💺','🛰️','🚀','🛸','🚁','🛶','⛵','🚤','🛥️','🛳️','⛴️','🚢','⚓','🪝','⛽','🚧','🚦','🚥','🚏','🗺️','🗿','🗽','🗼','🏰','🏯','🏟️','🎡','🎢','🎠','⛲','⛱️','🏖️','🏝️','🏜️','🌋','⛰️','🏔️','🗻','🏕️','⛺','🏠','🏡','🏘️','🏚️','🏗️','🏭','🏢','🏬','🏣','🏤','🏥','🏦','🏨','🏪','🏫','🏩','💒','🏛️','⛪','🕌','🕍','🛕','🕋','⛩️']],
+  ['Objects', ['⌚','📱','💻','⌨️','🖥️','🖨️','🖱️','🖲️','🕹️','🗜️','💽','💾','💿','📀','📼','📷','📸','📹','🎥','📽️','🎞️','📞','☎️','📟','📠','📺','📻','🎙️','🎚️','🎛️','🧭','⏱️','⏲️','⏰','🕰️','⌛','⏳','📡','🔋','🪫','🔌','💡','🔦','🕯️','🪔','🧯','🛢️','💸','💵','💴','💶','💷','🪙','💰','💳','💎','⚖️','🪜','🧰','🪛','🔧','🔨','⚒️','🛠️','⛏️','🪚','🔩','⚙️','🪤','🧱','⛓️','🧲','🔫','💣','🧨','🪓','🔪','🗡️','⚔️','🛡️','🚬','⚰️','🪦','⚱️','🏺','🔮','📿','🧿','💈','⚗️','🔭','🔬','🕳️','🩹','🩺','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡️','🧹','🪠','🧺','🧻','🚽','🚰','🚿','🛁','🛀','🧼','🪥','🪒','🧽','🪣','🧴','🛎️','🔑','🗝️','🚪','🪑','🛋️','🛏️','🛌','🧸','🪆','🖼️','🪞','🪟','🛍️','🛒','🎁','🎈','🎏','🎀','🪄','🪅','🎊','🎉','🪩','🎎','🏮','🎐','🧧','✉️','📩','📨','📧','💌','📥','📤','📦','🏷️','🪧','📪','📫','📬','📭','📮','📯','📜','📃','📄','📑','🧾','📊','📈','📉','📋','📅','📆','🗒️','🗓️','📇','🗃️','🗳️','🗄️','📋','📁','📂','🗂️','🗞️','📰','📓','📔','📒','📕','📗','📘','📙','📚','📖','🔖','🧷','🔗','📎','🖇️','📐','📏','🧮','📌','📍','✂️','🖊️','🖋️','✒️','🖌️','🖍️','📝','✏️','🔍','🔎','🔏','🔐','🔒','🔓']],
+  ['Symbols', ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','☸️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭','❗','❕','❓','❔','‼️','⁉️','🔅','🔆','〽️','⚠️','🚸','🔱','⚜️','🔰','♻️','✅','🈯','💹','❇️','✳️','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🛗','🈳','🈂️','🛂','🛃','🛄','🛅','🚹','🚺','🚼','🚻','🚮','🎦','📶','🈁','🔣','ℹ️','🔤','🔡','🔠','🆖','🆗','🆙','🆒','🆕','🆓','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🔢','#️⃣','*️⃣','⏏️','▶️','⏸️','⏯️','⏹️','⏺️','⏭️','⏮️','⏩','⏪','⏫','⏬','◀️','🔼','🔽','➡️','⬅️','⬆️','⬇️','↗️','↘️','↙️','↖️','↕️','↔️','↪️','↩️','⤴️','⤵️','🔀','🔁','🔂','🔄','🔃','🎵','🎶','➕','➖','➗','✖️','♾️','💲','💱','™️','©️','®️','〰️','➰','➿','🔚','🔙','🔛','🔝','🔜','✔️','☑️','🔘','🔴','🟠','🟡','🟢','🔵','🟣','🟤','⚫','⚪','🟥','🟧','🟨','🟩','🟦','🟪','🟫','⬛','⬜','◼️','◻️','◾','◽','▪️','▫️','🔶','🔷','🔸','🔹','🔺','🔻','💠','🔲','🔳']],
+  ['Flags', ['🏁','🚩','🎌','🏴','🏳️','🏳️‍🌈','🏳️‍⚧️','🏴‍☠️','🇦🇷','🇧🇷','🇨🇦','🇨🇱','🇨🇳','🇨🇴','🇩🇪','🇪🇸','🇫🇷','🇬🇧','🇮🇳','🇮🇹','🇯🇵','🇲🇽','🇳🇱','🇵🇪','🇵🇹','🇷🇺','🇰🇷','🇸🇪','🇨🇭','🇺🇸','🇺🇾','🇺🇳']],
+]
+
+// ── Shape geometry â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Returns { halfW, halfH } â€" the bounding half-dimensions of a shape at scale r
 // For rect/roundrect, pass label+fontSize to get text-fitted dimensions.
-function shapeDims(shape, r, label, fontSize) {
+function shapeDims(shape, r, label, fontSize, widthOverride) {
   if ((shape === 'roundrect' || shape === 'rect') && label != null) {
-    return getAutoSizeDims(label, fontSize || Math.max(9, Math.round(12 * (r / NODE_R))))
+    return getAutoSizeDims(label, fontSize || Math.max(9, Math.round(12 * (r / NODE_R))), widthOverride)
   }
   switch (shape) {
     case '3d':        return { halfW: r * 2.5, halfH: r * 2.5 }
@@ -46,12 +63,12 @@ function shapeDims(shape, r, label, fontSize) {
   }
 }
 
-// â”€â”€ Direction-aware clip distance (how far from center to node edge along dir) â”€
+// â"€â"€ Direction-aware clip distance (how far from center to node edge along dir) â"€
 function clipDist(shape, halfW, halfH, ux, uy) {
-  if (shape === 'none') return 0   // no visible body â€” point straight to center
+  if (shape === 'none') return 0   // no visible body â€" point straight to center
   if (shape === 'circle') return halfW
   if (shape === 'none') {
-    // Text is much smaller than the container box â€” use tighter clip dimensions
+    // Text is much smaller than the container box â€" use tighter clip dimensions
     // so arrows terminate near the actual text rather than the invisible bounding box
     const cW = halfW * 0.5   // ~r*0.6: reasonable text half-width
     const cH = halfH * 0.25  // ~r*0.14: approximate single-line text half-height
@@ -119,7 +136,7 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter, 
   return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
 }
 
-// â”€â”€ Label rendering (foreignObject for word-wrap) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Label rendering (foreignObject for word-wrap) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
 function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
@@ -131,7 +148,7 @@ function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
         width: '100%', height: '100%',
         color: textColor || '#fff', fontSize, fontFamily: '-apple-system, sans-serif',
         wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.25,
-        overflow: 'hidden', userSelect: 'none',
+        overflow: 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
         textShadow: '0 1px 3px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)',
       }}>
         {label}
@@ -140,7 +157,7 @@ function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   )
 }
 
-export default function Graph({ projectId, projectName, onSetNavActions }) {
+export default function Graph({ projectId, projectName }) {
   const svgRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
@@ -160,6 +177,10 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const [keepEditId, setKeepEditId] = useState(null)
   const canvasFocused = useRef(true)
   const hideTimerRef = useRef(null)
+  const showTimerRef = useRef(null)
+  const hoveredNodeIdRef = useRef(null)
+  const panSaveTimerRef = useRef(null)
+  const [notePopupId, setNotePopupId] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
   const [pendingEditId, setPendingEditId] = useState(null)
@@ -167,15 +188,27 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const [dragHoverNodeId, setDragHoverNodeId] = useState(null)
   const dragHoverNodeIdRef = useRef(null)
   const [showSlideSidebar, setShowSlideSidebar] = useState(false)
+  const [hideFrameOutlines, setHideFrameOutlines] = useState(false)
+  const prevFrameCountRef = useRef(0)
   const [presentingSlideIdx, setPresentingSlideIdx] = useState(null)
+  const presentingSlideIdxRef = useRef(null)
   const [sidebarWidth, setSidebarWidth] = useState(220)
+  const liveThumbsRef = useRef({}) // nodeId → latest PNG data URL; updated immediately on capture
+  const [fullscreen3dId, setFullscreen3dId] = useState(null)
+
+  useEffect(() => { hoveredNodeIdRef.current = hoveredNodeId }, [hoveredNodeId])
 
   const showToolbar = useCallback((nodeId) => {
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
-    setHoveredNodeId(nodeId)
+    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null }
+    if (showTimerRef.current) { clearTimeout(showTimerRef.current); showTimerRef.current = null }
+    if (hoveredNodeIdRef.current === nodeId) return // already showing — avoid remount/flicker
+    // Debounce switching to a different node so briefly passing over a neighbor
+    // (e.g. on the way to a toolbar's sub-menu) doesn't steal the popup.
+    showTimerRef.current = setTimeout(() => setHoveredNodeId(nodeId), 110)
   }, [])
   const hideToolbar = useCallback(() => {
-    hideTimerRef.current = setTimeout(() => setHoveredNodeId(null), 300)
+    if (showTimerRef.current) { clearTimeout(showTimerRef.current); showTimerRef.current = null }
+    hideTimerRef.current = setTimeout(() => setHoveredNodeId(null), 550)
   }, [])
 
   const loadProjectData   = useGraphStore(s => s.loadProjectData)
@@ -210,6 +243,8 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const addImage        = useGraphStore(s => s.addImage)
   const updateImage     = useGraphStore(s => s.updateImage)
   const deleteImage     = useGraphStore(s => s.deleteImage)
+  const addCustomEmoji  = useGraphStore(s => s.addCustomEmoji)
+  const removeCustomEmoji = useGraphStore(s => s.removeCustomEmoji)
   const addSlide            = useGraphStore(s => s.addSlide)
   const removeSlide         = useGraphStore(s => s.removeSlide)
   const reorderSlides       = useGraphStore(s => s.reorderSlides)
@@ -219,36 +254,33 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const setActiveSlideshowId = useGraphStore(s => s.setActiveSlideshowId)
   const setDrillRoot    = useGraphStore(s => s.setDrillRoot)
   const exitDrill       = useGraphStore(s => s.exitDrill)
+  const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
+  const setViewPan      = useGraphStore(s => s.setViewPan)
+  const setSlideBgColor = useGraphStore(s => s.setSlideBgColor)
   const addView         = useGraphStore(s => s.addView)
   const set3DModel      = useGraphStore(s => s.set3DModel)
   const setModelThumb   = useGraphStore(s => s.setModelThumb)
   const setImageUrl     = useGraphStore(s => s.setImageUrl)
 
-  // Register nav actions with parent App so buttons appear in the top bar
-  useEffect(() => {
-    if (!onSetNavActions) return
-    onSetNavActions({
-      addView: () => addView(),
-      addFrame: () => {
-        if (!svgRef.current) return
-        const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
-        const id = addNode('Frame', null, cx, cy)
-        setNodeViewProp(id, 'shape', 'frame')
-        setNodeViewProp(id, 'fillColor', '#1a2a4a')
-        addSlide(id)
-        setTimeout(() => {
-          const sn = simNodesRef.current.find(n => n.id === id)
-          if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
-          scheduleRender()
-        }, 0)
-      },
-      addNode: () => {
-        setPendingEditId(addNode('New node', selectedRef.current?.type === 'node' ? selectedRef.current.id : null))
-      },
-      addRoot: () => setPendingEditId(addNode('New node', null)),
-    })
-  }, [onSetNavActions, addView, addNode, addSlide, setNodeViewProp]) // eslint-disable-line
+  const addFrameToCenter = useCallback(() => {
+    if (!svgRef.current) return
+    const { views, activeViewId } = useGraphStore.getState()
+    const vp = views.find(v => v.id === activeViewId)?.nodeProps || {}
+    const currentFrameCount = Object.values(vp).filter(p => p.shape === 'frame').length
+    const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
+    const id = addNode('Frame', null, cx, cy)
+    setNodeViewProp(id, 'shape', 'frame')
+    setNodeViewProp(id, 'fillColor', 'none')
+    setNodeViewProp(id, 'strokeColor', null)
+    addSlide(id)
+    if (currentFrameCount === 0) setTimeout(() => setShowSlideSidebar(true), 50)
+    setTimeout(() => {
+      const sn = simNodesRef.current.find(n => n.id === id)
+      if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
+      scheduleRender()
+    }, 0)
+  }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line
 
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
@@ -258,6 +290,19 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const activeSlideshowId = activeView?.activeSlideshowId || slideshows[0]?.id
   const activeSlideshow   = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const slideIds      = activeSlideshow?.slides || []
+  const customEmojis  = activeView?.customEmojis || []
+  const collapsedNodeIds = activeView?.collapsedNodeIds || []
+  const presentingSlideBg = (presentingSlideIdx !== null)
+    ? (activeSlideshow?.slideBgColors?.[slideIds[presentingSlideIdx]] || bgColor)
+    : bgColor
+  const effectiveBg = presentingSlideBg
+
+  // Auto-open slide tray when first frame is created in this view
+  const frameNodeCount = Object.values(viewNodeProps).filter(p => p.shape === 'frame').length
+  useEffect(() => {
+    if (frameNodeCount > 0 && prevFrameCountRef.current === 0) setShowSlideSidebar(true)
+    prevFrameCountRef.current = frameNodeCount
+  }, [frameNodeCount])
 
   // Mutable ref so D3 forces can always read the latest view props without stale closure
   const viewNodePropsRef = useRef(viewNodeProps)
@@ -314,6 +359,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   }, [depthExpand?.nodeId, storeEdges]) // eslint-disable-line
 
   const visibleNodeIds = useMemo(() => {
+    let base
     if (drillRoot) {
       const desc = new Set([drillRoot])
       const q = [drillRoot]
@@ -321,14 +367,29 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         const cur = q.shift()
         storeEdges.forEach(e => { if (e.source === cur && !desc.has(e.target)) { desc.add(e.target); q.push(e.target) } })
       }
-      return desc
+      base = desc
+    } else {
+      base = new Set(storeNodes.filter(n => viewNodeProps[n.id]?.visible !== false).map(n => n.id))
     }
-    return new Set(storeNodes.filter(n => {
-      if (viewNodeProps[n.id]?.visible === false) return false
-      if (expandHops !== null && expandHops[n.id] === undefined) return false
-      return true
-    }).map(n => n.id))
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops])
+    if (collapsedNodeIds.length) {
+      const hidden = new Set()
+      const q = [...collapsedNodeIds]
+      while (q.length) {
+        const cur = q.shift()
+        storeEdges.forEach(e => {
+          if (e.source === cur && !hidden.has(e.target)) { hidden.add(e.target); q.push(e.target) }
+        })
+      }
+      hidden.forEach(id => base.delete(id))
+    }
+    if (expandHops !== null) {
+      ;[...base].forEach(id => { if (expandHops[id] === undefined) base.delete(id) })
+    }
+    return base
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds])
+
+  const nodesWithChildren = useMemo(() => new Set(storeEdges.map(e => e.source)), [storeEdges])
+  const collapsedSet = useMemo(() => new Set(collapsedNodeIds), [collapsedNodeIds])
 
   const scheduleRender = useCallback(() => {
     if (frameRef.current) return
@@ -384,11 +445,11 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         .force('charge', d3.forceManyBody().strength(-300))
         .force('collide', d3.forceCollide(NODE_R + 8))
         .force('bound', boundingForce())
-        .alphaDecay(0.015).on('tick', scheduleRender)
+        .alphaDecay(0.04).velocityDecay(0.5).alphaMin(0.005).on('tick', scheduleRender)
     } else {
       simRef.current.nodes(simNodesRef.current)
         .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(150).strength(0.4))
-        .alpha(0.4).restart()
+        .alpha(0.25).restart()
     }
   }, [storeNodes, storeEdges, scheduleRender]) // eslint-disable-line
 
@@ -399,7 +460,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
       const p = { ...DEFAULT_NODE_PROPS, ...(vp[n.id] || {}) }
       n.fx = p.fx ?? null; n.fy = p.fy ?? null
     })
-    if (simRef.current) simRef.current.alpha(0.3).restart()
+    if (simRef.current) simRef.current.alpha(0.2).restart()
   }, [activeViewId])
 
   const getSiblings = useCallback((nodeId) => {
@@ -427,7 +488,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     setPendingEditId(newId)
   }, [getSiblings, addNode])
 
-  // Zoom â€” pan on background only (not on nodes)
+  // Zoom â€" pan on background only (not on nodes)
   useEffect(() => {
     if (!svgRef.current) return
     const svg = d3.select(svgRef.current)
@@ -439,11 +500,26 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         !e.target.closest?.('[data-img]') &&
         !e.target.closest?.('[data-3d-canvas]')
       ))
-      .on('zoom', e => { zoomTransformRef.current = e.transform; scheduleRender() })
+      .on('zoom', e => {
+        zoomTransformRef.current = e.transform
+        scheduleRender()
+        if (panSaveTimerRef.current) clearTimeout(panSaveTimerRef.current)
+        panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
+      })
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
     return () => svg.on('.zoom', null)
   }, [scheduleRender, loading])
+
+  // Restore pan/zoom when switching views
+  useEffect(() => {
+    const pan = views.find(v => v.id === activeViewId)?.pan
+    if (!pan || !svgRef.current || !zoomBehaviorRef.current) return
+    const t = d3.zoomIdentity.translate(pan.x, pan.y).scale(pan.k)
+    d3.select(svgRef.current).call(zoomBehaviorRef.current.transform, t)
+    zoomTransformRef.current = t
+    scheduleRender()
+  }, [activeViewId]) // eslint-disable-line
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -451,6 +527,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') {
+        if (fullscreen3dId) { setFullscreen3dId(null); return }
         if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
         setSelected(null); setSelectedImageId(null); setConfirmDelete(null); return
       }
@@ -464,10 +541,17 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         return
       }
 
-      // Enter → create sister node (double-click to edit label)
-      if (e.key === 'Enter' && selected?.type === 'node') {
+      // Enter → create child if root node, sister if non-root
+      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && selected?.type === 'node') {
         e.preventDefault()
-        handleCreateSister(selected.id)
+        const isRoot = !storeEdges.some(se => se.target === selected.id)
+        if (isRoot) {
+          const newId = addNode('New node', selected.id)
+          setSelected({ id: newId, type: 'node' })
+          setPendingEditId(newId)
+        } else {
+          handleCreateSister(selected.id)
+        }
         return
       }
 
@@ -601,7 +685,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           const nr = NODE_R * (nvp.scale || 1)
           const nLabel = n.label || ''
           const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
-          const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize)
+          const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize, nvp.labelWidth)
           if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) {
             found = n.id; break
           }
@@ -633,7 +717,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
             const nvp = viewNodePropsRef.current[n.id] || {}
             if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
             const nr = NODE_R * (nvp.scale || 1)
-            const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', Math.max(9, Math.round(12 * (nvp.scale || 1))))
+            const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
             const sp = startPositions.find(p => p.node.id === nodeId)
             const dropX = sp ? sp.ox + ddx : sx, dropY = sp ? sp.oy + ddy : sy
             if (Math.abs((n.x || 0) - dropX) < halfW && Math.abs((n.y || 0) - dropY) < halfH) {
@@ -731,6 +815,20 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, setNodeViewProp])
 
+  const handleLabelWidthMouseDown = useCallback((e, nodeId) => {
+    e.stopPropagation(); e.preventDefault()
+    const simNode = simNodesRef.current.find(n => n.id === nodeId)
+    if (!simNode) return
+    const onMove = me => {
+      const [sx] = clientToSim(me.clientX, me.clientY)
+      const newHalfW = Math.max(36, Math.min(500, Math.abs(sx - (simNode.x || 0))))
+      setNodeViewProp(nodeId, 'labelWidth', newHalfW)
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
   const handleFrameResizeMouseDown = useCallback((e, nodeId) => {
     e.stopPropagation(); e.preventDefault()
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
@@ -752,6 +850,215 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     if (s) { s.fx = null; s.fy = null }
     simRef.current?.alpha(0.3).restart()
   }, [releaseAnchor])
+
+  const handleEmojiDragStart = useCallback((e, nodeId, emojiId) => {
+    e.stopPropagation(); e.preventDefault()
+    const node = simNodesRef.current.find(n => n.id === nodeId)
+    if (!node) return
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const angle = Math.atan2(sy - (node.y || 0), sx - (node.x || 0))
+      const { views: vs, activeViewId: av } = useGraphStore.getState()
+      const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+      setNodeViewProp(nodeId, 'nodeEmojis', (vp.nodeEmojis || []).map(em => em.id === emojiId ? { ...em, angle } : em))
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
+  const handleRemoveEmoji = useCallback((nodeId, emojiId) => {
+    const { views: vs, activeViewId: av } = useGraphStore.getState()
+    const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+    setNodeViewProp(nodeId, 'nodeEmojis', (vp.nodeEmojis || []).filter(em => em.id !== emojiId))
+  }, [setNodeViewProp])
+
+  const handleEmojiResizeStart = useCallback((e, nodeId, emojiId, bx, by) => {
+    e.stopPropagation(); e.preventDefault()
+    const { views: vs0, activeViewId: av0 } = useGraphStore.getState()
+    const vp0 = vs0.find(v => v.id === av0)?.nodeProps?.[nodeId] || {}
+    const startScale = (vp0.nodeEmojis || []).find(em => em.id === emojiId)?.scale || 1
+    const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
+    const startDist = Math.max(8, Math.hypot(sx0 - bx, sy0 - by))
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const dist = Math.hypot(sx - bx, sy - by)
+      const scale = Math.min(4, Math.max(0.4, startScale * (dist / startDist)))
+      const { views: vs, activeViewId: av } = useGraphStore.getState()
+      const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+      setNodeViewProp(nodeId, 'nodeEmojis', (vp.nodeEmojis || []).map(em => em.id === emojiId ? { ...em, scale } : em))
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
+  // ── In-node images (above/below/beside/perimeter) ──────────────
+  const handleImageDragStart = useCallback((e, nodeId, imageId) => {
+    e.stopPropagation(); e.preventDefault()
+    const node = simNodesRef.current.find(n => n.id === nodeId)
+    if (!node) return
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const angle = Math.atan2(sy - (node.y || 0), sx - (node.x || 0))
+      const { views: vs, activeViewId: av } = useGraphStore.getState()
+      const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+      setNodeViewProp(nodeId, 'nodeImages', (vp.nodeImages || []).map(im => im.id === imageId ? { ...im, angle } : im))
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
+  const handleImageResizeStart = useCallback((e, nodeId, imageId, bx, by) => {
+    e.stopPropagation(); e.preventDefault()
+    const { views: vs0, activeViewId: av0 } = useGraphStore.getState()
+    const vp0 = vs0.find(v => v.id === av0)?.nodeProps?.[nodeId] || {}
+    const startScale = (vp0.nodeImages || []).find(im => im.id === imageId)?.scale || 1
+    const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
+    const startDist = Math.max(8, Math.hypot(sx0 - bx, sy0 - by))
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const dist = Math.hypot(sx - bx, sy - by)
+      const scale = Math.min(4, Math.max(0.25, startScale * (dist / startDist)))
+      const { views: vs, activeViewId: av } = useGraphStore.getState()
+      const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+      setNodeViewProp(nodeId, 'nodeImages', (vp.nodeImages || []).map(im => im.id === imageId ? { ...im, scale } : im))
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
+  const handleImageCropDragStart = useCallback((e, nodeId, imageId, edge, imgW, imgH) => {
+    e.stopPropagation(); e.preventDefault()
+    const { views: vs0, activeViewId: av0 } = useGraphStore.getState()
+    const vp0 = vs0.find(v => v.id === av0)?.nodeProps?.[nodeId] || {}
+    const img0 = (vp0.nodeImages || []).find(i => i.id === imageId)
+    const startCrop = img0?.crop || { x: 0, y: 0, w: 1, h: 1 }
+    const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const ddx = (sx - sx0) / imgW, ddy = (sy - sy0) / imgH
+      let { x, y, w, h } = startCrop
+      if (edge.includes('l')) { const nx = Math.max(0, Math.min(x + w - 0.05, x + ddx)); w = w - (nx - x); x = nx }
+      if (edge.includes('r')) { w = Math.max(0.05, Math.min(1 - x, w + ddx)) }
+      if (edge.includes('t')) { const ny = Math.max(0, Math.min(y + h - 0.05, y + ddy)); h = h - (ny - y); y = ny }
+      if (edge.includes('b')) { h = Math.max(0.05, Math.min(1 - y, h + ddy)) }
+      const { views: vs, activeViewId: av } = useGraphStore.getState()
+      const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+      setNodeViewProp(nodeId, 'nodeImages', (vp.nodeImages || []).map(i => i.id === imageId ? { ...i, crop: { x, y, w, h } } : i))
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
+  const handleRemoveNodeImage = useCallback((nodeId, imageId) => {
+    const { views: vs, activeViewId: av } = useGraphStore.getState()
+    const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+    setNodeViewProp(nodeId, 'nodeImages', (vp.nodeImages || []).filter(im => im.id !== imageId))
+  }, [setNodeViewProp])
+
+  const handleSetNodeImagePosition = useCallback((nodeId, imageId, position) => {
+    const { views: vs, activeViewId: av } = useGraphStore.getState()
+    const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+    setNodeViewProp(nodeId, 'nodeImages', (vp.nodeImages || []).map(im => im.id === imageId ? { ...im, position } : im))
+  }, [setNodeViewProp])
+
+  // ── Collapse/expand — implode descendants toward the parent, explode back to their
+  // remembered spots on expand. Pins fx/fy during the tween so D3 doesn't fight it.
+  const collapseOriginsRef = useRef({})
+
+  const animateNodesTo = useCallback((nodeIds, targets, duration, onDone) => {
+    const startPositions = {}
+    nodeIds.forEach(id => {
+      const sn = simNodesRef.current.find(n => n.id === id)
+      if (sn) startPositions[id] = { x: sn.x || 0, y: sn.y || 0 }
+    })
+    const t0 = performance.now()
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / duration)
+      const ease = 1 - Math.pow(1 - t, 3)
+      nodeIds.forEach(id => {
+        const sn = simNodesRef.current.find(n => n.id === id)
+        const sp = startPositions[id], tp = targets[id]
+        if (!sn || !sp || !tp) return
+        const nx = sp.x + (tp.x - sp.x) * ease
+        const ny = sp.y + (tp.y - sp.y) * ease
+        sn.x = nx; sn.y = ny; sn.fx = nx; sn.fy = ny
+      })
+      scheduleRender()
+      if (t < 1) requestAnimationFrame(step)
+      else onDone?.()
+    }
+    requestAnimationFrame(step)
+  }, [scheduleRender])
+
+  const getDescendantIds = useCallback((nodeId) => {
+    const desc = [], seen = new Set(), q = [nodeId]
+    while (q.length) {
+      const cur = q.shift()
+      storeEdges.forEach(e => {
+        if (e.source === cur && !seen.has(e.target)) { seen.add(e.target); desc.push(e.target); q.push(e.target) }
+      })
+    }
+    return desc
+  }, [storeEdges])
+
+  const handleToggleCollapseAnimated = useCallback((nodeId) => {
+    const parentNode = simNodesRef.current.find(n => n.id === nodeId)
+    const descIds = getDescendantIds(nodeId)
+    if (!parentNode || !descIds.length) { toggleCollapseNode(nodeId); return }
+
+    const { views: vs, activeViewId: av } = useGraphStore.getState()
+    const wasCollapsed = (vs.find(v => v.id === av)?.collapsedNodeIds || []).includes(nodeId)
+
+    if (!wasCollapsed) {
+      // Implode: animate descendants to the parent's position, THEN hide them.
+      // Remember each one's offset RELATIVE to the parent (not absolute) so that if the
+      // parent gets dragged elsewhere while collapsed, expand still opens them around
+      // wherever the parent ended up, not their old absolute spot.
+      const parentX0 = parentNode.x || 0, parentY0 = parentNode.y || 0
+      descIds.forEach(id => {
+        const sn = simNodesRef.current.find(n => n.id === id)
+        if (sn) collapseOriginsRef.current[id] = { dx: (sn.x || 0) - parentX0, dy: (sn.y || 0) - parentY0 }
+      })
+      const target = { x: parentX0, y: parentY0 }
+      const targets = {}
+      descIds.forEach(id => { targets[id] = target })
+      animateNodesTo(descIds, targets, 320, () => {
+        descIds.forEach(id => {
+          const sn = simNodesRef.current.find(n => n.id === id)
+          if (sn) { sn.fx = null; sn.fy = null }
+        })
+        toggleCollapseNode(nodeId)
+      })
+    } else {
+      // Explode: reveal at the parent's CURRENT position, then animate out to each
+      // descendant's remembered offset re-applied around that current position.
+      const px = parentNode.x || 0, py = parentNode.y || 0
+      descIds.forEach(id => {
+        const sn = simNodesRef.current.find(n => n.id === id)
+        if (sn) { sn.x = px; sn.y = py; sn.fx = px; sn.fy = py }
+      })
+      toggleCollapseNode(nodeId)
+      const targets = {}
+      descIds.forEach(id => {
+        const off = collapseOriginsRef.current[id]
+        targets[id] = off ? { x: px + off.dx, y: py + off.dy } : { x: px, y: py }
+      })
+      requestAnimationFrame(() => {
+        animateNodesTo(descIds, targets, 320, () => {
+          descIds.forEach(id => {
+            const sn = simNodesRef.current.find(n => n.id === id)
+            if (sn) { sn.fx = null; sn.fy = null }
+          })
+          simRef.current?.alpha(0.3).restart()
+        })
+      })
+    }
+  }, [getDescendantIds, animateNodesTo, toggleCollapseNode])
 
   const handleReleaseAll = useCallback(() => {
     releaseAllAnchors()
@@ -796,7 +1103,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     scheduleRender()
   }, [scheduleRender])
 
-  // â”€â”€ Paste images â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Paste images â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     const onPaste = e => {
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
@@ -825,7 +1132,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     return () => document.removeEventListener('paste', onPaste)
   }, [addImage])
 
-  // â”€â”€ Image interaction (drag / resize / rotate) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag') => {
     e.preventDefault()
     canvasFocused.current = true
@@ -900,8 +1207,8 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     const sr = NODE_R * (svp.scale||1), tr = NODE_R * (tvp.scale||1)
     const sFontSize = Math.max(9, Math.round(12 * (svp.scale||1)))
     const tFontSize = Math.max(9, Math.round(12 * (tvp.scale||1)))
-    const { halfW: swW, halfH: swH } = shapeDims(svp.shape || 'circle', sr, sLabel, sFontSize)
-    const { halfW: twW, halfH: twH } = shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize)
+    const { halfW: swW, halfH: swH } = shapeDims(svp.shape || 'circle', sr, sLabel, sFontSize, svp.labelWidth)
+    const { halfW: twW, halfH: twH } = shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize, tvp.labelWidth)
     const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
     const ux = dx/dist, uy = dy/dist
     const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
@@ -922,20 +1229,23 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const slideSimNodes = slideIds
     .map(id => frameSimNodes.find(n => n.id === id))
     .filter(Boolean)
+  presentingSlideIdxRef.current = presentingSlideIdx
   const isPresenting = presentingSlideIdx !== null
 
   const navigateSlide = (delta) => {
     if (!slideSimNodes.length) return
     const next = ((presentingSlideIdx ?? 0) + delta + slideSimNodes.length) % slideSimNodes.length
     setPresentingSlideIdx(next)
+    simRef.current?.stop()
     zoomToFrame(slideSimNodes[next])
+    setTimeout(() => simRef.current?.restart(), 700)
   }
 
   const exitPresentation = () => { setPresentingSlideIdx(null) }
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* Outline sidebar â€” hidden while presenting */}
+      {/* Outline sidebar â€" hidden while presenting */}
       {!isPresenting && (<>
       <div onMouseDown={() => { canvasFocused.current = false }}
         style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -944,6 +1254,47 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           onSelectNode={id => setSelected({ id, type: 'node' })}
           containerNodeIds={new Set(storeNodes.filter(n => (viewNodeProps[n.id]?.shape) === 'frame').map(n => n.id))}
         />
+        <ViewManager />
+        {/* Tool strip — consolidated canvas actions */}
+        <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'8px 10px', display:'flex', flexDirection:'column', gap:6 }}>
+          {drillRoot && (
+            <button style={sideToolBtnStyle} onClick={exitDrill}>→ Exit Drill</button>
+          )}
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+            <button style={sideToolBtnStyle} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
+            <button style={sideToolBtnStyle} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
+            {/* BG color */}
+            <div style={{ position:'relative' }}>
+              <button style={{ ...sideToolBtnStyle, display:'flex', alignItems:'center', gap:4 }}
+                onClick={e => { e.stopPropagation(); setShowBgPicker(v => !v) }} title="Canvas background color">
+                <span style={{ width:10, height:10, borderRadius:2, background:bgColor, border:'1px solid #5b6af0', display:'inline-block', flexShrink:0 }} />
+                BG
+              </button>
+              {showBgPicker && (
+                <div style={{ position:'absolute', bottom:'100%', left:0, marginBottom:6, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:8, display:'flex', flexDirection:'column', gap:6, zIndex:30, boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}
+                  onClick={e => e.stopPropagation()}>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:136 }}>
+                    {BG_COLORS.map(c => (
+                      <div key={c} onClick={() => { setViewBgColor(c); setShowBgPicker(false) }} style={{ width:22, height:22, borderRadius:4, background:c, cursor:'pointer', border: bgColor===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
+                    ))}
+                  </div>
+                  <div style={{ borderTop:'1px solid #2d3a6a', paddingTop:6, display:'flex', flexWrap:'wrap', gap:4, width:160 }}>
+                    {COLOR_PALETTE.map(c => (
+                      <div key={c} onClick={() => { setViewBgColor(c); setShowBgPicker(false) }} style={{ width:22, height:22, borderRadius:4, background:c, cursor:'pointer', border: bgColor===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+            <button style={sideToolBtnStyle} onClick={() => setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))}>+ Node</button>
+            <button style={sideToolBtnStyle} onClick={addFrameToCenter}>⊞ Frame</button>
+            <button style={{ ...sideToolBtnStyle, color: hideFrameOutlines ? '#f6ad55' : undefined }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">{hideFrameOutlines ? '⊞ Show' : '⊞ Hide'}</button>
+            <button style={sideToolBtnStyle} onClick={() => setPendingEditId(addNode('New node', null))}>+ Root</button>
+            <button style={sideToolBtnStyle} onClick={() => addView()}>+ View</button>
+          </div>
+        </div>
       </div>
       {/* Sidebar resize handle */}
       <div style={{ width: 4, flexShrink: 0, cursor: 'col-resize', background: '#1e1e2e', transition: 'background 0.1s' }}
@@ -960,8 +1311,20 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
       </>)}
       <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
-          style={{ width: '100%', height: '100%', background: bgColor, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
-          onClick={() => { setSelected(null); setSelectedImageId(null); setShowBgPicker(false) }}
+          style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
+          onClick={() => { setSelected(null); setSelectedImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
+          onDoubleClick={e => {
+            if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
+            const rect = svgRef.current.getBoundingClientRect()
+            const [sx, sy] = zoomTransformRef.current.invert([e.clientX - rect.left, e.clientY - rect.top])
+            const id = addNode('New node', null, sx, sy)
+            setPendingEditId(id)
+            setTimeout(() => {
+              const sn = simNodesRef.current.find(n => n.id === id)
+              if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy }
+              scheduleRender()
+            }, 0)
+          }}
           onMouseDown={e => { if (!e.target.closest?.('[data-node]')) setIsPanning(true) }}
           onMouseUp={() => setIsPanning(false)}
           onMouseLeave={() => setIsPanning(false)}
@@ -992,10 +1355,11 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 onDelete={id => setConfirmDelete(id)}
                 onLabelChange={updateLabel}
                 onToggleSlide={id => slideIds.includes(id) ? removeSlide(id) : addSlide(id)}
+                hideOutline={hideFrameOutlines}
               />
             ))}
 
-            {/* 2. Edges â€” node fill covers the tips cleanly */}
+            {/* 2. Edges â€" node fill covers the tips cleanly */}
             {edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel }) => (
               <g key={id} onClick={ev => { ev.stopPropagation(); setSelected({ id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
                 <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke="transparent" strokeWidth={12} />
@@ -1028,7 +1392,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
             {/* 4. Regular nodes on top */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame').map(n => (
               <NodeShape key={n.id} node={n}
-                modelThumb={storeNodes.find(s => s.id === n.id)?.modelThumb}
+                modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
                 viewProps={getVP(n.id)}
                 isSelected={selected?.id === n.id && selected?.type === 'node'}
@@ -1041,10 +1405,23 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 onMouseDown={handleNodeMouseDown}
                 onConnectorMouseDown={handleConnectorMouseDown}
                 onScaleMouseDown={handleScaleMouseDown}
+                onSetLabelWidth={handleLabelWidthMouseDown}
+                onResetLabelWidth={id => setNodeViewProp(id, 'labelWidth', null)}
                 onDelete={id => setConfirmDelete(id)}
                 onLabelChange={updateLabel}
                 onTab={handleNodeTab}
                 onCreateSister={handleCreateSister}
+                onShowNotePopup={id => setNotePopupId(prev => prev === id ? null : id)}
+                onEmojiDragStart={handleEmojiDragStart}
+                onRemoveEmoji={handleRemoveEmoji}
+                onEmojiResizeStart={handleEmojiResizeStart}
+                onImageDragStart={handleImageDragStart}
+                onImageResizeStart={handleImageResizeStart}
+                onImageCropDragStart={handleImageCropDragStart}
+                onRemoveNodeImage={handleRemoveNodeImage}
+                hasChildren={nodesWithChildren.has(n.id)}
+                isCollapsed={collapsedSet.has(n.id)}
+                onToggleCollapse={() => handleToggleCollapseAnimated(n.id)}
                 onMouseEnter={() => showToolbar(n.id)}
                 onMouseLeave={hideToolbar}
               />
@@ -1053,7 +1430,36 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           </g>
         </svg>
 
-        {/* 3D viewer — absolute div outside SVG, no event interference */}
+        {/* Always-on 3D viewers (rotate mode 'always', not currently selected) */}
+        {simNodesRef.current.filter(n => {
+          if (!visibleNodeIds.has(n.id)) return false
+          if (selected?.type === 'node' && selected.id === n.id) return false
+          const vp = getVP(n.id)
+          return vp.shape === '3d' && vp.model3dRotate === 'always'
+        }).map(n => {
+          const vp = getVP(n.id)
+          const r = NODE_R * (vp.scale || 1)
+          const { halfW: hw, halfH: hh } = shapeDims('3d', r)
+          const sn = storeNodes.find(s => s.id === n.id)
+          const sx = T.x + (n.x || 0) * T.k, sy = T.y + (n.y || 0) * T.k
+          const sw = hw * 2 * T.k, sh = hh * 2 * T.k
+          return (
+            <div key={`always-${n.id}`}
+              style={{ position:'absolute', left:0, top:0,
+                transform: `translate(${sx - sw/2}px, ${sy - sh/2}px)`,
+                width: sw, height: sh, borderRadius: 12, overflow:'hidden',
+                pointerEvents:'none', zIndex: 4 }}>
+              <Node3DViewer
+                modelData={sn?.modelData} modelType={sn?.modelType}
+                camState={vp.model3dCam}
+                autoRotate={true} autoRotateSpeed={vp.model3dRotateSpeed ?? 2}
+                readOnly={true}
+              />
+            </div>
+          )
+        })}
+
+        {/* 3D viewer — active (selected node) */}
         {selected?.type === 'node' && (() => {
           const n3d = simNodesRef.current.find(nd => nd.id === selected.id)
           if (!n3d || !visibleNodeIds.has(selected.id)) return null
@@ -1066,14 +1472,16 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           const screenY = T.y + (n3d.y || 0) * T.k
           const screenW = hw3d * 2 * T.k
           const screenH = hh3d * 2 * T.k
+          const rotateMode = vp3d.model3dRotate || 'never'
+          const rotateSpeed = vp3d.model3dRotateSpeed ?? 2
+          const isFs = fullscreen3dId === selected.id
+
           const handleImport3d = async file => {
             const nodeId = selected.id
             const ext = file.name.split('.').pop().toLowerCase()
-            // Optimistically load in-memory so the viewer shows immediately
             const reader = new FileReader()
             reader.onload = ev => set3DModel(nodeId, ev.target.result.split(',')[1], ext)
             reader.readAsDataURL(file)
-            // Upload to storage in the background; replace in-memory blob with persistent URL
             try {
               const { url, type } = await uploadModel(file, projectId, nodeId)
               set3DModel(nodeId, url, type)
@@ -1081,45 +1489,68 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
               console.warn('Model storage upload failed, keeping in-memory:', e)
             }
           }
+
+          const viewerStyle = isFs
+            ? { position:'fixed', inset:0, zIndex:200, borderRadius:0 }
+            : { position:'absolute', left:0, top:0,
+                transform: `translate(${screenX - screenW/2}px, ${screenY - screenH/2}px)`,
+                width: screenW, height: screenH, borderRadius:12, zIndex:5 }
+
           return (
             <div key={selected.id}
               onMouseDown={e => { e.stopPropagation(); if (e.button === 1) e.preventDefault(); canvasFocused.current = true }}
-              style={{ position:'absolute',
-                left: screenX - screenW / 2, top: screenY - screenH / 2,
-                width: screenW, height: screenH,
-                borderRadius: 12, overflow: 'hidden',
-                zIndex: 5 }}>
+              onKeyDown={e => { if (e.key === 'Escape') { if (isFs) { setFullscreen3dId(null) } else { setSelected(null) }; e.stopPropagation() } }}
+              tabIndex={-1}
+              style={{ overflow:'hidden', outline:'none', ...viewerStyle }}>
               <Node3DViewer
                 modelData={storeNode3d?.modelData}
                 modelType={storeNode3d?.modelType}
                 camState={vp3d.model3dCam}
                 onCamEnd={cam => setNodeViewProp(selected.id, 'model3dCam', cam)}
                 onThumbnailCapture={thumb => {
+                  liveThumbsRef.current[selected.id] = thumb
                   uploadThumbnail(thumb, projectId, selected.id)
                     .then(url => { if (url) setModelThumb(selected.id, url) })
                     .catch(() => {})
                 }}
                 onImport={handleImport3d}
+                autoRotate={rotateMode !== 'never'}
+                autoRotateSpeed={rotateSpeed}
+                rotateMode={rotateMode}
+                onRotateModeChange={mode => setNodeViewProp(selected.id, 'model3dRotate', mode)}
+                onRotateSpeedChange={spd => setNodeViewProp(selected.id, 'model3dRotateSpeed', spd)}
+                isFullscreen={isFs}
+                onToggleFullscreen={() => setFullscreen3dId(isFs ? null : selected.id)}
               />
             </div>
           )
         })()}
 
-        {/* Node toolbar â€” shows on hover */}
+        {/* Node toolbar â€" shows on hover */}
         {(() => {
           const hn = hoveredNodeId && simNodesRef.current.find(n => n.id === hoveredNodeId)
           const hs = hn && storeNodes.find(n => n.id === hn.id)
           if (!hn || !hs || !visibleNodeIds.has(hn.id)) return null
           const vp = getVP(hn.id)
+          const { halfH: hnHalfH } = shapeDims(vp.shape||'circle', NODE_R*(vp.scale||1), hs.label, Math.max(9, Math.round(12*(vp.scale||1))), vp.labelWidth)
+          // Extra clearance so the popup doesn't sit on top of the collapse/expand chevron
+          const chevronClearance = nodesWithChildren.has(hn.id) ? 26 * T.k : 0
+          const toolbarY = vp.shape === '3d'
+            ? T.y + (hn.y||0) * T.k - hnHalfH * T.k - 14
+            : T.y + (hn.y||0) * T.k + hnHalfH * T.k + 14 + chevronClearance
           return (
             <NodeToolbar
               x={T.x + (hn.x||0) * T.k}
-              y={T.y + (hn.y||0) * T.k + shapeDims(vp.shape||'circle', NODE_R*(vp.scale||1), hs.label, Math.max(9, Math.round(12*(vp.scale||1)))).halfH * T.k + 14}
+              y={toolbarY}
               viewProps={vp}
               notes={hs.notes || ''}
               onSetFill={c => setNodeViewProp(hn.id, 'fillColor', c)}
               onSetTextColor={c => setNodeViewProp(hn.id, 'textColor', c)}
-              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent') }}
+              onSetStrokeColor={c => setNodeViewProp(hn.id, 'strokeColor', c)}
+              onSetStrokeWidth={w => setNodeViewProp(hn.id, 'strokeWidth', w)}
+              onSetBorderBlur={v => setNodeViewProp(hn.id, 'borderBlur', v)}
+              onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
+              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDrill={() => { setDrillRoot(hn.id); setHoveredNodeId(null); setTimeout(zoomExtents, 50) }}
               onHide={() => { setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
               onRelease={() => handleRelease(hn.id)}
@@ -1128,10 +1559,62 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
               isAnchored={hn.fx != null}
               imageUrl={hs.imageUrl || ''}
               onSetImageUrl={url => setImageUrl(hn.id, url)}
+              onRadiate={what => {
+                const childIds = storeEdges.filter(e => e.source === hn.id).map(e => e.target)
+                childIds.forEach(cid => {
+                  if (what === 'color' || what === 'both') setNodeViewProp(cid, 'fillColor', vp.fillColor)
+                  if (what === 'shape' || what === 'both') setNodeViewProp(cid, 'shape', vp.shape)
+                })
+              }}
+              onSetMotion={m => setNodeViewProp(hn.id, 'nodeMotion', m)}
+              onSetColorCycle={spd => setNodeViewProp(hn.id, 'nodeColorCycle', spd)}
+              onAddEmoji={(value, type = 'unicode') => {
+                const cur = (views.find(v => v.id === activeViewId)?.nodeProps?.[hn.id]?.nodeEmojis) || []
+                const { halfW: nhW, halfH: nhH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), hs.label, Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
+                const cornerAngle = Math.atan2(-nhH, nhW) // true top-right corner for this node's actual dimensions
+                setNodeViewProp(hn.id, 'nodeEmojis', [...cur, { id: crypto.randomUUID(), emoji: value, type, angle: cornerAngle }])
+              }}
+              onRemoveEmojiById={eid => handleRemoveEmoji(hn.id, eid)}
+              customEmojis={customEmojis}
+              onAddCustomEmoji={(name, src) => addCustomEmoji(name, src)}
+              onRemoveCustomEmoji={eid => removeCustomEmoji(eid)}
+              onAddNodeImage={(src, w0, h0, position) => {
+                const cur = (views.find(v => v.id === activeViewId)?.nodeProps?.[hn.id]?.nodeImages) || []
+                const { halfW: nhW, halfH: nhH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), hs.label, Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
+                const cornerAngle = Math.atan2(-nhH, nhW)
+                setNodeViewProp(hn.id, 'nodeImages', [...cur, { id: crypto.randomUUID(), src, w0, h0, scale: 1, position, angle: cornerAngle }])
+              }}
+              onSetNodeImagePosition={(imId, position) => handleSetNodeImagePosition(hn.id, imId, position)}
+              onRemoveNodeImageById={imId => handleRemoveNodeImage(hn.id, imId)}
               onMouseEnter={() => showToolbar(hn.id)}
               onMouseLeave={hideToolbar}
               onWheel={e => svgRef.current?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode, clientX: e.clientX, clientY: e.clientY, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }))}
             />
+          )
+        })()}
+
+        {/* Note popup */}
+        {notePopupId && (() => {
+          const nn = simNodesRef.current.find(n => n.id === notePopupId)
+          const ns = storeNodes.find(n => n.id === notePopupId)
+          if (!nn || !ns || !ns.notes) return null
+          const vp = getVP(notePopupId)
+          const sc = vp.scale || 1
+          const { halfH: nh } = shapeDims(vp.shape || 'circle', NODE_R * sc, ns.label, Math.max(9, Math.round(12 * sc)), vp.labelWidth)
+          const bOffset = (nh + 40) * T.k
+          const screenX = T.x + (nn.x || 0) * T.k
+          const screenY = T.y + (nn.y || 0) * T.k - bOffset
+          return (
+            <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+              style={{ position:'absolute', left:screenX, top:screenY, transform:'translateX(-50%)',
+                background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'8px 12px',
+                maxWidth:260, minWidth:120, zIndex:30, boxShadow:'0 4px 16px rgba(0,0,0,0.7)' }}>
+              <pre style={{ fontSize:'0.8rem', color:'#c7d0f8', fontFamily:'inherit', whiteSpace:'pre-wrap', margin:0, lineHeight:1.5 }}>
+                {ns.notes}
+              </pre>
+              <button onClick={() => setNotePopupId(null)}
+                style={{ position:'absolute', top:4, right:6, background:'none', border:'none', color:'#556', cursor:'pointer', fontSize:14 }}>x</button>
+            </div>
           )
         })()}
 
@@ -1156,19 +1639,6 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 <div style={{ flex: 1 }} />
                 <button onClick={() => { setConfirmDeleteImage(selectedImageId) }}
                   style={{ ...tlBtn, color: '#f87171' }}>✕ Delete</button>
-              </div>
-              {/* BG color row */}
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', width: 168 }}>
-                <div title="No background" onClick={() => updateImage(selectedImageId, { bgColor: null })}
-                  style={{ width: 20, height: 20, borderRadius: 3, background: 'transparent', cursor: 'pointer',
-                    border: !img.bgColor ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.2)',
-                    backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
-                    backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px' }} />
-                {FILL_COLORS.map(c => (
-                  <div key={c} onClick={() => updateImage(selectedImageId, { bgColor: c })}
-                    style={{ width: 20, height: 20, borderRadius: 3, background: c, cursor: 'pointer',
-                      border: img.bgColor === c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
-                ))}
               </div>
             </div>
           )
@@ -1252,67 +1722,14 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           )
         })()}
 
-        {/* Canvas buttons */}
-        {!isPresenting && <div style={canvasBtnsStyle}>
-          {drillRoot && <button style={canvasBtnStyle} onClick={exitDrill}>→ Exit Drill</button>}
-          <button style={canvasBtnStyle} onClick={handleReleaseAll}>⊙ Free All</button>
-          <button style={canvasBtnStyle} onClick={zoomExtents}>⊡ Fit</button>
-          <button style={canvasBtnStyle} onClick={() => setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))}>+ Node</button>
-          <button style={canvasBtnStyle} onClick={() => {
-            const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
-            const id = addNode('Frame', null, cx, cy)
-            setNodeViewProp(id, 'shape', 'frame')
-            setNodeViewProp(id, 'fillColor', '#1a2a4a')
-            addSlide(id)
-            setTimeout(() => {
-              const sn = simNodesRef.current.find(n => n.id === id)
-              if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
-              scheduleRender()
-            }, 0)
-          }}>⊞ Frame</button>
-          {/* BG color picker */}
-          <div style={{ position: 'relative' }}>
-            <button style={{ ...canvasBtnStyle, paddingLeft: 6, display: 'flex', alignItems: 'center', gap: 5 }}
-              onClick={e => { e.stopPropagation(); setShowBgPicker(v => !v) }} title="Background color">
-              <span style={{ width: 12, height: 12, borderRadius: 3, background: bgColor, border: '1.5px solid #5b6af0', display: 'inline-block', flexShrink: 0 }} />
-              BG
-            </button>
-            {showBgPicker && (
-              <div style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: 6, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 8, display: 'flex', flexDirection:'column', gap: 6, zIndex: 30, boxShadow: '0 4px 20px rgba(0,0,0,0.6)' }}
-                onClick={e => e.stopPropagation()}>
-                <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:136 }}>
-                  {BG_COLORS.map(c => (
-                    <div key={c} onClick={() => { setViewBgColor(c); setShowBgPicker(false) }} style={{
-                      width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer',
-                      border: bgColor === c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)',
-                    }} />
-                  ))}
-                </div>
-                <div style={{ borderTop:'1px solid #2d3a6a', paddingTop:6, display:'flex', flexWrap:'wrap', gap:4, width:136 }}>
-                  {FILL_COLORS.map(c => (
-                    <div key={c} onClick={() => { setViewBgColor(c); setShowBgPicker(false) }} style={{
-                      width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer',
-                      border: bgColor === c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)',
-                    }} />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>}
 
-        {/* Views floating panel â€” bottom left */}
-        {!isPresenting && <div style={{ position:'absolute', bottom:'1.25rem', left:'1rem', zIndex:20 }}>
-          <ViewManager />
-        </div>}
-
-        {/* Build timestamp â€” bottom right */}
+        {/* Build timestamp â€" bottom right */}
         {!isPresenting && <div style={{ position:'absolute', bottom:'0.5rem', right:'0.75rem', zIndex:20, fontSize:'0.62rem', color:'#333', fontFamily:'monospace', userSelect:'none' }}>
           {new Date(__BUILD_TIME__).toISOString().slice(0,16).replace('T',' ')}
         </div>}
 
 
-        {/* Frame color picker â€” shows when a frame is selected */}
+        {/* Frame color picker â€" shows when a frame is selected */}
         {!isPresenting && selected?.type === 'node' && (() => {
           const sn = simNodesRef.current.find(n => n.id === selected.id)
           if (!sn) return null
@@ -1333,8 +1750,13 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 8px',
                 display:'flex', flexDirection:'column', gap:4, zIndex:25, boxShadow:'0 4px 16px rgba(0,0,0,0.6)' }}>
               <div style={{ fontSize:'0.63rem', color:'#556', letterSpacing:'0.06em' }}>FILL</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:168 }}>
-                {FILL_COLORS.map(c => (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:188 }}>
+                <div title="No fill" onClick={() => setNodeViewProp(selected.id, 'fillColor', 'none')}
+                  style={{ width:20, height:20, borderRadius:3, cursor:'pointer',
+                    backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
+                    backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px',
+                    border: (fvp.fillColor==='none'||!fvp.fillColor) ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.12)' }} />
+                {COLOR_PALETTE.map(c => (
                   <div key={c} onClick={() => setNodeViewProp(selected.id, 'fillColor', c)}
                     style={{ width:20, height:20, borderRadius:3, background:c, cursor:'pointer',
                       border: fvp.fillColor===c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.12)' }} />
@@ -1361,7 +1783,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         )}
       </div>
 
-      {/* Slides tab â€” flex sibling so it's never clipped, always at same zone as sidebar */}
+      {/* Slides tab â€" flex sibling so it's never clipped, always at same zone as sidebar */}
       {frameSimNodes.length > 0 && !isPresenting && !showSlideSidebar && (
         <div onClick={() => setShowSlideSidebar(true)}
           style={{ width:26, flexShrink:0, borderLeft:'1px solid #1e1e2e', background:'#0d0d1a',
@@ -1373,7 +1795,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         </div>
       )}
 
-      {/* Slide sidebar â€” hidden while presenting */}
+      {/* Slide sidebar â€" hidden while presenting */}
       {!isPresenting && showSlideSidebar && frameSimNodes.length > 0 && (
         <SlideSidebar
           slideSimNodes={slideSimNodes}
@@ -1394,6 +1816,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           deleteSlideshow={deleteSlideshow}
           renameSlideshow={renameSlideshow}
           setActiveSlideshowId={setActiveSlideshowId}
+          setSlideBgColor={setSlideBgColor}
           onClose={() => setShowSlideSidebar(false)}
           canvasBtnStyle={canvasBtnStyle}
         />
@@ -1422,15 +1845,17 @@ function ThreeDWrapper({ children, onFocus }) {
   return <div ref={ref} data-3d-canvas="true" style={{ width:'100%', height:'100%', borderRadius:12, overflow:'hidden' }}>{children}</div>
 }
 
-// â”€â”€â”€ SlideSidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, onClose, canvasBtnStyle }) {
+// â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onClose, canvasBtnStyle }) {
+  const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
+  const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const [dragIdx, setDragIdx] = useState(null)
   const [dropIdx, setDropIdx] = useState(null)
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
   const containerRef = useRef()
 
-  // Whole-card drag with click threshold â€” click zooms, drag reorders
+  // Whole-card drag with click threshold â€" click zooms, drag reorders
   const handleCardMouseDown = (e, idx) => {
     if (e.button !== 0 || e.target.closest('[data-remove]')) return
     e.preventDefault()
@@ -1572,11 +1997,19 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                   const nvp = getVP(n.id)
                   const nr = NODE_R * (nvp.scale || 1)
                   const nFs = Math.max(9, Math.round(12 * (nvp.scale || 1)))
-                  const { halfW: nW, halfH: nH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', nFs)
+                  const { halfW: nW, halfH: nH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', nFs, nvp.labelWidth)
                   return (
                     <g key={n.id} transform={`translate(${(n.x||0)-(fn.x||0)},${(n.y||0)-(fn.y||0)})`}>
                       <ShapeBody shape={nvp.shape||'circle'} halfW={nW} halfH={nH} r={nr}
                         fill={nvp.fillColor || '#12122a'} stroke="none" strokeWidth={0} />
+                      {nvp.shape !== 'frame' && (
+                        <text textAnchor="middle" dominantBaseline="central"
+                          fontSize={Math.max(5, nFs * 0.8)}
+                          fill={nvp.textColor || '#fff'}
+                          style={{ userSelect:'none', pointerEvents:'none' }}>
+                          {(n.label || '').split('\n')[0].slice(0, 24)}
+                        </text>
+                      )}
                     </g>
                   )
                 })}
@@ -1589,6 +2022,20 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                   onMouseDown={e => e.stopPropagation()}
                   onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
                   style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:13, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
+              </div>
+              {/* Per-slide background color */}
+              <div onMouseDown={e => e.stopPropagation()} style={{ display:'flex', alignItems:'center', gap:3, padding:'3px 8px 5px', flexWrap:'wrap' }}>
+                <span style={{ fontSize:'0.58rem', color:'#445', letterSpacing:'0.05em', marginRight:2 }}>BG</span>
+                <div title="Default" onClick={e => { e.stopPropagation(); setSlideBgColor(activeSlideshowId, fn.id, null) }}
+                  style={{ width:13, height:13, borderRadius:2, cursor:'pointer',
+                    backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
+                    backgroundSize: '5px 5px', backgroundPosition: '0 0, 2.5px 2.5px',
+                    border: !activeSlideBgColors[fn.id] ? '1.5px solid #fff' : '1px solid #334' }} />
+                {BG_COLORS.map(c => (
+                  <div key={c} onClick={e => { e.stopPropagation(); setSlideBgColor(activeSlideshowId, fn.id, c) }}
+                    style={{ width:13, height:13, borderRadius:2, background:c, cursor:'pointer',
+                      border: activeSlideBgColors[fn.id]===c ? '1.5px solid #fff' : '1px solid rgba(255,255,255,0.15)' }} />
+                ))}
               </div>
             </div>
           </div>
@@ -1616,7 +2063,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
   )
 }
 
-// â”€â”€â”€ ImageNode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function ImageNode({ img, isSelected, onMouseDown }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const hw = width / 2, hh = height / 2
@@ -1635,13 +2082,13 @@ function ImageNode({ img, isSelected, onMouseDown }) {
       )}
       <image href={src} x={-hw} y={-hh} width={width} height={height} />
       {isSelected && (<>
-        {/* Resize â€” bottom-right (ratio-locked from center distance) */}
+        {/* Resize â€" bottom-right (ratio-locked from center distance) */}
         <g transform={`translate(${hw},${hh})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize') }} style={{ cursor: 'nwse-resize' }}>
           <circle r={8} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
           <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>⤡</text>
         </g>
-        {/* Rotate â€” top-center */}
+        {/* Rotate â€" top-center */}
         <line x1={0} y1={-hh} x2={0} y2={-hh - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
         <g transform={`translate(0,${-hh - 28})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'rotate') }} style={{ cursor: 'grab' }}>
@@ -1653,8 +2100,8 @@ function ImageNode({ img, isSelected, onMouseDown }) {
   )
 }
 
-// â”€â”€â”€ FrameNode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide }) {
+// â"€â"€â"€ FrameNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
@@ -1668,7 +2115,8 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
   const { halfW: defHW, halfH: defHH } = shapeDims('frame', r)
   const halfW = viewProps.frameHalfW ?? defHW
   const halfH = viewProps.frameHalfH ?? defHH
-  const fill = viewProps.fillColor || '#1a2a4a'
+  const fill = (viewProps.fillColor && viewProps.fillColor !== 'none') ? viewProps.fillColor : 'none'
+  const fillOpacity = fill !== 'none' ? 0.18 : 0
   const titleFontSize = Math.max(11, Math.round(13 * scale))
   const x = node.x ?? 0, y = node.y ?? 0
 
@@ -1680,16 +2128,19 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
       onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
       style={{ cursor: 'move' }}
     >
-      {/* Frame body â€” hidden in presentation mode */}
-      {!isPresenting && <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
-        fill={fill} fillOpacity={viewProps.fillColor && viewProps.fillColor !== '#1a2a4a' ? 0.92 : 0.18}
+      {/* Invisible hit target - makes frame draggable even with no fill */}
+      <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
+        fill="transparent" stroke="none" style={{ cursor: 'move' }} />
+      {/* Frame body â€" hidden in presentation mode or when outlines hidden */}
+      {!isPresenting && !hideOutline && <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
+        fill={fill} fillOpacity={fillOpacity}
         stroke={isSelected ? '#5b6af0' : '#4a7abf'}
         strokeWidth={isSelected ? 2.5 : 1.5}
         strokeDasharray="10,6"
       />}
 
       {/* Title at top-left */}
-      {!editing && !isPresenting && (
+      {!editing && !isPresenting && !hideOutline && (
         <text x={-halfW + 12} y={-halfH + titleFontSize + 6}
           fill={viewProps.textColor || '#88b4e8'}
           fontSize={titleFontSize}
@@ -1757,16 +2208,73 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
   )
 }
 
-// â”€â”€â”€ NodeShape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── AnimatedG ── wraps node visual content with optional motion + color cycle ──
+function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isActive, opacity, children }) {
+  const ref = useRef()
+  const rafRef = useRef()
 
-function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onTab, onCreateSister, onMouseEnter, onMouseLeave, modelThumb, imageUrl }) {
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (isActive || (!motionType && !colorCycle)) {
+      cancelAnimationFrame(rafRef.current)
+      el.style.transform = ''
+      el.style.animation = ''
+      return
+    }
+    el.style.animation = colorCycle ? `pim-hue-cycle ${colorCycle}s linear infinite` : ''
+    if (!motionType) return
+    const speed = motionSpeed || 1
+    const intensity = motionIntensity || 10
+    let startTime = null
+    const animate = ts => {
+      if (!startTime) startTime = ts
+      const t = (ts - startTime) * 0.001 * speed
+      const i = intensity
+      let tx = 0, ty = 0, sc = 1
+      switch (motionType) {
+        case 'shake':    tx = (Math.sin(t * 14) * 0.75 + Math.sin(t * 37) * 0.25) * i; ty = (Math.sin(t * 11 + 1.5) * 0.7 + Math.sin(t * 29 + 0.7) * 0.3) * i; break
+        case 'circle':   tx = Math.sin(t * 2.5) * i; ty = Math.cos(t * 2.5) * i; break
+        case 'jerk':     { const ph = Math.floor(t * 3.5); const ang = (ph * 2.3999632) % (Math.PI * 2); const w = (t * 3.5) % 1; tx = w < 0.35 ? 0 : Math.cos(ang) * i; ty = w < 0.35 ? 0 : Math.sin(ang) * i; break }
+        case 'updown':   ty = Math.sin(t * 2.5) * i; break
+        case 'sideways': tx = Math.sin(t * 2.5) * i; break
+        case 'scale':    sc = 1 + Math.abs(Math.sin(t * 2.5)) * (i * 0.04); break
+        default: break
+      }
+      if (el) {
+        el.style.transformBox = 'fill-box'
+        el.style.transformOrigin = 'center'
+        el.style.transform = motionType === 'scale'
+          ? `scale(${sc.toFixed(4)})`
+          : `translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px)`
+      }
+      rafRef.current = requestAnimationFrame(animate)
+    }
+    rafRef.current = requestAnimationFrame(animate)
+    return () => { cancelAnimationFrame(rafRef.current); if (el) { el.style.transform = ''; el.style.animation = '' } }
+  }, [motionType, motionSpeed, motionIntensity, colorCycle, isActive])
+
+  return <g ref={ref} style={{ opacity: opacity ?? 1 }}>{children}</g>
+}
+
+// â"€â"€â"€ NodeShape â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
+  const [croppingImgId, setCroppingImgId] = useState(null)
   const inputRef = useRef()
+
+  useEffect(() => {
+    if (!croppingImgId) return
+    const onKey = e => { if (e.key === 'Escape') setCroppingImgId(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [croppingImgId])
 
   useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
 
-  // Auto-enter edit on creation â€” clears text, selects all
+  // Auto-enter edit on creation â€" clears text, selects all
   useEffect(() => {
     if (autoEdit) {
       setDraft('')
@@ -1776,20 +2284,22 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
     }
   }, []) // eslint-disable-line
 
-  // Enter-key edit â€” keeps text, cursor at end (no select-all)
+  // Enter-key edit â€" keeps text, selects all on open
   useEffect(() => {
     if (keepEdit && !editing) {
       setDraft(node.label)
       setEditing(true)
       onKeepEditDone?.()
-      requestAnimationFrame(() => {
-        if (inputRef.current) {
-          const len = inputRef.current.value.length
-          inputRef.current.setSelectionRange(len, len)
-        }
-      })
     }
   }, [keepEdit]) // eslint-disable-line
+
+  // Select all after textarea mounts
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
 
   const commitEdit = () => { onLabelChange(node.id, draft.trim() || 'New node'); setEditing(false) }
 
@@ -1799,7 +2309,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const shape = viewProps.shape || 'circle'
   const baseFontSize = Math.max(9, Math.round(12 * scale))
   const isAutoSized = shape === 'roundrect' || shape === 'rect'
-  const { halfW, halfH } = shapeDims(shape, r, node.label, baseFontSize)
+  const { halfW, halfH } = shapeDims(shape, r, node.label, baseFontSize, viewProps.labelWidth)
   // Auto-shrink font for fixed-size shapes only (auto-sized shapes fit the text)
   const fontSize = isAutoSized ? baseFontSize : (() => {
     const innerW = halfW * 2, innerH = halfH * 2
@@ -1811,6 +2321,60 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const fill = viewProps.fillColor || DEFAULT_NODE_PROPS.fillColor
   const hasNotes = !!(node.notes && node.notes.length > 0)
   const x = node.x ?? 0, y = node.y ?? 0
+  const motion = viewProps.nodeMotion
+  const colorCycle = viewProps.nodeColorCycle || 0
+  const isActive = isSelected
+
+  // ── In-node images: above/below/beside images live INSIDE the node's EXISTING shape —
+  // the node never grows. Images shrink to fit whatever space is available instead, and
+  // the text area shrinks/shifts to share the box with them.
+  const nodeImages = viewProps.nodeImages || []
+  const supportsInlineImages = shape !== '3d' && shape !== 'frame'
+  const IMG_GAP = 3
+  const sizedImg = im => ({ ...im, w: (im.w0 || 60) * (im.scale || 1), h: (im.h0 || 60) * (im.scale || 1) })
+  const aboveImgsRaw = supportsInlineImages ? nodeImages.filter(im => im.position === 'above').map(sizedImg) : []
+  const belowImgsRaw = supportsInlineImages ? nodeImages.filter(im => im.position === 'below').map(sizedImg) : []
+  const besideImgsRaw = supportsInlineImages ? nodeImages.filter(im => im.position === 'beside').map(sizedImg) : []
+  const perimeterImgs = nodeImages.filter(im => !im.position || im.position === 'perimeter').map(sizedImg)
+  const bodyHalfW = halfW, bodyHalfH = halfH, bodyR = r // node size never changes for inline images
+
+  // Shrink (never grow) a row of images uniformly so it fits within maxW × maxH.
+  const fitRow = (imgs, maxW, maxH) => {
+    if (!imgs.length) return { items: [], w: 0, h: 0 }
+    const totalW = imgs.reduce((s, im) => s + im.w, 0) + IMG_GAP * (imgs.length - 1)
+    const tallest = Math.max(...imgs.map(im => im.h))
+    const scale = Math.min(1, maxW / totalW, maxH / tallest)
+    const items = imgs.map(im => ({ ...im, w: im.w * scale, h: im.h * scale }))
+    return { items, w: items.reduce((s, im) => s + im.w, 0) + IMG_GAP * (items.length - 1), h: Math.max(...items.map(im => im.h)) }
+  }
+  const fitCol = (imgs, maxW, maxH) => {
+    if (!imgs.length) return { items: [], w: 0, h: 0 }
+    const totalH = imgs.reduce((s, im) => s + im.h, 0) + IMG_GAP * (imgs.length - 1)
+    const widest = Math.max(...imgs.map(im => im.w))
+    const scale = Math.min(1, maxH / totalH, maxW / widest)
+    const items = imgs.map(im => ({ ...im, w: im.w * scale, h: im.h * scale }))
+    return { items, w: Math.max(...items.map(im => im.w)), h: items.reduce((s, im) => s + im.h, 0) + IMG_GAP * (items.length - 1) }
+  }
+
+  const PAD = 4
+  const innerW = bodyHalfW * 2 - PAD * 2
+  const innerH = bodyHalfH * 2 - PAD * 2
+  const vGroups = (aboveImgsRaw.length ? 1 : 0) + (belowImgsRaw.length ? 1 : 0)
+  const vFrac = vGroups === 2 ? 0.28 : 0.42
+  const aboveFit = fitRow(aboveImgsRaw, innerW, innerH * vFrac)
+  const belowFit = fitRow(belowImgsRaw, innerW, innerH * vFrac)
+  const besideFit = fitCol(besideImgsRaw, innerW * 0.4, innerH)
+  const aboveImgs = aboveFit.items, belowImgs = belowFit.items, besideImgs = besideFit.items
+
+  // Text area shrinks to whatever's left after the image bands are carved out.
+  const textTopY = -bodyHalfH + (aboveFit.h ? aboveFit.h + IMG_GAP : 0)
+  const textBottomY = bodyHalfH - (belowFit.h ? belowFit.h + IMG_GAP : 0)
+  const textRightX = bodyHalfW - (besideFit.w ? besideFit.w + IMG_GAP : 0)
+  const textCenterX = (-bodyHalfW + textRightX) / 2
+  const textCenterY = (textTopY + textBottomY) / 2
+  const textHalfW = Math.max(20, (textRightX - (-bodyHalfW)) / 2)
+  const textHalfH = Math.max(14, (textBottomY - textTopY) / 2)
+  const hasInlineImages = aboveImgs.length || belowImgs.length || besideImgs.length
 
   return (
     <g transform={`translate(${x},${y})`}
@@ -1821,98 +2385,384 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       onMouseLeave={onMouseLeave}
       style={{ cursor: 'move', pointerEvents: shape === '3d' && isSelected ? 'none' : undefined }}
     >
-      {/* Selection ring â€” drawn outside the fill */}
+      {/* Selection / hover rings — outside animation so they don't wiggle */}
       {isSelected && (shape === 'none'
-        ? <rect x={-(halfW+4)} y={-(halfH+4)} width={(halfW+4)*2} height={(halfH+4)*2} rx={4} fill="none" stroke="#5b6af0" strokeWidth={2} strokeDasharray="5,3" />
-        : <ShapeBody shape={shape} halfW={halfW + 4} halfH={halfH + 4} r={r + 4} fill="none" stroke="#5b6af0" strokeWidth={2.5} />
+        ? <rect x={-(bodyHalfW+4)} y={-(bodyHalfH+4)} width={(bodyHalfW+4)*2} height={(bodyHalfH+4)*2} rx={4} fill="none" stroke="#5b6af0" strokeWidth={2} strokeDasharray="5,3" />
+        : <ShapeBody shape={shape} halfW={bodyHalfW + 4} halfH={bodyHalfH + 4} r={bodyR + 4} fill="none" stroke="#5b6af0" strokeWidth={2.5} />
       )}
       {isDropTarget && shape !== 'none' && (
-        <ShapeBody shape={shape} halfW={halfW + 7} halfH={halfH + 7} r={r + 7} fill="none" stroke="#4ade80" strokeWidth={3} />
+        <ShapeBody shape={shape} halfW={bodyHalfW + 7} halfH={bodyHalfH + 7} r={bodyR + 7} fill="none" stroke="#4ade80" strokeWidth={3} />
       )}
       {isHovered && !isSelected && shape !== 'none' && (
-        <ShapeBody shape={shape} halfW={halfW + 2} halfH={halfH + 2} r={r + 2} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={1.5} />
-      )}
-      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} imageUrl={imageUrl} nodeId={node.id} filter={shape !== 'none' && shape !== 'frame' ? 'url(#node-shadow)' : undefined} />
-
-      {/* 3D thumbnail â€” shown when not live (node not selected) */}
-      {shape === '3d' && modelThumb && !isSelected && (
-        <>
-          <defs>
-            <clipPath id={`tc-${node.id}`}>
-              <rect x={-halfW+2} y={-halfH+2} width={(halfW-2)*2} height={(halfH-2)*2} rx={8} />
-            </clipPath>
-          </defs>
-          <image href={modelThumb} x={-halfW+2} y={-halfH+2} width={(halfW-2)*2} height={(halfH-2)*2}
-            preserveAspectRatio="xMidYMid meet" clipPath={`url(#tc-${node.id})`}
-            style={{ pointerEvents:'none' }} />
-        </>
+        <ShapeBody shape={shape} halfW={bodyHalfW + 2} halfH={bodyHalfH + 2} r={bodyR + 2} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={1.5} />
       )}
 
-      {/* Label — inside box for normal shapes, below box as caption for 3D/image */}
-      {!editing && shape !== '3d' && shape !== 'image' && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />}
-      {!editing && (shape === '3d' || shape === 'image') && (
-        <text y={halfH + 14} textAnchor={'middle'} fontSize={Math.max(8, Math.round(10 * scale))}
-          fill={viewProps.textColor || '#aab'} style={{ pointerEvents:'none', userSelect:'none' }}
-          dominantBaseline={'hanging'}>
-          {node.label}
-        </text>
+      {/* Animated visual body */}
+      <AnimatedG
+        motionType={motion?.type}
+        motionSpeed={motion?.speed}
+        motionIntensity={motion?.intensity}
+        colorCycle={colorCycle}
+        isActive={isActive}
+        opacity={viewProps.opacity}
+      >
+        {viewProps.borderBlur > 0 ? (
+          <>
+            <defs>
+              <filter id={`bglow-${node.id}`} x="-80%" y="-80%" width="260%" height="260%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation={viewProps.borderBlur} />
+              </filter>
+            </defs>
+            {/* Glow: a solid shape the SAME size as the node, blurred — the Gaussian
+                fade straddles the true edge so there's no hard ring before it fades out */}
+            <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR}
+              fill={viewProps.strokeColor || '#5b6af0'} stroke="none"
+              filter={`url(#bglow-${node.id})`} />
+            {/* Crisp fill on top, exact same size — covers the glow's solid interior entirely */}
+            <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill} stroke="none" strokeWidth={0} />
+          </>
+        ) : (
+          <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
+            stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
+        )}
+
+        {/* 3D thumbnail — shown when not live (node not selected) */}
+        {shape === '3d' && modelThumb && !isSelected && (
+          <>
+            <defs>
+              <clipPath id={`tc-${node.id}`}>
+                <rect x={-halfW+2} y={-halfH+2} width={(halfW-2)*2} height={(halfH-2)*2} rx={8} />
+              </clipPath>
+            </defs>
+            <image href={modelThumb} x={-halfW+2} y={-halfH+2} width={(halfW-2)*2} height={(halfH-2)*2}
+              preserveAspectRatio="xMidYMid meet" clipPath={`url(#tc-${node.id})`}
+              style={{ pointerEvents:'none' }} />
+          </>
+        )}
+
+        {/* Label — shrinks/shifts into whatever space is left after image bands are carved out */}
+        {!editing && shape !== '3d' && (
+          hasInlineImages ? (
+            <g transform={`translate(${textCenterX.toFixed(1)},${textCenterY.toFixed(1)})`}>
+              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
+            </g>
+          ) : (
+            <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
+          )
+        )}
+        {!editing && shape === '3d' && (
+          <text y={halfH + 16} textAnchor="middle" fontSize={Math.max(9, Math.round(11 * scale))}
+            fill={viewProps.textColor || '#ccd'} style={{ pointerEvents:'none', userSelect:'none' }}
+            dominantBaseline="hanging">
+            {node.label}
+          </text>
+        )}
+
+        {/* In-node images — above/below (row, touching the text) and beside (column, to the right) */}
+        {(() => {
+          const rows = []
+          if (aboveImgs.length) {
+            let cx = -aboveFit.w / 2
+            const cy = -bodyHalfH + aboveFit.h / 2
+            aboveImgs.forEach(im => { rows.push({ im, x: cx + im.w / 2, y: cy }); cx += im.w + IMG_GAP })
+          }
+          if (belowImgs.length) {
+            let cx = -belowFit.w / 2
+            const cy = bodyHalfH - belowFit.h / 2
+            belowImgs.forEach(im => { rows.push({ im, x: cx + im.w / 2, y: cy }); cx += im.w + IMG_GAP })
+          }
+          if (besideImgs.length) {
+            let cy = -besideFit.h / 2
+            const cx = bodyHalfW - besideFit.w / 2
+            besideImgs.forEach(im => { rows.push({ im, x: cx, y: cy + im.h / 2 }); cy += im.h + IMG_GAP })
+          }
+          const FADE = 6
+          return rows.map(({ im, x: ix, y: iy }) => {
+            const crop = im.crop || { x: 0, y: 0, w: 1, h: 1 }
+            const isCropping = croppingImgId === im.id
+            const clipId = `imc-${im.id}`
+            const maskId = `imm-${im.id}`
+            const filterId = `imf-${im.id}`
+            const cx = -im.w / 2 + im.w * crop.x, cy = -im.h / 2 + im.h * crop.y
+            const cw = im.w * crop.w, ch = im.h * crop.h
+            const cropHandles = [
+              ['tl', cx, cy], ['t', cx+cw/2, cy], ['tr', cx+cw, cy],
+              ['l', cx, cy+ch/2], ['r', cx+cw, cy+ch/2],
+              ['bl', cx, cy+ch], ['b', cx+cw/2, cy+ch], ['br', cx+cw, cy+ch],
+            ]
+            const hCursor = e => e==='tl'||e==='br' ? 'nwse-resize' : e==='tr'||e==='bl' ? 'nesw-resize' : e==='l'||e==='r' ? 'ew-resize' : 'ns-resize'
+            return (
+              <g key={im.id} transform={`translate(${ix.toFixed(1)},${iy.toFixed(1)})`}>
+                <defs>
+                  <filter id={filterId} x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation={FADE} />
+                  </filter>
+                  <mask id={maskId}>
+                    <rect x={-im.w/2 + FADE} y={-im.h/2 + FADE} width={im.w - FADE*2} height={im.h - FADE*2}
+                      rx={FADE/2} fill="white" filter={`url(#${filterId})`} />
+                  </mask>
+                  {(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) && (
+                    <clipPath id={clipId}>
+                      <rect x={cx} y={cy} width={cw} height={ch} />
+                    </clipPath>
+                  )}
+                </defs>
+                {isCropping && <image href={im.src} x={-im.w/2} y={-im.h/2} width={im.w} height={im.h} opacity={0.3} style={{ pointerEvents:'none' }} />}
+                <image href={im.src} x={-im.w / 2} y={-im.h / 2} width={im.w} height={im.h}
+                  mask={`url(#${maskId})`}
+                  clipPath={(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) ? `url(#${clipId})` : undefined}
+                  onDoubleClick={e => { e.stopPropagation(); setCroppingImgId(isCropping ? null : im.id) }}
+                  style={{ pointerEvents: isSelected ? 'auto' : 'none', cursor: isSelected ? (isCropping ? 'crosshair' : 'default') : undefined }} />
+                {isSelected && !isCropping && (
+                  <>
+                    <rect x={-im.w / 2} y={-im.h / 2} width={im.w} height={im.h} fill="none" stroke="#5b6af0" strokeWidth={1} />
+                    <g transform={`translate(${im.w / 2 - 6},${-im.h / 2 + 6})`}
+                      onClick={e => { e.stopPropagation(); onRemoveNodeImage?.(node.id, im.id) }} style={{ cursor:'pointer' }}>
+                      <circle r={5.5} fill="#f87171" />
+                      <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
+                    </g>
+                    <g transform={`translate(${im.w / 2},${im.h / 2})`}
+                      onMouseDown={e => { e.stopPropagation(); onImageResizeStart?.(e, node.id, im.id, x + ix, y + iy) }}
+                      style={{ cursor: 'nwse-resize' }}>
+                      <circle r={12} fill="transparent" />
+                      <circle r={5} fill="#5b6af0" stroke="#fff" strokeWidth={1} style={{ pointerEvents:'none' }} />
+                    </g>
+                  </>
+                )}
+                {isCropping && (
+                  <>
+                    <rect x={cx} y={cy} width={cw} height={ch} fill="none" stroke="white" strokeWidth={1} strokeDasharray="4,2" style={{ pointerEvents:'none' }} />
+                    {cropHandles.map(([edge, hx, hy]) => (
+                      <circle key={edge} cx={hx} cy={hy} r={5} fill="white" stroke="#5b6af0" strokeWidth={1.5}
+                        onMouseDown={e => { e.stopPropagation(); onImageCropDragStart?.(e, node.id, im.id, edge, im.w, im.h) }}
+                        style={{ cursor: hCursor(edge) }} />
+                    ))}
+                    <text x={0} y={-im.h/2 - 6} textAnchor="middle" fontSize={9} fill="white" style={{ pointerEvents:'none', userSelect:'none' }}>ESC to done</text>
+                  </>
+                )}
+              </g>
+            )
+          })
+        })()}
+
+        {/* Notes indicator badge */}
+        {hasNotes && !isSelected && (
+          <g transform={`translate(${bodyHalfW * 0.3}, ${shape === '3d' ? bodyHalfH + 22 : bodyHalfH + 3})`}
+            onClick={e => { e.stopPropagation(); onShowNotePopup?.(node.id) }}
+            style={{ cursor: 'pointer' }}>
+            <circle r={8} fill="#12122a" stroke="#5b6af0" strokeWidth={1.2} />
+            <text textAnchor="middle" dominantBaseline="central" fill="#5b6af0" fontSize={9} style={{ userSelect:'none', pointerEvents:'none' }}>✎</text>
+          </g>
+        )}
+      </AnimatedG>
+
+      {/* Emoji badges — outside AnimatedG so they stay fixed while node wiggles */}
+      {(viewProps.nodeEmojis || []).map(em => {
+        const cosA = Math.cos(em.angle), sinA = Math.sin(em.angle)
+        let ex, ey
+        if (shape === 'circle' || shape === 'ellipse' || shape === 'none') {
+          // boundary of the ellipse itself sits exactly on the outline
+          ex = cosA * bodyHalfW
+          ey = sinA * bodyHalfH
+        } else if (shape === 'diamond') {
+          const d = 1 / (Math.abs(cosA) / bodyHalfW + Math.abs(sinA) / bodyHalfH)
+          ex = cosA * d
+          ey = sinA * d
+        } else {
+          // rect / roundrect / frame / 3d — intersect ray with axis-aligned box
+          const d = 1 / Math.max(Math.abs(cosA) / bodyHalfW, Math.abs(sinA) / bodyHalfH)
+          ex = cosA * d
+          ey = sinA * d
+        }
+        const emScale = em.scale || 1
+        const badgeR = 20 * emScale
+        const imgSize = 28 * emScale
+        const handleR = badgeR * Math.SQRT1_2 // bottom-right corner of the badge's bounding box
+        return (
+          <g key={em.id} transform={`translate(${ex.toFixed(1)},${ey.toFixed(1)})`}>
+            <circle r={badgeR} fill="transparent"
+              stroke={isSelected ? '#5b6af0' : 'transparent'} strokeWidth={1} />
+            {em.type === 'image'
+              ? <image href={em.emoji} x={-imgSize/2} y={-imgSize/2} width={imgSize} height={imgSize} style={{ pointerEvents:'none' }} />
+              : <text textAnchor="middle" dominantBaseline="central" fontSize={23 * emScale} style={{ userSelect:'none', pointerEvents:'none' }}>{em.emoji}</text>}
+            {(isSelected || isHovered) && (
+              <circle r={badgeR} fill="transparent"
+                onMouseDown={e => { e.stopPropagation(); onEmojiDragStart?.(e, node.id, em.id) }}
+                style={{ cursor: 'grab' }} />
+            )}
+            {isSelected && (
+              <g transform="translate(14,-14)" onClick={e => { e.stopPropagation(); onRemoveEmoji?.(node.id, em.id) }} style={{ cursor:'pointer' }}>
+                <circle r={5.5} fill="#f87171" />
+                <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
+              </g>
+            )}
+            {isSelected && (
+              <circle cx={handleR} cy={handleR} r={5}
+                fill="#5b6af0" stroke="#fff" strokeWidth={1}
+                onMouseDown={e => { e.stopPropagation(); onEmojiResizeStart?.(e, node.id, em.id, (node.x || 0) + ex, (node.y || 0) + ey) }}
+                style={{ cursor: 'nwse-resize' }} />
+            )}
+          </g>
+        )
+      })}
+
+      {/* Perimeter-mounted in-node images — half-in/half-out on the outline, like emoji badges */}
+      {perimeterImgs.map(im => {
+        const cosA = Math.cos(im.angle || -Math.PI / 4), sinA = Math.sin(im.angle || -Math.PI / 4)
+        let ix, iy
+        if (shape === 'circle' || shape === 'ellipse' || shape === 'none') {
+          ix = cosA * bodyHalfW
+          iy = sinA * bodyHalfH
+        } else if (shape === 'diamond') {
+          const d = 1 / (Math.abs(cosA) / bodyHalfW + Math.abs(sinA) / bodyHalfH)
+          ix = cosA * d
+          iy = sinA * d
+        } else {
+          const d = 1 / Math.max(Math.abs(cosA) / bodyHalfW, Math.abs(sinA) / bodyHalfH)
+          ix = cosA * d
+          iy = sinA * d
+        }
+        const pFADE = 6
+        const isCropping = croppingImgId === im.id
+        const pClipId = `pmc-${im.id}`, pMaskId = `pmm-${im.id}`, pFiltId = `pmf-${im.id}`
+        const crop = im.crop || { x: 0, y: 0, w: 1, h: 1 }
+        const cx = -im.w/2 + im.w*crop.x, cy = -im.h/2 + im.h*crop.y
+        const cw = im.w*crop.w, ch = im.h*crop.h
+        const cropHandles = [
+          ['tl',cx,cy],['t',cx+cw/2,cy],['tr',cx+cw,cy],
+          ['l',cx,cy+ch/2],['r',cx+cw,cy+ch/2],
+          ['bl',cx,cy+ch],['b',cx+cw/2,cy+ch],['br',cx+cw,cy+ch],
+        ]
+        const hCursor = e => e==='tl'||e==='br' ? 'nwse-resize' : e==='tr'||e==='bl' ? 'nesw-resize' : e==='l'||e==='r' ? 'ew-resize' : 'ns-resize'
+        return (
+          <g key={im.id} transform={`translate(${ix.toFixed(1)},${iy.toFixed(1)})`}>
+            <defs>
+              <filter id={pFiltId} x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation={pFADE} />
+              </filter>
+              <mask id={pMaskId}>
+                <rect x={-im.w/2 + pFADE} y={-im.h/2 + pFADE} width={im.w - pFADE*2} height={im.h - pFADE*2}
+                  rx={pFADE/2} fill="white" filter={`url(#${pFiltId})`} />
+              </mask>
+              {(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) && (
+                <clipPath id={pClipId}><rect x={cx} y={cy} width={cw} height={ch} /></clipPath>
+              )}
+            </defs>
+            {isCropping && <image href={im.src} x={-im.w/2} y={-im.h/2} width={im.w} height={im.h} opacity={0.3} style={{ pointerEvents:'none' }} />}
+            <image href={im.src} x={-im.w / 2} y={-im.h / 2} width={im.w} height={im.h}
+              mask={`url(#${pMaskId})`}
+              clipPath={(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) ? `url(#${pClipId})` : undefined}
+              onDoubleClick={e => { e.stopPropagation(); setCroppingImgId(isCropping ? null : im.id) }}
+              style={{ pointerEvents: isSelected || isHovered ? 'auto' : 'none', cursor: isCropping ? 'crosshair' : 'default' }} />
+            {(isSelected || isHovered) && !isCropping && (
+              <rect x={-im.w / 2} y={-im.h / 2} width={im.w} height={im.h} fill="transparent"
+                stroke={isSelected ? '#5b6af0' : 'transparent'} strokeWidth={1}
+                onMouseDown={e => { e.stopPropagation(); onImageDragStart?.(e, node.id, im.id) }}
+                style={{ cursor: 'grab' }} />
+            )}
+            {isSelected && !isCropping && (
+              <>
+                <g transform={`translate(${im.w / 2 - 6},${-im.h / 2 + 6})`}
+                  onClick={e => { e.stopPropagation(); onRemoveNodeImage?.(node.id, im.id) }} style={{ cursor:'pointer' }}>
+                  <circle r={5.5} fill="#f87171" />
+                  <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
+                </g>
+                <g transform={`translate(${im.w / 2},${im.h / 2})`}
+                  onMouseDown={e => { e.stopPropagation(); onImageResizeStart?.(e, node.id, im.id, (node.x || 0) + ix - im.w / 2, (node.y || 0) + iy - im.h / 2) }}
+                  style={{ cursor: 'nwse-resize' }}>
+                  <circle r={12} fill="transparent" />
+                  <circle r={5} fill="#5b6af0" stroke="#fff" strokeWidth={1} style={{ pointerEvents:'none' }} />
+                </g>
+              </>
+            )}
+            {isCropping && (
+              <>
+                <rect x={cx} y={cy} width={cw} height={ch} fill="none" stroke="white" strokeWidth={1} strokeDasharray="4,2" style={{ pointerEvents:'none' }} />
+                {cropHandles.map(([edge, hx, hy]) => (
+                  <circle key={edge} cx={hx} cy={hy} r={5} fill="white" stroke="#5b6af0" strokeWidth={1.5}
+                    onMouseDown={e => { e.stopPropagation(); onImageCropDragStart?.(e, node.id, im.id, edge, im.w, im.h) }}
+                    style={{ cursor: hCursor(edge) }} />
+                ))}
+                <text x={0} y={-im.h/2 - 6} textAnchor="middle" fontSize={9} fill="white" style={{ pointerEvents:'none', userSelect:'none' }}>ESC to done</text>
+              </>
+            )}
+          </g>
+        )
+      })}
+
+      {/* Collapse/expand chevron — only on nodes that have children, sits centered on the bottom edge */}
+      {hasChildren && (isSelected || isHovered || isCollapsed) && (
+        <g transform={`translate(0,${bodyHalfH + 11})`}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); onToggleCollapse?.() }}
+          style={{ cursor: 'pointer' }}>
+          <circle r={10} fill="#16162a" stroke={isCollapsed ? '#f6ad55' : 'rgba(255,255,255,0.18)'} strokeWidth={1.2} />
+          <text textAnchor="middle" dominantBaseline="central" fontSize={11}
+            fill={isCollapsed ? '#f6ad55' : '#9aa8d8'}
+            style={{ userSelect:'none', pointerEvents:'none' }}>{isCollapsed ? '▸' : '▾'}</text>
+        </g>
       )}
 
-      {/* Edit input */}
-      {editing && (
-        <foreignObject x={-halfW} y={-halfH} width={halfW*2} height={halfH*2}
-          onMouseDown={e => e.stopPropagation()}>
-          <input ref={inputRef} value={draft} autoFocus
-            onChange={e => setDraft(e.target.value)}
-            onBlur={commitEdit}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault(); e.stopPropagation()
-                const inp = inputRef.current
-                if (inp && inp.selectionStart !== inp.selectionEnd) {
-                  // Text still selected (just opened) â€” deselect, cursor to end
-                  inp.setSelectionRange(inp.value.length, inp.value.length)
-                } else {
-                  commitEdit()
-                }
-              }
-              if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
-              if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(); onTab?.(node.id) }
-            }}
-            style={{ width:'100%', height:'100%', background:'#1e1e3a', border:'none', outline:'1px solid #5b6af0', borderRadius:4, color:'#fff', textAlign:'center', fontSize: fontSize-1, padding:'2px 4px', boxSizing:'border-box' }}
-          />
-        </foreignObject>
+      {/* Edit input — for 3D nodes render at caption position below box (inside box is covered by 3D div) */}
+      {editing && (() => {
+        const foX = -halfW
+        const foY = shape === '3d' ? halfH + 2 : -halfH
+        const foW = halfW * 2
+        const foH = shape === '3d' ? 26 : halfH * 2
+        return (
+          <foreignObject x={foX} y={foY} width={foW} height={foH}
+            onMouseDown={e => e.stopPropagation()}>
+            <textarea ref={inputRef} value={draft} autoFocus
+              onChange={e => setDraft(e.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitEdit() }
+                if (e.key === 'Enter' && e.shiftKey) { e.stopPropagation() }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
+                if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(); onTab?.(node.id) }
+              }}
+              style={{ width:'100%', height:'100%', background:'#1e1e3a', border:'none', outline:'1px solid #5b6af0', borderRadius:4, color:'#fff', textAlign:'center', fontSize: fontSize-1, padding:'2px 4px', boxSizing:'border-box', resize:'none', fontFamily:'inherit', overflow:'hidden' }}
+            ></textarea>
+          </foreignObject>
+        )
+      })()}
+
+      {/* Paragraph-width handle — drag to pin the wrap width while editing text (rect/roundrect only).
+          Double-click resets to auto-fit width. */}
+      {editing && isAutoSized && (
+        <g transform={`translate(${halfW},0)`}
+          onMouseDown={e => { e.stopPropagation(); onSetLabelWidth?.(e, node.id) }}
+          onDoubleClick={e => { e.stopPropagation(); onResetLabelWidth?.(node.id) }}
+          style={{ cursor: 'ew-resize' }}>
+          <rect x={-4} y={-14} width={8} height={28} rx={3} fill="#5b6af0" stroke="#fff" strokeWidth={1} />
+          <line x1={0} y1={-6} x2={0} y2={6} stroke="#fff" strokeWidth={1} opacity={0.6} />
+        </g>
       )}
 
-      {/* Double-click to edit â€” for 3D nodes also cover caption area below */}
-      <ellipse rx={halfW} ry={halfH} fill="transparent"
-        onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true) }}
+      {/* Double-click to edit â€" for 3D nodes also cover caption area below */}
+      <ellipse rx={bodyHalfW} ry={bodyHalfH} fill="transparent"
+        onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
         style={{ cursor: 'move' }}
       />
       {shape === '3d' && (
         <rect x={-halfW} y={halfH + 4} width={halfW * 2} height={22} fill="transparent"
-          onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true) }}
+          onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
           style={{ cursor: 'text' }}
         />
       )}
 
-      {/* Notes indicator dot */}
-      {hasNotes && !isSelected && (
-        <circle cx={halfW * 0.5} cy={halfH + 5} r={3} fill="#5b6af0" opacity={0.7} style={{ pointerEvents:'none' }} />
-      )}
-
-      {/* Connector handle â€” hover only. Large transparent circle as hit target to bridge gap from node edge. */}
+      {/* Connector handle â€" hover only. Large transparent circle as hit target to bridge gap from node edge. */}
       {isHovered && (
         <g onMouseDown={e => { e.stopPropagation(); onConnectorMouseDown(e, node.id) }}
           onMouseEnter={onMouseEnter} style={{ cursor: 'crosshair' }}>
-          <circle cx={halfW + 7} cy={0} r={14} fill="transparent" />
-          <circle cx={halfW + 7} cy={0} r={5} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
+          <circle cx={bodyHalfW + 7} cy={0} r={14} fill="transparent" />
+          <circle cx={bodyHalfW + 7} cy={0} r={5} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
         </g>
       )}
 
-      {/* Scale handle â€” hover only. Large transparent hit area for easier grabbing. */}
+      {/* Scale handle â€" hover only. Large transparent hit area for easier grabbing. */}
       {isHovered && (
-        <g transform={`translate(${halfW},${halfH})`}
+        <g transform={`translate(${bodyHalfW},${bodyHalfH})`}
           onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
           onMouseEnter={onMouseEnter}
           style={{ cursor: 'nwse-resize' }}>
@@ -1936,7 +2786,7 @@ function EyeIcon() {
   )
 }
 
-// â”€â”€â”€ ColorSubPopup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€â"€ ColorSubPopup â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function ColorSubPopup({ colors, current, onPick, label }) {
   return (
     <div style={{
@@ -1959,22 +2809,55 @@ function ColorSubPopup({ colors, current, onPick, label }) {
   )
 }
 
-// â”€â”€â”€ NodeToolbar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave, onWheel, imageUrl, onSetImageUrl }) {
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl }) {
   const shape = viewProps.shape || 'circle'
-  const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note'
+  const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [notesDraft, setNotesDraft] = useState(notes)
+  const [emojiInput, setEmojiInput] = useState('')
+  const [emojiSearch, setEmojiSearch] = useState('')
+  const [emojiCategory, setEmojiCategory] = useState(0)
   const [colorPopup, setColorPopup] = useState(null) // 'fill' | 'text' | null
 
   useEffect(() => { setNotesDraft(notes) }, [notes])
 
-  const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡', image:'🖼' }
+  const processImageFile = useCallback((file, position = 'above') => {
+    if (!file || !file.type?.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const MAX = 90
+        const ar = img.naturalWidth / img.naturalHeight || 1
+        const w0 = ar >= 1 ? MAX : MAX * ar
+        const h0 = ar >= 1 ? MAX / ar : MAX
+        onAddNodeImage?.(reader.result, w0, h0, position)
+      }
+      img.src = reader.result
+    }
+    reader.readAsDataURL(file)
+  }, [onAddNodeImage])
+
+  // While the Image panel is open, Ctrl+V anywhere pastes an image from the clipboard.
+  useEffect(() => {
+    if (panel !== 'image') return
+    const onPaste = e => {
+      const item = Array.from(e.clipboardData?.items || []).find(it => it.type?.startsWith('image/'))
+      if (!item) return
+      e.preventDefault()
+      processImageFile(item.getAsFile(), 'above')
+    }
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  }, [panel, processImageFile])
+
+  const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
 
   const wrap = {
     position:'absolute', left: x, top: y, transform:'translateX(-50%)',
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
-    padding:'6px 8px',
+    padding:'6px 8px', minWidth: panel ? 230 : undefined,
     boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:20, pointerEvents:'all',
   }
 
@@ -2000,23 +2883,27 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
-      {/* â”€â”€ Main icon row â”€â”€ */}
+      {/* â"€â"€ Main icon row â"€â"€ */}
       {panel === null && (
         <div style={{ display:'flex', gap:4, alignItems:'center' }}>
           <button style={iconBtn(false)} title="Color" onClick={() => setPanel('color')}>🎨</button>
           <button style={iconBtn(false)} title="Shape" onClick={() => setPanel('shape')}>◯</button>
-          {shape === 'image' && <button style={iconBtn(false)} title="Set image URL" onClick={() => setPanel('image')}>🖼</button>}
+          {shape === 'image' && <button style={iconBtn(false)} title="Set image URL" onClick={() => setPanel('imageUrl')}>🖼</button>}
           {divider}
           <button style={iconBtn(false)} title="Show/hide" onClick={onHide}>👁</button>
           <button style={iconBtn(false)} title="Drill" onClick={onDrill}>⊕</button>
           <button style={iconBtn(false)} title="Note" onClick={() => setPanel('note')}>✎</button>
+          <button style={iconBtn(!!viewProps.nodeMotion || !!viewProps.nodeColorCycle)} title="Motion & color cycle" onClick={() => setPanel('motion')}>✦</button>
+          <button style={iconBtn(false)} title="Radiate to children" onClick={() => setPanel('radiate')}>❋</button>
           {isAnchored && <button style={{ ...iconBtn(false), color:'#f6ad55' }} title="Release anchor" onClick={onRelease}>⊙</button>}
+          <button style={iconBtn(panel === 'emoji')} title="Emoji" onClick={() => setPanel(panel === 'emoji' ? null : 'emoji')}>😊</button>
+          <button style={iconBtn(panel === 'image' || (viewProps.nodeImages || []).length > 0)} title="Image" onClick={() => setPanel(panel === 'image' ? null : 'image')}>🖼️</button>
           {divider}
           <button style={{ ...iconBtn(false), color:'#f87171' }} title="Delete" onClick={onDelete}>✕</button>
         </div>
       )}
 
-      {/* â”€â”€ Color panel â”€â”€ */}
+      {/* â"€â"€ Color panel â"€â"€ */}
       {panel === 'color' && (
         <div style={{ display:'flex', flexDirection:'column', gap:7, minWidth:190 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
@@ -2026,13 +2913,13 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           <div>
             <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>FILL</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-              <div title="Transparent" onClick={() => onSetFill('transparent')} style={{
+              <div title="Transparent" onClick={() => onSetFill('none')} style={{
                 width:18, height:18, borderRadius:4, cursor:'pointer',
-                border: viewProps.fillColor==='transparent' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.2)',
-                backgroundImage:'linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%)',
-                backgroundSize:'6px 6px', backgroundPosition:'0 0, 3px 3px', backgroundColor:'#222',
+                backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
+                backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px',
+                border: (viewProps.fillColor==='none'||!viewProps.fillColor) ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.1)',
               }} />
-              {FILL_COLORS.map(c => (
+              {COLOR_PALETTE.map(c => (
                 <div key={c} onClick={() => onSetFill(c)} style={{
                   width:18, height:18, borderRadius:4, background:c, cursor:'pointer',
                   border: viewProps.fillColor===c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.1)',
@@ -2043,19 +2930,50 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           <div>
             <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>OUTLINE</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-              {FILL_COLORS.map(c => (
-                <div key={c} onClick={() => onSetTextColor(c)} style={{
+              <div title="No outline" onClick={() => { onSetStrokeColor(null); onSetStrokeWidth(0) }} style={{
+                width:18, height:18, borderRadius:4, cursor:'pointer', boxSizing:'border-box',
+                backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
+                backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px',
+                border: (!viewProps.strokeColor && !viewProps.strokeWidth) ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.2)',
+              }} />
+              {COLOR_PALETTE.map(c => (
+                <div key={c} onClick={() => onSetStrokeColor(c)} style={{
                   width:18, height:18, borderRadius:4, background:'transparent', cursor:'pointer',
-                  border: (viewProps.strokeColor||viewProps.textColor)===c ? `3px solid ${c}` : `2px solid ${c}`,
+                  border: viewProps.strokeColor===c ? `3px solid ${c}` : `2px solid ${c}`,
                   boxSizing:'border-box',
                 }} />
               ))}
             </div>
+            <div style={{ display:'flex', gap:5, alignItems:'center', marginTop:5 }}>
+              <span style={{ fontSize:'0.6rem', color:'#778', letterSpacing:'0.05em' }}>WIDTH</span>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetStrokeWidth(Math.max(0, ((viewProps.strokeWidth||0)-0.5)))}>-</button>
+              <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:22, textAlign:'center' }}>{(viewProps.strokeWidth||0).toFixed(1)}</span>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetStrokeWidth(Math.min(8, ((viewProps.strokeWidth||0)+0.5)))}>+</button>
+              {(viewProps.strokeColor || viewProps.strokeWidth) && <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:10 }} onClick={() => { onSetStrokeColor(null); onSetStrokeWidth(0) }}>x</button>}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>GLOW</div>
+            <div style={{ display:'flex', gap:5, alignItems:'center' }}>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.max(0, ((viewProps.borderBlur||0)-1)))}>-</button>
+              <span style={{ fontSize:'0.7rem', color: (viewProps.borderBlur||0) > 0 ? '#88b4e8' : '#445', width:18, textAlign:'center' }}>{(viewProps.borderBlur||0)}</span>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.min(14, ((viewProps.borderBlur||0)+1)))}>+</button>
+              {(viewProps.borderBlur||0) > 0 && <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:10 }} onClick={() => onSetBorderBlur(0)}>x</button>}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>OPACITY</div>
+            <div style={{ display:'flex', gap:5, alignItems:'center' }}>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetOpacity(Math.max(0.05, +((viewProps.opacity??1)-0.1).toFixed(2)))}>-</button>
+              <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:32, textAlign:'center' }}>{Math.round((viewProps.opacity??1)*100)}%</span>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetOpacity(Math.min(1, +((viewProps.opacity??1)+0.1).toFixed(2)))}>+</button>
+              {(viewProps.opacity??1) < 1 && <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:10 }} onClick={() => onSetOpacity(1)}>x</button>}
+            </div>
           </div>
           <div>
             <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>TEXT</div>
-            <div style={{ display:'flex', gap:4 }}>
-              {TEXT_COLORS.map(c => (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+              {COLOR_PALETTE.map(c => (
                 <div key={c} onClick={() => onSetTextColor(c)} style={{
                   width:18, height:18, borderRadius:'50%', background:c, cursor:'pointer',
                   border: (viewProps.textColor||'#ffffff')===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)',
@@ -2066,7 +2984,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         </div>
       )}
 
-      {/* â”€â”€ Shape panel â”€â”€ */}
+      {/* â"€â"€ Shape panel â"€â"€ */}
       {panel === 'shape' && (
         <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:160 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
@@ -2090,7 +3008,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         </div>
       )}
 
-      {/* â”€â”€ Note panel â”€â”€ */}
+      {/* â"€â"€ Note panel â"€â"€ */}
       {panel === 'note' && (
         <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:210 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4 }}>
@@ -2114,8 +3032,250 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         </div>
       )}
 
-      {/* — Image URL panel — */}
-      {panel === 'image' && (
+      {/* â"€â"€ Emoji panel â"€â"€ */}
+      {panel === 'emoji' && (() => {
+        const curEmojis = viewProps.nodeEmojis || []
+        const search = emojiSearch.trim().toLowerCase()
+        const shownEmojis = search
+          ? EMOJI_CATALOG.flatMap(([, list]) => list).filter(e => e.includes(search))
+          : EMOJI_CATALOG[emojiCategory]?.[1] || []
+        const fileInputId = `emoji-upload-${x}-${y}`
+        return (
+          <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:230, maxWidth:230 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+              <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+              <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>EMOJI</span>
+            </div>
+
+            <input value={emojiSearch} onChange={e => setEmojiSearch(e.target.value)}
+              placeholder="Search emoji…"
+              style={{ background:'#0e0e1c', border:'1px solid #2d3a6a', color:'#fff', borderRadius:4, padding:'3px 6px', fontSize:'0.78rem', outline:'none', fontFamily:'inherit' }} />
+
+            {!search && (
+              <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
+                {EMOJI_CATALOG.map(([cat], i) => (
+                  <button key={cat} onClick={() => setEmojiCategory(i)}
+                    style={{
+                      background: emojiCategory === i ? '#2d3a6a' : 'transparent',
+                      border: `1px solid ${emojiCategory === i ? '#5b6af0' : '#2a3358'}`,
+                      color: emojiCategory === i ? '#c5d0ff' : '#667',
+                      borderRadius:4, cursor:'pointer', fontSize:'0.6rem', padding:'2px 5px', lineHeight:1.4,
+                    }}>{cat}</button>
+                ))}
+              </div>
+            )}
+
+            <div onWheel={e => e.stopPropagation()} style={{ display:'flex', flexWrap:'wrap', gap:3, maxHeight:140, overflowY:'auto' }}>
+              {shownEmojis.map((em, idx) => (
+                <button key={em + idx} onClick={() => onAddEmoji?.(em, 'unicode')} title={em}
+                  style={{ background:'transparent', border:'1px solid #2a3358', borderRadius:4, cursor:'pointer', fontSize:'1.1rem', padding:'3px 5px', lineHeight:1 }}>{em}</button>
+              ))}
+              {shownEmojis.length === 0 && (
+                <span style={{ fontSize:'0.7rem', color:'#445', padding:'4px 0' }}>No matches</span>
+              )}
+            </div>
+
+            <div style={{ display:'flex', gap:4 }}>
+              <input value={emojiInput} onChange={e => setEmojiInput(e.target.value)}
+                placeholder="Type any emoji…" maxLength={8}
+                style={{ flex:1, background:'#0e0e1c', border:'1px solid #2d3a6a', color:'#fff', borderRadius:4, padding:'3px 6px', fontSize:'0.9rem', outline:'none', fontFamily:'inherit' }} />
+              <button onClick={() => { if (emojiInput.trim()) { onAddEmoji?.(emojiInput.trim(), 'unicode'); setEmojiInput('') } }}
+                style={{ background:'#2d3a6a', border:'none', color:'#fff', borderRadius:4, cursor:'pointer', padding:'3px 10px', fontSize:'0.8rem' }}>+</button>
+            </div>
+
+            <div style={{ borderTop:'1px solid #2a3358', paddingTop:6, display:'flex', flexDirection:'column', gap:5 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <span style={{ fontSize:'0.65rem', color:'#445', letterSpacing:'0.05em' }}>CUSTOM</span>
+                <label htmlFor={fileInputId} style={{ background:'#2d3a6a', border:'none', color:'#fff', borderRadius:4, cursor:'pointer', padding:'2px 8px', fontSize:'0.68rem' }}>Upload</label>
+                <input id={fileInputId} type="file" accept="image/*" style={{ display:'none' }}
+                  onChange={e => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const reader = new FileReader()
+                    reader.onload = () => onAddCustomEmoji?.(file.name, reader.result)
+                    reader.readAsDataURL(file)
+                    e.target.value = ''
+                  }} />
+              </div>
+              {(customEmojis || []).length > 0 && (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                  {customEmojis.map(ce => (
+                    <div key={ce.id} style={{ position:'relative', width:26, height:26 }}>
+                      <button onClick={() => onAddEmoji?.(ce.src, 'image')} title={ce.name}
+                        style={{ width:26, height:26, padding:0, background:'transparent', border:'1px solid #2a3358', borderRadius:4, cursor:'pointer', overflow:'hidden' }}>
+                        <img src={ce.src} alt={ce.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                      </button>
+                      <button onClick={() => onRemoveCustomEmoji?.(ce.id)}
+                        style={{ position:'absolute', top:-4, right:-4, background:'#f87171', border:'none', borderRadius:'50%', width:11, height:11, cursor:'pointer', fontSize:7, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', padding:0, lineHeight:1 }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {curEmojis.length > 0 && (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:5, borderTop:'1px solid #2a3358', paddingTop:5 }}>
+                {curEmojis.map(em => (
+                  <div key={em.id} style={{ position:'relative', display:'inline-flex', alignItems:'center', justifyContent:'center', width:28, height:28 }}>
+                    {em.type === 'image'
+                      ? <img src={em.emoji} alt="" style={{ width:20, height:20, objectFit:'cover', borderRadius:3 }} />
+                      : <span style={{ fontSize:'1.2rem', lineHeight:1 }}>{em.emoji}</span>}
+                    <button onClick={() => onRemoveEmojiById?.(em.id)}
+                      style={{ position:'absolute', top:-4, right:-4, background:'#f87171', border:'none', borderRadius:'50%', width:13, height:13, cursor:'pointer', fontSize:9, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', padding:0, lineHeight:1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* ── Image panel ── */}
+      {panel === 'image' && (() => {
+        const curImages = viewProps.nodeImages || []
+        const fileInputId = `nodeimg-upload-${x}-${y}`
+        const POSITIONS = [
+          ['above', 'Above'], ['below', 'Below'], ['beside', 'Beside'], ['perimeter', 'Perimeter'],
+        ]
+        return (
+          <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:230 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+              <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+              <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>IMAGE</span>
+            </div>
+
+            <label htmlFor={fileInputId} style={{ background:'#2d3a6a', border:'none', color:'#fff', borderRadius:4, cursor:'pointer', padding:'5px 8px', fontSize:'0.78rem', textAlign:'center' }}>Upload image…</label>
+            <input id={fileInputId} type="file" accept="image/*" style={{ display:'none' }}
+              onChange={e => {
+                processImageFile(e.target.files?.[0], 'above')
+                e.target.value = ''
+              }} />
+            <span style={{ fontSize:'0.62rem', color:'#445', textAlign:'center' }}>or paste an image (Ctrl+V)</span>
+
+            {curImages.length > 0 && (
+              <div style={{ display:'flex', flexDirection:'column', gap:7, borderTop:'1px solid #2a3358', paddingTop:6 }}>
+                {curImages.map(im => (
+                  <div key={im.id} style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <div style={{ width:30, height:30, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', background:'#0e0e1c', borderRadius:4, overflow:'hidden' }}>
+                      <img src={im.src} alt="" style={{ maxWidth:'100%', maxHeight:'100%' }} />
+                    </div>
+                    <div style={{ display:'flex', gap:2, flexWrap:'wrap', flex:1 }}>
+                      {POSITIONS.map(([val, label]) => (
+                        <button key={val} onClick={() => onSetNodeImagePosition?.(im.id, val)} title={label}
+                          style={{
+                            background: (im.position || 'above') === val ? '#2d3a6a' : 'transparent',
+                            border: `1px solid ${(im.position || 'above') === val ? '#5b6af0' : '#2a3358'}`,
+                            color: (im.position || 'above') === val ? '#c5d0ff' : '#667',
+                            borderRadius:3, cursor:'pointer', fontSize:'0.6rem', padding:'2px 5px',
+                          }}>{label[0]}</button>
+                      ))}
+                    </div>
+                    <button onClick={() => onRemoveNodeImageById?.(im.id)}
+                      style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:13, padding:'0 2px', flexShrink:0 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* â"€â"€ Radiate panel â"€â"€ */}
+      {panel === 'radiate' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:160 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>RADIATE TO CHILDREN</span>
+          </div>
+          {[['color','Radiate fill color'],['shape','Radiate shape'],['both','Radiate color + shape']].map(([what, label]) => (
+            <button key={what} onClick={() => { onRadiate(what); setPanel(null) }}
+              style={{ background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:5, cursor:'pointer', fontSize:'0.78rem', padding:'5px 8px', textAlign:'left' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* â"€â"€ Motion panel â"€â"€ */}
+      {panel === 'motion' && (() => {
+        const motion = viewProps.nodeMotion
+        const colorCycle = viewProps.nodeColorCycle || 0
+        const numBtn = { background:'transparent', border:'1px solid #2a3358', color:'#88b4e8', borderRadius:4, cursor:'pointer', fontSize:'0.75rem', padding:'2px 6px', lineHeight:1 }
+        const motionTypes = [
+          [null,'○','off'],['shake','≋','shake'],['circle','◎','circle'],
+          ['jerk','⚡','jerk'],['updown','↕','up/dn'],['sideways','↔','side'],['scale','⬡','scale'],
+        ]
+        return (
+          <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:196 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+              <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+              <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>MOTION</span>
+            </div>
+
+            {/* Motion type grid */}
+            <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
+              {motionTypes.map(([type, icon, label]) => {
+                const active = (motion?.type ?? null) === type
+                return (
+                  <button key={label} title={label}
+                    style={{ background: active?'#2d3a6a':'transparent', border:`1px solid ${active?'#5b6af0':'#2a3358'}`, color: active?'#c5d0ff':'#556', borderRadius:4, cursor:'pointer', padding:'3px 5px', lineHeight:1, display:'flex', flexDirection:'column', alignItems:'center', gap:1 }}
+                    onClick={() => onSetMotion(type === null ? null : { type, speed: motion?.speed ?? 1, intensity: motion?.intensity ?? 10 })}>
+                    <span style={{ fontSize:'1rem' }}>{icon}</span>
+                    <span style={{ fontSize:'0.5rem', color: active?'#aac':'#445' }}>{label}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Speed / Intensity — only when motion active */}
+            {motion && (
+              <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <span style={{ fontSize:'0.6rem', color:'#445', width:32, letterSpacing:'0.04em' }}>SPEED</span>
+                  <button style={numBtn} onClick={() => {
+                    const v = motion.speed ?? 1
+                    const next = v <= 0.5 ? Math.max(0, +(v - 0.1).toFixed(1)) : Math.max(0.5, +(v - 0.5).toFixed(1))
+                    onSetMotion({ ...motion, speed: next })
+                  }}>−</button>
+                  <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:22, textAlign:'center' }}>{(motion.speed ?? 1).toFixed(1)}</span>
+                  <button style={numBtn} onClick={() => {
+                    const v = motion.speed ?? 1
+                    const next = v < 0.5 ? Math.min(5, +(v + 0.1).toFixed(1)) : Math.min(5, +(v + 0.5).toFixed(1))
+                    onSetMotion({ ...motion, speed: next })
+                  }}>+</button>
+                </div>
+                {[['INTEN', 'intensity', 2, 40, 2, v => v]].map(([lbl, key, mn, mx, step, fmt]) => (
+                  <div key={key} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                    <span style={{ fontSize:'0.6rem', color:'#445', width:32, letterSpacing:'0.04em' }}>{lbl}</span>
+                    <button style={numBtn} onClick={() => onSetMotion({...motion, [key]: Math.max(mn, (motion[key]??mn+step)-step)})}>−</button>
+                    <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:22, textAlign:'center' }}>{fmt(motion[key]??mn+step)}</span>
+                    <button style={numBtn} onClick={() => onSetMotion({...motion, [key]: Math.min(mx, (motion[key]??mn)+step)})}>+</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ borderTop:'1px solid #2a3358', margin:'2px 0' }} />
+
+            {/* Color cycle */}
+            <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+              <button style={{ ...iconBtn(!!colorCycle), fontSize:'0.85rem', padding:'3px 6px' }}
+                title="Color cycle" onClick={() => onSetColorCycle(colorCycle ? 0 : 4)}>⬡</button>
+              <span style={{ fontSize:'0.65rem', color:'#556', flex:1 }}>Color cycle</span>
+              {colorCycle > 0 && (
+                <>
+                  <button style={numBtn} onClick={() => onSetColorCycle(Math.max(1, colorCycle - 1))}>−</button>
+                  <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:20, textAlign:'center' }}>{colorCycle}s</span>
+                  <button style={numBtn} onClick={() => onSetColorCycle(Math.min(20, colorCycle + 1))}>+</button>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* -- Image URL panel (for image-shape nodes) -- */}
+      {panel === 'imageUrl' && (
         <ImageUrlPanel
           imageUrl={imageUrl}
           onSet={url => { onSetImageUrl(url); setPanel(null) }}
@@ -2128,44 +3288,26 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 }
 
 function ImageUrlPanel({ imageUrl, onSet, onBack, backBtn }) {
-  const [draft, setDraft] = useState(imageUrl || '')
+  const [draft, setDraft] = React.useState(imageUrl || '')
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:240 }}>
       <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
         <button style={backBtn} onClick={onBack}>‹</button>
         <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>IMAGE URL</span>
       </div>
-      <input
-        autoFocus
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onKeyDown={e => {
-          e.stopPropagation()
-          if (e.key === 'Enter') { e.preventDefault(); onSet(draft.trim()) }
-          if (e.key === 'Escape') { e.preventDefault(); onBack() }
-        }}
+      <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); onSet(draft.trim()) } if (e.key === 'Escape') { e.preventDefault(); onBack() } }}
         placeholder="Paste image URL…"
-        style={{
-          background:'#0e0e1c', border:'1px solid #2d3a6a', color:'#c7d0f8',
-          borderRadius:5, padding:'6px 8px', fontSize:'0.82rem',
-          outline:'none', width:'100%', boxSizing:'border-box',
-        }}
-      />
-      {draft && (
-        <img src={draft} alt="" style={{ width:'100%', maxHeight:120, objectFit:'cover', borderRadius:5, opacity: 0.9 }}
-          onError={e => { e.target.style.display='none' }} />
-      )}
-      <button
-        onClick={() => onSet(draft.trim())}
+        style={{ background:'#0e0e1c', border:'1px solid #2d3a6a', color:'#c7d0f8', borderRadius:5, padding:'6px 8px', fontSize:'0.82rem', outline:'none', width:'100%', boxSizing:'border-box' }} />
+      {draft && <img src={draft} alt="" style={{ width:'100%', maxHeight:120, objectFit:'cover', borderRadius:5, opacity:0.9 }} onError={e => { e.target.style.display='none' }} />}
+      <button onClick={() => onSet(draft.trim())}
         style={{ padding:'5px', borderRadius:5, border:'1px solid #5b6af0', background:'#1a1f4a', color:'#c5d0ff', cursor:'pointer', fontSize:'0.78rem' }}>
         Set image
       </button>
-      {imageUrl && (
-        <button onClick={() => onSet('')}
-          style={{ padding:'5px', borderRadius:5, border:'1px solid #2d3a6a', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:'0.78rem' }}>
-          Clear
-        </button>
-      )}
+      {imageUrl && <button onClick={() => onSet('')}
+        style={{ padding:'5px', borderRadius:5, border:'1px solid #2d3a6a', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:'0.78rem' }}>
+        Clear
+      </button>}
     </div>
   )
 }
@@ -2177,6 +3319,6 @@ const confirmStyle = { position:'absolute', inset:0, background:'rgba(0,0,0,0.5)
 const confirmBox = { background:'#16162a', border:'1px solid #2d3a6a', borderRadius:10, padding:'1.25rem 1.5rem', minWidth:260, boxShadow:'0 8px 32px rgba(0,0,0,0.6)' }
 const confirmCancelBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px solid #2d3a6a', background:'transparent', color:'#888', cursor:'pointer', fontSize:'0.82rem' }
 const confirmOkBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px solid #f87171', background:'#2a1a1a', color:'#f87171', cursor:'pointer', fontSize:'0.82rem', fontWeight:600 }
-const canvasBtnsStyle = { position:'absolute', bottom:'1.25rem', right:'1.25rem', display:'flex', gap:8 }
 const canvasBtnStyle = { padding:'0.45rem 0.85rem', borderRadius:7, border:'1px solid #2d3a6a', background:'#12122a', color:'#5b6af0', cursor:'pointer', fontSize:'0.82rem', fontWeight:600, boxShadow:'0 2px 12px rgba(0,0,0,0.4)' }
+const sideToolBtnStyle = { padding:'0.3rem 0.6rem', borderRadius:5, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:'0.76rem', fontWeight:600, whiteSpace:'nowrap' }
 const topBtnStyle = { padding:'0.3rem 0.8rem', borderRadius:6, border:'1px solid #2d3a6a', background:'rgba(18,18,42,0.92)', color:'#7b8fcc', cursor:'pointer', fontSize:'0.78rem', fontWeight:600, backdropFilter:'blur(4px)' }

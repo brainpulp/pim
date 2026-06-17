@@ -31,7 +31,6 @@ export default function App() {
     } catch { return null }
   })
   const [view, setView] = useState('graph')
-  const [navActions, setNavActions] = useState(null)
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const renameInputRef = useRef()
@@ -93,17 +92,9 @@ export default function App() {
         ) : (
           <span
             style={projectNameStyle}
-            title="Double-click to rename"
-            onDoubleClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
+            title="Click to rename"
+            onClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
           >{project.name}</span>
-        )}
-        {view === 'graph' && navActions && (
-          <div style={{ display: 'flex', gap: 5, marginLeft: 8 }}>
-            <div style={{ width: 1, background: '#2a2a3e', alignSelf: 'stretch', margin: '4px 2px' }} />
-            {[['+ View', navActions.addView], ['+ Frame', navActions.addFrame], ['+ Node', navActions.addNode], ['+ Root', navActions.addRoot]].map(([label, fn]) => (
-              <button key={label} style={navAddBtnStyle} onClick={fn}>{label}</button>
-            ))}
-          </div>
         )}
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {['graph', 'table'].map(v => (
@@ -127,7 +118,6 @@ export default function App() {
             projectId={project.id}
             projectName={project.name}
             onBack={() => setProject(null)}
-            onSetNavActions={setNavActions}
           />
           </AppErrorBoundary>
         )}
@@ -149,7 +139,7 @@ const backBtnStyle = {
 const projectNameStyle = {
   fontSize: '0.85rem', color: '#888', fontWeight: 500,
   maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  cursor: 'default',
+  cursor: 'pointer',
 }
 const projectRenameInputStyle = {
   fontSize: '0.85rem', color: '#fff', fontWeight: 500,
@@ -161,10 +151,6 @@ const navBtnStyle = {
   background: 'transparent', color: '#666', cursor: 'pointer', fontSize: '0.82rem', textTransform: 'capitalize',
 }
 const navBtnActiveStyle = { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' }
-const navAddBtnStyle = {
-  padding: '0.2rem 0.65rem', borderRadius: 5, border: '1px solid #2a2a3e',
-  background: 'transparent', color: '#7b8fcc', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 600,
-}
 const signOutStyle = {
   marginLeft: 'auto', padding: '0.25rem 0.75rem', borderRadius: 6,
   border: '1px solid #2a2a3e', background: 'transparent', color: '#555',

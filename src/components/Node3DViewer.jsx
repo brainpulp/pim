@@ -26,7 +26,7 @@ function ModelOBJ({ url }) {
   return <primitive object={fitted} />
 }
 
-// Capture canvas to JPEG once after first frame with model visible
+// Capture canvas to PNG once after first frame with model visible
 function ThumbnailCapture({ onCapture }) {
   const { gl } = useThree()
   const done = useRef(false)
@@ -34,20 +34,19 @@ function ThumbnailCapture({ onCapture }) {
     if (done.current) return
     done.current = true
     setTimeout(() => {
-      try { onCapture(gl.domElement.toDataURL('image/jpeg', 0.7)) } catch (_) {}
+      try { onCapture(gl.domElement.toDataURL('image/png')) } catch (_) {}
     }, 300)
   })
   return null
 }
 
 // Restores camera on mount; saves position+target on orbit end and on unmount
-function CameraController({ camState, onCamEnd }) {
-  const { camera } = useThree()
+function CameraController({ camState, onCamEnd, onCapture, autoRotate, autoRotateSpeed }) {
+  const { camera, gl } = useThree()
   const ref = useRef()
   const onCamEndRef = useRef(onCamEnd)
   useEffect(() => { onCamEndRef.current = onCamEnd })
 
-  // Freeze camState at mount — prop changes from onCamEnd store updates must not re-apply camera
   const initStateRef = useRef(camState)
 
   useEffect(() => {
@@ -62,7 +61,6 @@ function CameraController({ camState, onCamEnd }) {
     return () => clearTimeout(t)
   }, []) // eslint-disable-line
 
-  // Save camera on unmount (handles deselect before onEnd fires)
   useEffect(() => {
     return () => {
       try {
@@ -77,14 +75,16 @@ function CameraController({ camState, onCamEnd }) {
       enablePan={true}
       minDistance={0.5}
       maxDistance={20}
+      autoRotate={autoRotate}
+      autoRotateSpeed={autoRotateSpeed}
       mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }}
       touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
       onEnd={() => {
         if (!ref.current) return
-        onCamEndRef.current?.({
-          pos: camera.position.toArray(),
-          target: ref.current.target.toArray(),
-        })
+        onCamEndRef.current?.({ pos: camera.position.toArray(), target: ref.current.target.toArray() })
+        if (onCapture) setTimeout(() => {
+          try { onCapture(gl.domElement.toDataURL('image/png')) } catch (_) {}
+        }, 150)
       }}
     />
   )
@@ -104,10 +104,9 @@ class ErrorBoundary extends Component {
   }
 }
 
-// Returns a usable URL for the model — either the storage URL directly, or a blob URL from base64
 function useStagedBlobUrl(modelData, modelType) {
   const [url, setUrl] = useState(null)
-  const prevUrl = useRef(null) // only tracks blob: URLs we created
+  const prevUrl = useRef(null)
 
   useEffect(() => {
     if (!modelData || !modelType) {
@@ -115,13 +114,11 @@ function useStagedBlobUrl(modelData, modelType) {
       setUrl(null)
       return
     }
-    // Storage URL — use directly, no blob creation needed
     if (modelData.startsWith('https://')) {
       if (prevUrl.current) { URL.revokeObjectURL(prevUrl.current); prevUrl.current = null }
       setUrl(modelData)
       return
     }
-    // Legacy base64 — convert to blob URL
     const mime = modelType === 'glb' ? 'model/gltf-binary' : 'text/plain'
     try {
       const bin = atob(modelData)
@@ -135,13 +132,22 @@ function useStagedBlobUrl(modelData, modelType) {
     } catch (e) { console.error('blob url:', e) }
   }, [modelData, modelType])
 
-  // Revoke blob URLs on unmount (storage URLs need no cleanup)
   useEffect(() => () => { if (prevUrl.current) URL.revokeObjectURL(prevUrl.current) }, [])
 
   return url
 }
 
-export default function Node3DViewer({ modelData, modelType, camState, onCamEnd, onThumbnailCapture, onImport }) {
+const ROTATE_MODES = ['never', 'selected', 'always']
+const ROTATE_LABELS = { never: '○', selected: '↻', always: '∞' }
+const ROTATE_TITLES = { never: 'Auto-rotate: off', selected: 'Auto-rotate: when viewing', always: 'Auto-rotate: always' }
+
+export default function Node3DViewer({
+  modelData, modelType, camState, onCamEnd, onThumbnailCapture, onImport,
+  autoRotate = false, autoRotateSpeed = 2,
+  rotateMode = 'never', onRotateModeChange, onRotateSpeedChange,
+  isFullscreen = false, onToggleFullscreen,
+  readOnly = false,
+}) {
   const fileInputRef = useRef()
   const blobUrl = useStagedBlobUrl(modelData, modelType)
 
@@ -150,6 +156,18 @@ export default function Node3DViewer({ modelData, modelType, camState, onCamEnd,
     if (file) onImport(file)
     e.target.value = ''
   }
+
+  const cycleRotateMode = () => {
+    const next = ROTATE_MODES[(ROTATE_MODES.indexOf(rotateMode) + 1) % ROTATE_MODES.length]
+    onRotateModeChange?.(next)
+  }
+
+  const btnStyle = {
+    background: 'rgba(10,10,30,0.75)', border: '1px solid #2d3a6a',
+    borderRadius: 5, color: '#88b4e8', cursor: 'pointer',
+    fontSize: '0.7rem', padding: '3px 7px', lineHeight: 1.2,
+  }
+  const activeBtnStyle = { ...btnStyle, color: '#5b6af0', borderColor: '#5b6af0' }
 
   if (!modelData) {
     return (
@@ -160,12 +178,14 @@ export default function Node3DViewer({ modelData, modelType, camState, onCamEnd,
           <line x1="12" y1="22.08" x2="12" y2="12"/>
         </svg>
         <span style={{ fontSize:'0.72rem', color:'#556' }}>No model loaded</span>
-        <button onClick={() => fileInputRef.current?.click()}
-          style={{ padding:'5px 14px', background:'#12182e', border:'1px solid #2d3a6a', borderRadius:6, fontSize:'0.72rem', color:'#88b4e8', cursor:'pointer' }}>
-          Import 3D file
-        </button>
-        <span style={{ fontSize:'0.62rem', color:'#334' }}>GLB · OBJ</span>
-        <input ref={fileInputRef} type="file" accept=".glb,.obj" style={{ display:'none' }} onChange={handleFile} />
+        {!readOnly && <>
+          <button onClick={() => fileInputRef.current?.click()}
+            style={{ padding:'5px 14px', background:'#12182e', border:'1px solid #2d3a6a', borderRadius:6, fontSize:'0.72rem', color:'#88b4e8', cursor:'pointer' }}>
+            Import 3D file
+          </button>
+          <span style={{ fontSize:'0.62rem', color:'#334' }}>GLB · OBJ</span>
+          <input ref={fileInputRef} type="file" accept=".glb,.obj" style={{ display:'none' }} onChange={handleFile} />
+        </>}
       </div>
     )
   }
@@ -192,12 +212,52 @@ export default function Node3DViewer({ modelData, modelType, camState, onCamEnd,
             <Environment preset="studio" />
             {onThumbnailCapture && <ThumbnailCapture onCapture={onThumbnailCapture} />}
           </Suspense>
-          <CameraController camState={camState} onCamEnd={onCamEnd} />
+          <CameraController
+            camState={camState} onCamEnd={onCamEnd} onCapture={onThumbnailCapture}
+            autoRotate={autoRotate} autoRotateSpeed={autoRotateSpeed}
+          />
         </Canvas>
-        <button onClick={() => fileInputRef.current?.click()} title="Replace model"
-          style={{ position:'absolute', bottom:6, right:6, padding:'3px 8px', background:'rgba(10,10,30,0.7)', border:'1px solid #2d3a6a', borderRadius:5, fontSize:'0.65rem', color:'#5b6af0', cursor:'pointer' }}>
-          ↑ replace
-        </button>
+
+        {/* Bottom control strip */}
+        {!readOnly && (
+          <div style={{ position:'absolute', bottom:6, left:6, right:6, display:'flex', alignItems:'center', gap:4, pointerEvents:'none' }}>
+            {/* Fullscreen toggle */}
+            <button title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              onClick={onToggleFullscreen}
+              style={{ ...btnStyle, pointerEvents:'all', fontSize:'0.8rem', padding:'2px 6px' }}>
+              {isFullscreen ? '⤡' : '⤢'}
+            </button>
+
+            <div style={{ flex: 1 }} />
+
+            {/* Rotate mode */}
+            <button title={ROTATE_TITLES[rotateMode]}
+              onClick={cycleRotateMode}
+              style={{ ...(rotateMode !== 'never' ? activeBtnStyle : btnStyle), pointerEvents:'all' }}>
+              {ROTATE_LABELS[rotateMode]}
+            </button>
+
+            {/* Speed — only when rotating */}
+            {rotateMode !== 'never' && (<>
+              <button title="Slower" onClick={() => onRotateSpeedChange?.(Math.max(0.5, autoRotateSpeed - 0.5))}
+                style={{ ...btnStyle, pointerEvents:'all', padding:'3px 5px' }}>−</button>
+              <span style={{ fontSize:'0.65rem', color:'#88b4e8', minWidth:18, textAlign:'center', pointerEvents:'none' }}>
+                {autoRotateSpeed.toFixed(1)}
+              </span>
+              <button title="Faster" onClick={() => onRotateSpeedChange?.(Math.min(10, autoRotateSpeed + 0.5))}
+                style={{ ...btnStyle, pointerEvents:'all', padding:'3px 5px' }}>+</button>
+            </>)}
+
+            <div style={{ flex: 1 }} />
+
+            {/* Replace model */}
+            <button onClick={() => fileInputRef.current?.click()} title="Replace model"
+              style={{ ...btnStyle, pointerEvents:'all' }}>
+              ↑
+            </button>
+          </div>
+        )}
+
         <input ref={fileInputRef} type="file" accept=".glb,.obj" style={{ display:'none' }} onChange={handleFile} />
       </div>
     </ErrorBoundary>

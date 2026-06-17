@@ -79,8 +79,8 @@ export async function uploadThumbnail(dataUrl, projectId, nodeId) {
   try {
     const res = await fetch(dataUrl)
     const blob = await res.blob()
-    const path = `${projectId}/${nodeId}.thumb.jpg`
-    const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: 'image/jpeg' })
+    const path = `${projectId}/${nodeId}.thumb.png`
+    const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: 'image/png' })
     if (error) throw error
     const { data } = supabase.storage.from(BUCKET).getPublicUrl(path)
     return data.publicUrl
