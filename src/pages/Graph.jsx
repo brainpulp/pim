@@ -1621,6 +1621,10 @@ export default function Graph({ projectId, projectName }) {
               onMouseEnter={() => showToolbar(hn.id)}
               onMouseLeave={hideToolbar}
               onWheel={e => svgRef.current?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode, clientX: e.clientX, clientY: e.clientY, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }))}
+              nodeId={hn.id}
+              depthExpand={depthExpand?.nodeId === hn.id ? depthExpand : null}
+              onSetDepthExpand={setDepthExpand}
+              maxExpandRadius={maxExpandRadius}
             />
           )
         })()}
@@ -1714,45 +1718,6 @@ export default function Graph({ projectId, projectName }) {
         </div>}
 
 
-        {/* Expand-from-node slider */}
-        {!isPresenting && (() => {
-          const focalId = depthExpand?.nodeId
-          const focalLabel = focalId ? storeNodes.find(n => n.id === focalId)?.label : null
-          const radius = depthExpand?.radius ?? 0
-          const isOn = depthExpand !== null
-          const selectedNodeId = selected?.type === 'node' ? selected.id : null
-          return (
-            <div style={{ position:'absolute', bottom:'1.25rem', left:'1.25rem', display:'flex', alignItems:'center', gap:8, background:'rgba(18,18,42,0.92)', border:`1px solid ${isOn ? '#5b6af0' : '#2d3a6a'}`, borderRadius:8, padding:'6px 10px', backdropFilter:'blur(4px)', zIndex:10 }}>
-              <button
-                title={isOn ? 'Exit expand mode' : 'Expand from selected node'}
-                onClick={() => {
-                  if (isOn) { setDepthExpand(null) }
-                  else if (selectedNodeId) { setDepthExpand({ nodeId: selectedNodeId, radius: 1 }) }
-                }}
-                style={{ background:'transparent', border:'none', color: isOn ? '#5b6af0' : '#445', cursor:'pointer', fontSize:'0.9rem', padding:'0 2px', lineHeight:1 }}>
-                ⊛
-              </button>
-              {isOn && (
-                <>
-                  {focalLabel && <span style={{ fontSize:'0.7rem', color:'#7b8fcc', maxWidth:80, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{focalLabel}</span>}
-                  <span style={{ fontSize:'0.65rem', color:'#7080a0', userSelect:'none' }}>+1</span>
-                  <input type="range" min={1} max={Math.max(1, maxExpandRadius)} value={radius}
-                    onChange={e => setDepthExpand(d => ({ ...d, radius: Number(e.target.value) }))}
-                    style={{ width:80, accentColor:'#5b6af0', cursor:'pointer' }} />
-                  <span style={{ fontSize:'0.65rem', color:'#7080a0', userSelect:'none' }}>+{Math.max(1, maxExpandRadius)}</span>
-                  <span style={{ fontSize:'0.75rem', color:'#c5d0ff', minWidth:16, textAlign:'center', userSelect:'none', fontWeight:600 }}>+{radius}</span>
-                  {selectedNodeId && selectedNodeId !== focalId && (
-                    <button onClick={() => setDepthExpand({ nodeId: selectedNodeId, radius })}
-                      style={{ background:'transparent', border:'1px solid #2d3a6a', color:'#7b8fcc', cursor:'pointer', fontSize:'0.65rem', padding:'2px 5px', borderRadius:4 }}>
-                      refocus
-                    </button>
-                  )}
-                </>
-              )}
-              {!isOn && <span style={{ fontSize:'0.65rem', color:'#6878a8', userSelect:'none' }}>expand</span>}
-            </div>
-          )
-        })()}
 
 
         {/* Back arrow -- drill exit, top-left canvas */}
@@ -2637,10 +2602,12 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
               </g>
             )}
             {isSelected && (
-              <circle cx={handleR} cy={handleR} r={5}
-                fill="#5b6af0" stroke="#fff" strokeWidth={1}
-                onMouseDown={e => { e.stopPropagation(); onEmojiResizeStart?.(e, node.id, em.id, (node.x || 0) + ex, (node.y || 0) + ey) }}
-                style={{ cursor: 'nwse-resize' }} />
+              <g transform={`translate(${badgeR.toFixed(1)},${badgeR.toFixed(1)})`}>
+                <circle r={10} fill="transparent"
+                  onMouseDown={e => { e.stopPropagation(); onEmojiResizeStart?.(e, node.id, em.id, (node.x || 0) + ex, (node.y || 0) + ey) }}
+                  style={{ cursor: 'nwse-resize' }} />
+                <circle r={5} fill="#5b6af0" stroke="#fff" strokeWidth={1} style={{ pointerEvents:'none' }} />
+              </g>
             )}
           </g>
         )
@@ -2852,7 +2819,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl }) {
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [notesDraft, setNotesDraft] = useState(notes)
@@ -2933,6 +2900,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           {divider}
           <button style={iconBtn(false)} title="Show/hide" onClick={onHide}>👁</button>
           <button style={iconBtn(false)} title="Drill" onClick={onDrill}>⊕</button>
+          <button style={iconBtn(depthExpand !== null)} title="Expand hops" onClick={() => {
+            if (depthExpand !== null) { onSetDepthExpand?.(null) }
+            else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
+          }}>⊛</button>
           <button style={iconBtn(false)} title="Note" onClick={() => setPanel('note')}>✎</button>
           <button style={iconBtn(!!viewProps.nodeMotion || !!viewProps.nodeColorCycle)} title="Motion & color cycle" onClick={() => setPanel('motion')}>✦</button>
           <button style={iconBtn(false)} title="Radiate to children" onClick={() => setPanel('radiate')}>❋</button>
@@ -3323,6 +3294,28 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           onBack={() => setPanel(null)}
           backBtn={backBtn}
         />
+      )}
+
+      {/* ── Expand panel ── */}
+      {panel === 'expand' && depthExpand !== null && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:190 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+            <button style={backBtn} onClick={() => { onSetDepthExpand?.(null); setPanel(null) }}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>EXPAND HOPS</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <span style={{ fontSize:'0.65rem', color:'#7080a0' }}>+1</span>
+            <input type="range" min={1} max={Math.max(1, maxExpandRadius || 1)} value={depthExpand.radius}
+              onChange={e => onSetDepthExpand?.({ ...depthExpand, radius: Number(e.target.value) })}
+              style={{ flex:1, accentColor:'#5b6af0' }} />
+            <span style={{ fontSize:'0.65rem', color:'#7080a0' }}>+{Math.max(1, maxExpandRadius || 1)}</span>
+          </div>
+          <div style={{ textAlign:'center', fontSize:'0.85rem', color:'#c5d0ff', fontWeight:600 }}>+{depthExpand.radius} hops</div>
+          <button onClick={() => { onSetDepthExpand?.(null); setPanel(null) }}
+            style={{ background:'transparent', border:'1px solid #2d3a6a', color:'#f87171', cursor:'pointer', fontSize:'0.7rem', padding:'3px 8px', borderRadius:4, alignSelf:'flex-end' }}>
+            Clear
+          </button>
+        </div>
       )}
     </div>
   )
