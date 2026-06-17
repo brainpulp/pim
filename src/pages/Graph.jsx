@@ -155,6 +155,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   useEffect(() => { selectedRef.current = selected }, [selected])
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const [isPanning, setIsPanning] = useState(false)
+  const [depthFilter, setDepthFilter] = useState(null) // null = off, number = max visible depth
   const [showBgPicker, setShowBgPicker] = useState(false)
   const [keepEditId, setKeepEditId] = useState(null)
   const canvasFocused = useRef(true)
@@ -279,6 +280,28 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
   }), [viewNodeProps])
 
+  // BFS depth from root nodes (no incoming edges)
+  const nodeDepths = useMemo(() => {
+    const targetIds = new Set(storeEdges.map(e => e.target))
+    const roots = storeNodes.filter(n => !targetIds.has(n.id)).map(n => n.id)
+    const depths = {}
+    const q = roots.map(id => { depths[id] = 0; return id })
+    while (q.length) {
+      const cur = q.shift()
+      storeEdges.forEach(e => {
+        if (e.source === cur && depths[e.target] === undefined) {
+          depths[e.target] = depths[cur] + 1
+          q.push(e.target)
+        }
+      })
+    }
+    // Any disconnected nodes get depth 0
+    storeNodes.forEach(n => { if (depths[n.id] === undefined) depths[n.id] = 0 })
+    return depths
+  }, [storeNodes, storeEdges])
+
+  const maxDepth = useMemo(() => Math.max(0, ...Object.values(nodeDepths)), [nodeDepths])
+
   const visibleNodeIds = useMemo(() => {
     if (drillRoot) {
       const desc = new Set([drillRoot])
@@ -289,8 +312,12 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
       }
       return desc
     }
-    return new Set(storeNodes.filter(n => viewNodeProps[n.id]?.visible !== false).map(n => n.id))
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps])
+    return new Set(storeNodes.filter(n => {
+      if (viewNodeProps[n.id]?.visible === false) return false
+      if (depthFilter !== null && (nodeDepths[n.id] ?? 0) > depthFilter) return false
+      return true
+    }).map(n => n.id))
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, depthFilter, nodeDepths])
 
   const scheduleRender = useCallback(() => {
     if (frameRef.current) return
@@ -720,6 +747,10 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
     simRef.current?.alpha(0.5).restart()
   }, [releaseAllAnchors])
+
+  useEffect(() => {
+    if (depthFilter !== null) setTimeout(zoomExtents, 30)
+  }, [depthFilter]) // eslint-disable-line
 
   const zoomExtents = useCallback(() => {
     const vis = simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && n.x != null && !isNaN(n.x))
@@ -1158,6 +1189,30 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           </span>
         </div>}
 
+
+        {/* Depth slider */}
+        {!isPresenting && maxDepth > 0 && (
+          <div style={{ position:'absolute', bottom:'1.25rem', left:'1.25rem', display:'flex', alignItems:'center', gap:8, background:'rgba(18,18,42,0.92)', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 10px', backdropFilter:'blur(4px)', zIndex:10 }}>
+            <button
+              title={depthFilter === null ? 'Enable depth filter' : 'Disable depth filter'}
+              onClick={() => setDepthFilter(d => d === null ? maxDepth : null)}
+              style={{ background:'transparent', border:'none', color: depthFilter !== null ? '#5b6af0' : '#445', cursor:'pointer', fontSize:'0.85rem', padding:'0 2px', lineHeight:1 }}>
+              ⊚
+            </button>
+            {depthFilter !== null && (
+              <>
+                <span style={{ fontSize:'0.68rem', color:'#556', userSelect:'none' }}>L1</span>
+                <input type="range" min={0} max={maxDepth} value={depthFilter}
+                  onChange={e => setDepthFilter(Number(e.target.value))}
+                  style={{ width:90, accentColor:'#5b6af0', cursor:'pointer' }} />
+                <span style={{ fontSize:'0.68rem', color:'#556', userSelect:'none' }}>L{maxDepth + 1}</span>
+                <span style={{ fontSize:'0.75rem', color:'#7b8fcc', minWidth:24, textAlign:'center', userSelect:'none' }}>
+                  {depthFilter + 1}
+                </span>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Canvas buttons */}
         {!isPresenting && <div style={canvasBtnsStyle}>
