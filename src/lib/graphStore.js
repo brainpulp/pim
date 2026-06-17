@@ -28,7 +28,7 @@ export const PALETTE = [
   '#0c0c1a', '#0a1628', '#0a1a0a', '#1a0a1a',
 ]
 
-export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none']
+export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none', 'image']
 
 export const FILL_COLORS = [
   '#1d4ed8', '#2563eb', '#0f766e', '#0d9488',
@@ -111,6 +111,10 @@ const useGraphStore = create((set, get) => ({
 
   updateLabel: (id, label) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, label } : n),
+  })),
+
+  setImageUrl: (id, imageUrl) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, imageUrl } : n),
   })),
 
   set3DModel: (id, modelData, modelType) => set(s => ({

@@ -35,6 +35,7 @@ function shapeDims(shape, r, label, fontSize) {
   }
   switch (shape) {
     case '3d':        return { halfW: r * 2.5, halfH: r * 2.5 }
+    case 'image':     return { halfW: r * 2.2, halfH: r * 1.6 }
     case 'frame':     return { halfW: r * 4.5, halfH: r * 3.5 }
     case 'ellipse':   return { halfW: r * 1.45, halfH: r * 0.9 }
     case 'roundrect': return { halfW: r * 1.5,  halfH: r * 0.85 }
@@ -63,8 +64,33 @@ function clipDist(shape, halfW, halfH, ux, uy) {
 }
 
 // â”€â”€ Shape SVG body â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter }) {
+function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter, imageUrl, nodeId }) {
   if (shape === 'none') return null
+  if (shape === 'image') {
+    const rx = 8
+    return (
+      <g filter={filter}>
+        {imageUrl ? (
+          <>
+            <defs>
+              <clipPath id={`img-clip-${nodeId}`}>
+                <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={rx} />
+              </clipPath>
+            </defs>
+            <image href={imageUrl} x={-halfW} y={-halfH} width={halfW*2} height={halfH*2}
+              preserveAspectRatio="xMidYMid slice" clipPath={`url(#img-clip-${nodeId})`}
+              style={{ pointerEvents:'none' }} />
+            <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={rx}
+              fill="none" stroke={stroke || 'rgba(255,255,255,0.15)'} strokeWidth={strokeWidth || 1} />
+          </>
+        ) : (
+          <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={rx}
+            fill={fill} stroke={stroke || 'rgba(255,255,255,0.15)'} strokeWidth={strokeWidth || 1}
+            strokeDasharray="4,3" />
+        )}
+      </g>
+    )
+  }
   if (shape === '3d') {
     // Cube wireframe icon centered, scaled to ~30% of the box
     const s = halfH * 0.3
@@ -196,6 +222,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   const addView         = useGraphStore(s => s.addView)
   const set3DModel      = useGraphStore(s => s.set3DModel)
   const setModelThumb   = useGraphStore(s => s.setModelThumb)
+  const setImageUrl     = useGraphStore(s => s.setImageUrl)
 
   // Register nav actions with parent App so buttons appear in the top bar
   useEffect(() => {
@@ -949,6 +976,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame').map(n => (
               <NodeShape key={n.id} node={n}
                 modelThumb={storeNodes.find(s => s.id === n.id)?.modelThumb}
+                imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
                 viewProps={getVP(n.id)}
                 isSelected={selected?.id === n.id && selected?.type === 'node'}
                 isHovered={hoveredNodeId === n.id}
@@ -1038,13 +1066,15 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
               notes={hs.notes || ''}
               onSetFill={c => setNodeViewProp(hn.id, 'fillColor', c)}
               onSetTextColor={c => setNodeViewProp(hn.id, 'textColor', c)}
-              onSetShape={s => setNodeViewProp(hn.id, 'shape', s)}
+              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent') }}
               onDrill={() => { setDrillRoot(hn.id); setHoveredNodeId(null); setTimeout(zoomExtents, 50) }}
               onHide={() => { setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
               onRelease={() => handleRelease(hn.id)}
               onDelete={() => { setConfirmDelete(hn.id); setHoveredNodeId(null) }}
               onNotesChange={notes => updateNotes(hn.id, notes)}
               isAnchored={hn.fx != null}
+              imageUrl={hs.imageUrl || ''}
+              onSetImageUrl={url => setImageUrl(hn.id, url)}
               onMouseEnter={() => showToolbar(hn.id)}
               onMouseLeave={hideToolbar}
               onWheel={e => svgRef.current?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode, clientX: e.clientX, clientY: e.clientY, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }))}
@@ -1636,7 +1666,7 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
 
 // â”€â”€â”€ NodeShape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onTab, onCreateSister, onMouseEnter, onMouseLeave, modelThumb }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onDelete, onLabelChange, onTab, onCreateSister, onMouseEnter, onMouseLeave, modelThumb, imageUrl }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const inputRef = useRef()
@@ -1709,7 +1739,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       {isHovered && !isSelected && shape !== 'none' && (
         <ShapeBody shape={shape} halfW={halfW + 2} halfH={halfH + 2} r={r + 2} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={1.5} />
       )}
-      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} />
+      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} imageUrl={imageUrl} nodeId={node.id} />
 
       {/* 3D thumbnail â€” shown when not live (node not selected) */}
       {shape === '3d' && modelThumb && !isSelected && (
@@ -1725,12 +1755,12 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         </>
       )}
 
-      {/* Label â€” inside box for normal shapes, below box as caption for 3D */}
-      {!editing && shape !== '3d' && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />}
-      {!editing && shape === '3d' && (
-        <text y={halfH + 16} textAnchor="middle" fontSize={Math.max(9, Math.round(11 * scale))}
-          fill={viewProps.textColor || '#ccd'} style={{ pointerEvents:'none', userSelect:'none' }}
-          dominantBaseline="hanging">
+      {/* Label — inside box for normal shapes, below box as caption for 3D/image */}
+      {!editing && shape !== '3d' && shape !== 'image' && <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />}
+      {!editing && (shape === '3d' || shape === 'image') && (
+        <text y={halfH + 14} textAnchor={'middle'} fontSize={Math.max(8, Math.round(10 * scale))}
+          fill={viewProps.textColor || '#aab'} style={{ pointerEvents:'none', userSelect:'none' }}
+          dominantBaseline={'hanging'}>
           {node.label}
         </text>
       )}
@@ -1838,7 +1868,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â”€â”€â”€ NodeToolbar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave, onWheel }) {
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onMouseEnter, onMouseLeave, onWheel, imageUrl, onSetImageUrl }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note'
   const [notesDraft, setNotesDraft] = useState(notes)
@@ -1846,7 +1876,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
   useEffect(() => { setNotesDraft(notes) }, [notes])
 
-  const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
+  const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡', image:'🖼' }
 
   const wrap = {
     position:'absolute', left: x, top: y, transform:'translateX(-50%)',
@@ -1882,6 +1912,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         <div style={{ display:'flex', gap:4, alignItems:'center' }}>
           <button style={iconBtn(false)} title="Color" onClick={() => setPanel('color')}>🎨</button>
           <button style={iconBtn(false)} title="Shape" onClick={() => setPanel('shape')}>◯</button>
+          {shape === 'image' && <button style={iconBtn(false)} title="Set image URL" onClick={() => setPanel('image')}>🖼</button>}
           {divider}
           <button style={iconBtn(false)} title="Show/hide" onClick={onHide}>👁</button>
           <button style={iconBtn(false)} title="Drill" onClick={onDrill}>⊕</button>
@@ -1982,6 +2013,59 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             }}
           />
         </div>
+      )}
+
+      {/* — Image URL panel — */}
+      {panel === 'image' && (
+        <ImageUrlPanel
+          imageUrl={imageUrl}
+          onSet={url => { onSetImageUrl(url); setPanel(null) }}
+          onBack={() => setPanel(null)}
+          backBtn={backBtn}
+        />
+      )}
+    </div>
+  )
+}
+
+function ImageUrlPanel({ imageUrl, onSet, onBack, backBtn }) {
+  const [draft, setDraft] = useState(imageUrl || '')
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:240 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+        <button style={backBtn} onClick={onBack}>‹</button>
+        <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>IMAGE URL</span>
+      </div>
+      <input
+        autoFocus
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { e.preventDefault(); onSet(draft.trim()) }
+          if (e.key === 'Escape') { e.preventDefault(); onBack() }
+        }}
+        placeholder="Paste image URL…"
+        style={{
+          background:'#0e0e1c', border:'1px solid #2d3a6a', color:'#c7d0f8',
+          borderRadius:5, padding:'6px 8px', fontSize:'0.82rem',
+          outline:'none', width:'100%', boxSizing:'border-box',
+        }}
+      />
+      {draft && (
+        <img src={draft} alt="" style={{ width:'100%', maxHeight:120, objectFit:'cover', borderRadius:5, opacity: 0.9 }}
+          onError={e => { e.target.style.display='none' }} />
+      )}
+      <button
+        onClick={() => onSet(draft.trim())}
+        style={{ padding:'5px', borderRadius:5, border:'1px solid #5b6af0', background:'#1a1f4a', color:'#c5d0ff', cursor:'pointer', fontSize:'0.78rem' }}>
+        Set image
+      </button>
+      {imageUrl && (
+        <button onClick={() => onSet('')}
+          style={{ padding:'5px', borderRadius:5, border:'1px solid #2d3a6a', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:'0.78rem' }}>
+          Clear
+        </button>
       )}
     </div>
   )
