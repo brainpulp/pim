@@ -19,6 +19,12 @@ Chronological record of work done across devices. Pull before starting, push aft
 
 ---
 
+## 2026-06-17
+- Added `image` node shape: rounded rectangle, displays image from URL, caption below
+- URL input panel in NodeToolbar with live preview, Set/Clear buttons
+- Auto-sets transparent fill when switching to image shape
+- `setImageUrl` action in graphStore (view-independent, stored on node)
+
 ## Next up
 - [ ] Investigate 3D node jerkiness during pan/zoom
 - [ ] Test project rename on live site
