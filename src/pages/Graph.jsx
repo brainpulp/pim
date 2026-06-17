@@ -1613,7 +1613,7 @@ export default function Graph({ projectId, projectName }) {
                 {ns.notes}
               </pre>
               <button onClick={() => setNotePopupId(null)}
-                style={{ position:'absolute', top:4, right:6, background:'none', border:'none', color:'#556', cursor:'pointer', fontSize:14 }}>x</button>
+                style={{ position:'absolute', top:4, right:6, background:'none', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14 }}>x</button>
             </div>
           )
         })()}
@@ -1703,11 +1703,11 @@ export default function Graph({ projectId, projectName }) {
               {isOn && (
                 <>
                   {focalLabel && <span style={{ fontSize:'0.7rem', color:'#7b8fcc', maxWidth:80, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{focalLabel}</span>}
-                  <span style={{ fontSize:'0.65rem', color:'#445', userSelect:'none' }}>+1</span>
+                  <span style={{ fontSize:'0.65rem', color:'#7080a0', userSelect:'none' }}>+1</span>
                   <input type="range" min={1} max={Math.max(1, maxExpandRadius)} value={radius}
                     onChange={e => setDepthExpand(d => ({ ...d, radius: Number(e.target.value) }))}
                     style={{ width:80, accentColor:'#5b6af0', cursor:'pointer' }} />
-                  <span style={{ fontSize:'0.65rem', color:'#445', userSelect:'none' }}>+{Math.max(1, maxExpandRadius)}</span>
+                  <span style={{ fontSize:'0.65rem', color:'#7080a0', userSelect:'none' }}>+{Math.max(1, maxExpandRadius)}</span>
                   <span style={{ fontSize:'0.75rem', color:'#c5d0ff', minWidth:16, textAlign:'center', userSelect:'none', fontWeight:600 }}>+{radius}</span>
                   {selectedNodeId && selectedNodeId !== focalId && (
                     <button onClick={() => setDepthExpand({ nodeId: selectedNodeId, radius })}
@@ -1717,7 +1717,7 @@ export default function Graph({ projectId, projectName }) {
                   )}
                 </>
               )}
-              {!isOn && <span style={{ fontSize:'0.65rem', color:'#334', userSelect:'none' }}>expand</span>}
+              {!isOn && <span style={{ fontSize:'0.65rem', color:'#6878a8', userSelect:'none' }}>expand</span>}
             </div>
           )
         })()}
@@ -1749,7 +1749,7 @@ export default function Graph({ projectId, projectName }) {
               style={{ position:'absolute', left: screenX, top: screenY, transform:'translateX(-50%)',
                 background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 8px',
                 display:'flex', flexDirection:'column', gap:4, zIndex:25, boxShadow:'0 4px 16px rgba(0,0,0,0.6)' }}>
-              <div style={{ fontSize:'0.63rem', color:'#556', letterSpacing:'0.06em' }}>FILL</div>
+              <div style={{ fontSize:'0.63rem', color:'#8090b8', letterSpacing:'0.06em' }}>FILL</div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:188 }}>
                 <div title="No fill" onClick={() => setNodeViewProp(selected.id, 'fillColor', 'none')}
                   style={{ width:20, height:20, borderRadius:3, cursor:'pointer',
@@ -2025,7 +2025,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
               </div>
               {/* Per-slide background color */}
               <div onMouseDown={e => e.stopPropagation()} style={{ display:'flex', alignItems:'center', gap:3, padding:'3px 8px 5px', flexWrap:'wrap' }}>
-                <span style={{ fontSize:'0.58rem', color:'#445', letterSpacing:'0.05em', marginRight:2 }}>BG</span>
+                <span style={{ fontSize:'0.58rem', color:'#7080a0', letterSpacing:'0.05em', marginRight:2 }}>BG</span>
                 <div title="Default" onClick={e => { e.stopPropagation(); setSlideBgColor(activeSlideshowId, fn.id, null) }}
                   style={{ width:13, height:13, borderRadius:2, cursor:'pointer',
                     backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
@@ -2047,10 +2047,10 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
 
       {nonSlideFrames.length > 0 && (
         <div style={{ marginTop:8, paddingTop:8, borderTop:'1px solid #1e2a3a' }}>
-          <div style={{ fontSize:'0.62rem', color:'#445', marginBottom:6, letterSpacing:'0.06em' }}>NOT IN SLIDESHOW</div>
+          <div style={{ fontSize:'0.62rem', color:'#7080a0', marginBottom:6, letterSpacing:'0.06em' }}>NOT IN SLIDESHOW</div>
           {nonSlideFrames.map(fn => (
             <div key={fn.id} style={{ display:'flex', alignItems:'center', gap:4, marginBottom:4 }}>
-              <span style={{ flex:1, fontSize:'0.72rem', color:'#556', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+              <span style={{ flex:1, fontSize:'0.72rem', color:'#8090b8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                 {fn.label || 'Frame'}
               </span>
               <button onClick={() => addSlide(fn.id)}
@@ -2554,9 +2554,8 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             <text textAnchor="middle" dominantBaseline="central" fill="#5b6af0" fontSize={9} style={{ userSelect:'none', pointerEvents:'none' }}>✎</text>
           </g>
         )}
-      </AnimatedG>
 
-      {/* Emoji badges — outside AnimatedG so they stay fixed while node wiggles */}
+      {/* Emoji badges — move with AnimatedG so they animate with the node */}
       {(viewProps.nodeEmojis || []).map(em => {
         const cosA = Math.cos(em.angle), sinA = Math.sin(em.angle)
         let ex, ey
@@ -2702,6 +2701,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             style={{ userSelect:'none', pointerEvents:'none' }}>{isCollapsed ? '▸' : '▾'}</text>
         </g>
       )}
+      </AnimatedG>
 
       {/* Edit input — for 3D nodes render at caption position below box (inside box is covered by 3D div) */}
       {editing && (() => {
@@ -2869,7 +2869,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   })
 
   const backBtn = {
-    background:'transparent', border:'none', color:'#556', cursor:'pointer',
+    background:'transparent', border:'none', color:'#8090b8', cursor:'pointer',
     fontSize:'0.78rem', padding:'0 4px 0 0', lineHeight:1,
   }
 
@@ -2911,7 +2911,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>COLOR</span>
           </div>
           <div>
-            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>FILL</div>
+            <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>FILL</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
               <div title="Transparent" onClick={() => onSetFill('none')} style={{
                 width:18, height:18, borderRadius:4, cursor:'pointer',
@@ -2928,7 +2928,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             </div>
           </div>
           <div>
-            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>OUTLINE</div>
+            <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>OUTLINE</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
               <div title="No outline" onClick={() => { onSetStrokeColor(null); onSetStrokeWidth(0) }} style={{
                 width:18, height:18, borderRadius:4, cursor:'pointer', boxSizing:'border-box',
@@ -2953,7 +2953,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             </div>
           </div>
           <div>
-            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>GLOW</div>
+            <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>GLOW</div>
             <div style={{ display:'flex', gap:5, alignItems:'center' }}>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.max(0, ((viewProps.borderBlur||0)-1)))}>-</button>
               <span style={{ fontSize:'0.7rem', color: (viewProps.borderBlur||0) > 0 ? '#88b4e8' : '#445', width:18, textAlign:'center' }}>{(viewProps.borderBlur||0)}</span>
@@ -2962,7 +2962,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             </div>
           </div>
           <div>
-            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>OPACITY</div>
+            <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>OPACITY</div>
             <div style={{ display:'flex', gap:5, alignItems:'center' }}>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetOpacity(Math.max(0.05, +((viewProps.opacity??1)-0.1).toFixed(2)))}>-</button>
               <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:32, textAlign:'center' }}>{Math.round((viewProps.opacity??1)*100)}%</span>
@@ -2971,7 +2971,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             </div>
           </div>
           <div>
-            <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>TEXT</div>
+            <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>TEXT</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
               {COLOR_PALETTE.map(c => (
                 <div key={c} onClick={() => onSetTextColor(c)} style={{
@@ -3071,7 +3071,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                   style={{ background:'transparent', border:'1px solid #2a3358', borderRadius:4, cursor:'pointer', fontSize:'1.1rem', padding:'3px 5px', lineHeight:1 }}>{em}</button>
               ))}
               {shownEmojis.length === 0 && (
-                <span style={{ fontSize:'0.7rem', color:'#445', padding:'4px 0' }}>No matches</span>
+                <span style={{ fontSize:'0.7rem', color:'#7080a0', padding:'4px 0' }}>No matches</span>
               )}
             </div>
 
@@ -3085,7 +3085,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
             <div style={{ borderTop:'1px solid #2a3358', paddingTop:6, display:'flex', flexDirection:'column', gap:5 }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                <span style={{ fontSize:'0.65rem', color:'#445', letterSpacing:'0.05em' }}>CUSTOM</span>
+                <span style={{ fontSize:'0.65rem', color:'#7080a0', letterSpacing:'0.05em' }}>CUSTOM</span>
                 <label htmlFor={fileInputId} style={{ background:'#2d3a6a', border:'none', color:'#fff', borderRadius:4, cursor:'pointer', padding:'2px 8px', fontSize:'0.68rem' }}>Upload</label>
                 <input id={fileInputId} type="file" accept="image/*" style={{ display:'none' }}
                   onChange={e => {
@@ -3150,7 +3150,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                 processImageFile(e.target.files?.[0], 'above')
                 e.target.value = ''
               }} />
-            <span style={{ fontSize:'0.62rem', color:'#445', textAlign:'center' }}>or paste an image (Ctrl+V)</span>
+            <span style={{ fontSize:'0.62rem', color:'#7080a0', textAlign:'center' }}>or paste an image (Ctrl+V)</span>
 
             {curImages.length > 0 && (
               <div style={{ display:'flex', flexDirection:'column', gap:7, borderTop:'1px solid #2a3358', paddingTop:6 }}>
@@ -3231,7 +3231,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             {motion && (
               <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:4 }}>
-                  <span style={{ fontSize:'0.6rem', color:'#445', width:32, letterSpacing:'0.04em' }}>SPEED</span>
+                  <span style={{ fontSize:'0.6rem', color:'#7080a0', width:32, letterSpacing:'0.04em' }}>SPEED</span>
                   <button style={numBtn} onClick={() => {
                     const v = motion.speed ?? 1
                     const next = v <= 0.5 ? Math.max(0, +(v - 0.1).toFixed(1)) : Math.max(0.5, +(v - 0.5).toFixed(1))
@@ -3246,7 +3246,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                 </div>
                 {[['INTEN', 'intensity', 2, 40, 2, v => v]].map(([lbl, key, mn, mx, step, fmt]) => (
                   <div key={key} style={{ display:'flex', alignItems:'center', gap:4 }}>
-                    <span style={{ fontSize:'0.6rem', color:'#445', width:32, letterSpacing:'0.04em' }}>{lbl}</span>
+                    <span style={{ fontSize:'0.6rem', color:'#7080a0', width:32, letterSpacing:'0.04em' }}>{lbl}</span>
                     <button style={numBtn} onClick={() => onSetMotion({...motion, [key]: Math.max(mn, (motion[key]??mn+step)-step)})}>−</button>
                     <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:22, textAlign:'center' }}>{fmt(motion[key]??mn+step)}</span>
                     <button style={numBtn} onClick={() => onSetMotion({...motion, [key]: Math.min(mx, (motion[key]??mn)+step)})}>+</button>
@@ -3261,7 +3261,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             <div style={{ display:'flex', alignItems:'center', gap:5 }}>
               <button style={{ ...iconBtn(!!colorCycle), fontSize:'0.85rem', padding:'3px 6px' }}
                 title="Color cycle" onClick={() => onSetColorCycle(colorCycle ? 0 : 4)}>⬡</button>
-              <span style={{ fontSize:'0.65rem', color:'#556', flex:1 }}>Color cycle</span>
+              <span style={{ fontSize:'0.65rem', color:'#8090b8', flex:1 }}>Color cycle</span>
               {colorCycle > 0 && (
                 <>
                   <button style={numBtn} onClick={() => onSetColorCycle(Math.max(1, colorCycle - 1))}>−</button>
