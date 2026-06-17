@@ -249,7 +249,7 @@ function OutlineItem({
         onClick={() => onSelect?.(item.id)}
         style={{
           paddingLeft: depth * 14 + 4,
-          opacity: item.id === draggingId ? 0.3 : (isHidden && !isSelected) ? 0.4 : 1,
+          opacity: item.id === draggingId ? 0.3 : 1,
           pointerEvents: item.id === draggingId ? 'none' : undefined,
           background: isSelected ? '#1e2048' : isDropInto ? '#1a2a3a' : undefined,
           borderLeft: isSelected
@@ -287,7 +287,7 @@ function OutlineItem({
           />
         ) : (
           <span
-            style={styles.label}
+            style={{ ...styles.label, color: isHidden ? '#7080a0' : undefined, fontStyle: isHidden ? 'italic' : undefined }}
             onDoubleClick={e => { e.stopPropagation(); setDraft(item.label); setEditing(true) }}
             title={item.label}
           >
