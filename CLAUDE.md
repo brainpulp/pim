@@ -247,3 +247,39 @@ Label text on edges (relationship type). Render as SVG `<text>` at the midpoint 
 **Priority:** medium | **Effort:** ~half day
 
 Cmd+K or `/` opens a fuzzy-search popup over all node labels. Selecting one selects + zooms to that node. Simple: filter `storeNodes` by label substring, render a floating list.
+
+### Quick capture mode
+**Priority:** high | **Effort:** ~half day
+**Source:** Notion "Idea qualifier" (2021)
+
+Global shortcut (e.g. Cmd+Shift+N) opens a minimal floating input anywhere in the app. Type a thought, hit Enter — it drops into the graph as an unanchored node near the current viewport center. No friction, no context-switching. The idea is: capture first, structure later. Nodes created this way could get a visual marker (faint ring, different default color) to indicate "needs organizing."
+
+### Videogame-style rewards
+**Priority:** medium | **Effort:** ~1 day
+**Source:** Notion note (2026, status: very likely)
+
+When the user creates a node, connects two nodes, or completes a meaningful action, trigger a brief visual + sound reward: particle burst from the node, a satisfying pop sound, a quick scale-bounce animation. Not exploited in serious productivity apps. Small cost, high delight, genuine differentiator. Implementation: CSS keyframe animations + Web Audio API (short synthesized tone, no assets needed).
+
+### AI narrative assistant
+**Priority:** high (Pro monetization feature) | **Effort:** ~2-3 days
+**Source:** Notion "PIM bot narrativo" (2021)
+
+A conversational layer that knows your graph. Not just "summarize this node" — it reads the whole graph and initiates: "You have 3 unconnected nodes from last week. Your most connected node is X. Which task would make today a good day?" Runs on Claude API. Natural Pro paywall: free users get the graph, Pro users get the assistant. No infra beyond an API call.
+
+### Emotional weight on nodes
+**Priority:** low | **Effort:** ~2 hours
+**Source:** Notion "emotional intelligence embedded into PIM" (2021)
+
+A single extra field: `node.emotionalWeight` — a 1-5 star rating or a simple emoji (😐🔥❤️). Shown as a small badge on the node. The question it answers: "which task would make this a great day if done?" Distinct from urgency/priority — it's about joy and meaning, not deadlines. Pairs naturally with the AI assistant (which could use it to reorder suggestions).
+
+### Outline depth slider (per-line)
+**Priority:** medium | **Effort:** ~1 day
+**Source:** Notion note (2026, status: active)
+
+In the outline sidebar, show a slider on hover next to each row that controls how many levels of children are visible below that node. As many notches as existing depth levels. Distinct from the current graph-level expand feature — this is local to the outline and operates per-node. Smooth collapse/expand animation.
+
+### Tasks/nodes as animals (skip — decoration not function)
+**Priority:** skip
+**Source:** Notion "Tasks as animals" (2016)
+
+Map task parameters (value, speed, joy, urgency) to animal archetypes. Charming concept but fails the "solves real friction" test — the animal vocabulary is learning overhead with no actionable payoff. Better served by emotional weight + status fields.
