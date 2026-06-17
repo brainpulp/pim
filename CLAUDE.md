@@ -1,5 +1,16 @@
 # PIM — Claude Working Document
 
+## ⚠️ DEVICE SYNC — CRITICAL RULE
+**Before switching devices or ending a session, ALWAYS:**
+```bash
+git add -A && git commit -m "wip: session end" && git push
+```
+**Before starting work on any device, ALWAYS:**
+```bash
+git pull
+```
+Features built locally but not pushed are PERMANENTLY LOST when the other device deploys. This has happened multiple times. There are no exceptions to this rule.
+
 ## What this app is
 Personal Information Manager — a second-brain app combining a force-directed D3.js node graph, outline sidebar, Supabase persistence, and GitHub Pages hosting.
 
