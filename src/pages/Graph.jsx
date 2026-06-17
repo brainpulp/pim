@@ -966,7 +966,18 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
           onMouseUp={() => setIsPanning(false)}
           onMouseLeave={() => setIsPanning(false)}
         >
-          <defs />
+          <defs>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
+            <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
+            <filter id="edge-shadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.6" />
+              <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#000" floodOpacity="0.4" />
+            </filter>
+            <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="#000" floodOpacity="0.5" />
+              <feDropShadow dx="0" dy="0" stdDeviation="8" floodColor="#000" floodOpacity="0.3" />
+            </filter>
+          </defs>
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
             {/* 1. Frame containers */}
@@ -991,8 +1002,8 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
                 {/* halo â€” bg-tinted outline that separates line from overlapping elements */}
                 <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={bgColor} strokeWidth={isSel?6:4} strokeOpacity={0.55} />
                 <polygon points={arrowPts} fill={bgColor} fillOpacity={0.55} stroke={bgColor} strokeWidth={isSel?6:4} strokeOpacity={0.55} strokeLinejoin="round" />
-                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} />
-                <polygon points={arrowPts} fill={edgeColor} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} strokeLinejoin="round" />
+                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} filter="url(#edge-shadow)" />
+                <polygon points={arrowPts} fill={edgeColor} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} strokeLinejoin="round" filter="url(#edge-shadow)" />
                 {isSel && (
                   <g transform={`translate(${mx},${my})`} onClick={ev => { ev.stopPropagation(); removeEdge(id); setSelected(null) }} style={{ cursor:'pointer' }}>
                     <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
@@ -1821,7 +1832,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       {isHovered && !isSelected && shape !== 'none' && (
         <ShapeBody shape={shape} halfW={halfW + 2} halfH={halfH + 2} r={r + 2} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={1.5} />
       )}
-      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} imageUrl={imageUrl} nodeId={node.id} />
+      <ShapeBody shape={shape} halfW={halfW} halfH={halfH} r={r} fill={fill} stroke="none" strokeWidth={0} imageUrl={imageUrl} nodeId={node.id} filter={shape !== 'none' && shape !== 'frame' ? 'url(#node-shadow)' : undefined} />
 
       {/* 3D thumbnail â€” shown when not live (node not selected) */}
       {shape === '3d' && modelThumb && !isSelected && (
@@ -2015,6 +2026,12 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           <div>
             <div style={{ fontSize:'0.65rem', color:'#445', marginBottom:4, letterSpacing:'0.05em' }}>FILL</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+              <div title="Transparent" onClick={() => onSetFill('transparent')} style={{
+                width:18, height:18, borderRadius:4, cursor:'pointer',
+                border: viewProps.fillColor==='transparent' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.2)',
+                backgroundImage:'linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%)',
+                backgroundSize:'6px 6px', backgroundPosition:'0 0, 3px 3px', backgroundColor:'#222',
+              }} />
               {FILL_COLORS.map(c => (
                 <div key={c} onClick={() => onSetFill(c)} style={{
                   width:18, height:18, borderRadius:4, background:c, cursor:'pointer',
