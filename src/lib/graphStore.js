@@ -17,31 +17,20 @@ export const DEFAULT_NODE_PROPS = {
 }
 
 // Unified palette used for fill colors, text colors, and background colors
+// Tailwind 500-series — MIT licensed, one color per hue, proven in UI design
 export const PALETTE = [
-  '#ffffff', '#e2e8f0', '#94a3b8', '#475569',
-  '#fbbf24', '#f97316', '#ef4444', '#f472b6',
-  '#34d399', '#10b981', '#0d9488', '#06b6d4',
-  '#60a5fa', '#3b82f6', '#6366f1', '#8b5cf6',
-  '#c084fc', '#a78bfa', '#1d4ed8', '#0f766e',
-  '#15803d', '#16a34a', '#b45309', '#dc2626',
-  '#7e22ce', '#be185d', '#0e7490', '#374151',
-  '#0c0c1a', '#0a1628', '#0a1a0a', '#1a0a1a',
+  '#f43f5e', '#ef4444', '#f97316', '#f59e0b', '#eab308',
+  '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
+  '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7',
+  '#d946ef', '#ec4899',
+  '#ffffff', '#94a3b8', '#334155', '#0f172a',
 ]
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none', 'image']
 
-// Unified 36-color palette used everywhere in the app (fills, text, strokes, etc.)
-export const COLOR_PALETTE = [
-  '#ff1744', '#f44336', '#e91e63', '#ec407a', '#f48fb1', '#ffcdd2',
-  '#7c4dff', '#9c27b0', '#ab47bc', '#ce93d8', '#b39ddb', '#ea80fc',
-  '#1565c0', '#1e88e5', '#42a5f5', '#0288d1', '#00bcd4', '#4dd0e1',
-  '#1b5e20', '#43a047', '#66bb6a', '#00c853', '#69f0ae', '#ccff90',
-  '#e65100', '#fb8c00', '#ffa726', '#ffd740', '#ffe57f', '#fff176',
-  '#0a0a1a', '#37474f', '#78909c', '#b0bec5', '#eceff1', '#ffffff',
-]
-
-export const FILL_COLORS = COLOR_PALETTE
-export const TEXT_COLORS = COLOR_PALETTE
+export const COLOR_PALETTE = PALETTE
+export const FILL_COLORS = PALETTE
+export const TEXT_COLORS = PALETTE
 
 export const BG_COLORS = [
   '#0c0c1a', '#0a0a0a', '#0d1117', '#0f1923',

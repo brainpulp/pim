@@ -2891,6 +2891,9 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
+      {panel !== null && (
+        <div style={{ position:'fixed', inset:0, zIndex:19 }} onClick={() => setPanel(null)} />
+      )}
       {/* â"€â"€ Main icon row â"€â"€ */}
       {panel === null && (
         <div style={{ display:'flex', gap:4, alignItems:'center' }}>
