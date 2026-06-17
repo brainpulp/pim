@@ -24,8 +24,15 @@ Chronological record of work done across devices. Pull before starting, push aft
 - URL input panel in NodeToolbar with live preview, Set/Clear buttons
 - Auto-sets transparent fill when switching to image shape
 - `setImageUrl` action in graphStore (view-independent, stored on node)
+- Restored drop shadows (node + edge) — recovered from old commits (ad511b4, 7b2a08f)
+- Restored transparent fill swatch in color palette
+- Added depth/expand slider: BFS from focal node, undirected, auto-zooms on change
+- Merged other device's push: COLOR_PALETTE (36 colors), customEmojis per-view
+- Added BACKLOG items from Notion: quick capture, AI assistant, rewards, emotional weight, outline slider
+- Added competitive analysis and monetization notes to CLAUDE.md
 
 ## Next up
+- [ ] Verify emojis (customEmojis) and in-node image fully restored after merge
 - [ ] Investigate 3D node jerkiness during pan/zoom
 - [ ] Test project rename on live site
 - [ ] Node search / spotlight (Cmd+K) — ~half day
