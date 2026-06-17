@@ -155,7 +155,7 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   useEffect(() => { selectedRef.current = selected }, [selected])
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const [isPanning, setIsPanning] = useState(false)
-  const [depthFilter, setDepthFilter] = useState(null) // null = off, number = max visible depth
+  const [depthExpand, setDepthExpand] = useState(null) // null = off, { nodeId, radius } = expand from node
   const [showBgPicker, setShowBgPicker] = useState(false)
   const [keepEditId, setKeepEditId] = useState(null)
   const canvasFocused = useRef(true)
@@ -280,27 +280,38 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
   }), [viewNodeProps])
 
-  // BFS depth from root nodes (no incoming edges)
-  const nodeDepths = useMemo(() => {
-    const targetIds = new Set(storeEdges.map(e => e.target))
-    const roots = storeNodes.filter(n => !targetIds.has(n.id)).map(n => n.id)
-    const depths = {}
-    const q = roots.map(id => { depths[id] = 0; return id })
+  // BFS hop-distance from a focal node (undirected — follows edges both ways)
+  const expandHops = useMemo(() => {
+    if (!depthExpand) return null
+    const { nodeId, radius } = depthExpand
+    const dist = { [nodeId]: 0 }
+    const q = [nodeId]
+    while (q.length) {
+      const cur = q.shift()
+      if (dist[cur] >= radius) continue
+      storeEdges.forEach(e => {
+        const neighbor = e.source === cur ? e.target : e.target === cur ? e.source : null
+        if (neighbor && dist[neighbor] === undefined) { dist[neighbor] = dist[cur] + 1; q.push(neighbor) }
+      })
+    }
+    return dist
+  }, [depthExpand, storeEdges])
+
+  // Max possible hops from focal node (diameter to farthest connected node)
+  const maxExpandRadius = useMemo(() => {
+    if (!depthExpand) return 0
+    const { nodeId } = depthExpand
+    const dist = { [nodeId]: 0 }
+    const q = [nodeId]
     while (q.length) {
       const cur = q.shift()
       storeEdges.forEach(e => {
-        if (e.source === cur && depths[e.target] === undefined) {
-          depths[e.target] = depths[cur] + 1
-          q.push(e.target)
-        }
+        const nb = e.source === cur ? e.target : e.target === cur ? e.source : null
+        if (nb && dist[nb] === undefined) { dist[nb] = dist[cur] + 1; q.push(nb) }
       })
     }
-    // Any disconnected nodes get depth 0
-    storeNodes.forEach(n => { if (depths[n.id] === undefined) depths[n.id] = 0 })
-    return depths
-  }, [storeNodes, storeEdges])
-
-  const maxDepth = useMemo(() => Math.max(0, ...Object.values(nodeDepths)), [nodeDepths])
+    return Math.max(0, ...Object.values(dist))
+  }, [depthExpand?.nodeId, storeEdges]) // eslint-disable-line
 
   const visibleNodeIds = useMemo(() => {
     if (drillRoot) {
@@ -314,10 +325,10 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
     }
     return new Set(storeNodes.filter(n => {
       if (viewNodeProps[n.id]?.visible === false) return false
-      if (depthFilter !== null && (nodeDepths[n.id] ?? 0) > depthFilter) return false
+      if (expandHops !== null && expandHops[n.id] === undefined) return false
       return true
     }).map(n => n.id))
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, depthFilter, nodeDepths])
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops])
 
   const scheduleRender = useCallback(() => {
     if (frameRef.current) return
@@ -749,8 +760,8 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
   }, [releaseAllAnchors])
 
   useEffect(() => {
-    if (depthFilter !== null) setTimeout(zoomExtents, 30)
-  }, [depthFilter]) // eslint-disable-line
+    if (depthExpand !== null) setTimeout(zoomExtents, 30)
+  }, [depthExpand]) // eslint-disable-line
 
   const zoomExtents = useCallback(() => {
     const vis = simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && n.x != null && !isNaN(n.x))
@@ -1190,29 +1201,45 @@ export default function Graph({ projectId, projectName, onSetNavActions }) {
         </div>}
 
 
-        {/* Depth slider */}
-        {!isPresenting && maxDepth > 0 && (
-          <div style={{ position:'absolute', bottom:'1.25rem', left:'1.25rem', display:'flex', alignItems:'center', gap:8, background:'rgba(18,18,42,0.92)', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 10px', backdropFilter:'blur(4px)', zIndex:10 }}>
-            <button
-              title={depthFilter === null ? 'Enable depth filter' : 'Disable depth filter'}
-              onClick={() => setDepthFilter(d => d === null ? maxDepth : null)}
-              style={{ background:'transparent', border:'none', color: depthFilter !== null ? '#5b6af0' : '#445', cursor:'pointer', fontSize:'0.85rem', padding:'0 2px', lineHeight:1 }}>
-              ⊚
-            </button>
-            {depthFilter !== null && (
-              <>
-                <span style={{ fontSize:'0.68rem', color:'#556', userSelect:'none' }}>L1</span>
-                <input type="range" min={0} max={maxDepth} value={depthFilter}
-                  onChange={e => setDepthFilter(Number(e.target.value))}
-                  style={{ width:90, accentColor:'#5b6af0', cursor:'pointer' }} />
-                <span style={{ fontSize:'0.68rem', color:'#556', userSelect:'none' }}>L{maxDepth + 1}</span>
-                <span style={{ fontSize:'0.75rem', color:'#7b8fcc', minWidth:24, textAlign:'center', userSelect:'none' }}>
-                  {depthFilter + 1}
-                </span>
-              </>
-            )}
-          </div>
-        )}
+        {/* Expand-from-node slider */}
+        {!isPresenting && (() => {
+          const focalId = depthExpand?.nodeId
+          const focalLabel = focalId ? storeNodes.find(n => n.id === focalId)?.label : null
+          const radius = depthExpand?.radius ?? 0
+          const isOn = depthExpand !== null
+          const selectedNodeId = selected?.type === 'node' ? selected.id : null
+          return (
+            <div style={{ position:'absolute', bottom:'1.25rem', left:'1.25rem', display:'flex', alignItems:'center', gap:8, background:'rgba(18,18,42,0.92)', border:`1px solid ${isOn ? '#5b6af0' : '#2d3a6a'}`, borderRadius:8, padding:'6px 10px', backdropFilter:'blur(4px)', zIndex:10 }}>
+              <button
+                title={isOn ? 'Exit expand mode' : 'Expand from selected node'}
+                onClick={() => {
+                  if (isOn) { setDepthExpand(null) }
+                  else if (selectedNodeId) { setDepthExpand({ nodeId: selectedNodeId, radius: 1 }) }
+                }}
+                style={{ background:'transparent', border:'none', color: isOn ? '#5b6af0' : '#445', cursor:'pointer', fontSize:'0.9rem', padding:'0 2px', lineHeight:1 }}>
+                ⊛
+              </button>
+              {isOn && (
+                <>
+                  {focalLabel && <span style={{ fontSize:'0.7rem', color:'#7b8fcc', maxWidth:80, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{focalLabel}</span>}
+                  <span style={{ fontSize:'0.65rem', color:'#445', userSelect:'none' }}>+1</span>
+                  <input type="range" min={1} max={Math.max(1, maxExpandRadius)} value={radius}
+                    onChange={e => setDepthExpand(d => ({ ...d, radius: Number(e.target.value) }))}
+                    style={{ width:80, accentColor:'#5b6af0', cursor:'pointer' }} />
+                  <span style={{ fontSize:'0.65rem', color:'#445', userSelect:'none' }}>+{Math.max(1, maxExpandRadius)}</span>
+                  <span style={{ fontSize:'0.75rem', color:'#c5d0ff', minWidth:16, textAlign:'center', userSelect:'none', fontWeight:600 }}>+{radius}</span>
+                  {selectedNodeId && selectedNodeId !== focalId && (
+                    <button onClick={() => setDepthExpand({ nodeId: selectedNodeId, radius })}
+                      style={{ background:'transparent', border:'1px solid #2d3a6a', color:'#7b8fcc', cursor:'pointer', fontSize:'0.65rem', padding:'2px 5px', borderRadius:4 }}>
+                      refocus
+                    </button>
+                  )}
+                </>
+              )}
+              {!isOn && <span style={{ fontSize:'0.65rem', color:'#334', userSelect:'none' }}>expand</span>}
+            </div>
+          )
+        })()}
 
         {/* Canvas buttons */}
         {!isPresenting && <div style={canvasBtnsStyle}>
