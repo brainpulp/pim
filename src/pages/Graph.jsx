@@ -882,16 +882,20 @@ export default function Graph({ projectId, projectName }) {
     setNodeViewProp(nodeId, 'nodeEmojis', (vp.nodeEmojis || []).filter(em => em.id !== emojiId))
   }, [setNodeViewProp])
 
-  const handleEmojiResizeStart = useCallback((e, nodeId, emojiId, bx, by) => {
+  const handleEmojiResizeStart = useCallback((e, nodeId, emojiId) => {
     e.stopPropagation(); e.preventDefault()
     const { views: vs0, activeViewId: av0 } = useGraphStore.getState()
     const vp0 = vs0.find(v => v.id === av0)?.nodeProps?.[nodeId] || {}
     const startScale = (vp0.nodeEmojis || []).find(em => em.id === emojiId)?.scale || 1
+    // Pivot from live node center — avoids stale closure coords
+    const liveNode = simNodesRef.current.find(n => n.id === nodeId)
+    const pivotX = liveNode?.x || 0
+    const pivotY = liveNode?.y || 0
     const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
-    const startDist = Math.max(8, Math.hypot(sx0 - bx, sy0 - by))
+    const startDist = Math.max(8, Math.hypot(sx0 - pivotX, sy0 - pivotY))
     const onMove = me => {
       const [sx, sy] = clientToSim(me.clientX, me.clientY)
-      const dist = Math.hypot(sx - bx, sy - by)
+      const dist = Math.hypot(sx - pivotX, sy - pivotY)
       const scale = Math.min(4, Math.max(0.4, startScale * (dist / startDist)))
       const { views: vs, activeViewId: av } = useGraphStore.getState()
       const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
@@ -900,7 +904,7 @@ export default function Graph({ projectId, projectName }) {
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setNodeViewProp])
+  }, [clientToSim, setNodeViewProp, simNodesRef])
 
   // ── In-node images (above/below/beside/perimeter) ──────────────
   const handleImageDragStart = useCallback((e, nodeId, imageId) => {
@@ -2604,8 +2608,8 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             )}
             {isSelected && (
               <g transform={`translate(${badgeR.toFixed(1)},${badgeR.toFixed(1)})`}>
-                <circle r={10} fill="transparent"
-                  onMouseDown={e => { e.stopPropagation(); onEmojiResizeStart?.(e, node.id, em.id, (node.x || 0) + ex, (node.y || 0) + ey) }}
+                <circle r={14} fill="transparent" pointerEvents="all"
+                  onMouseDown={e => { e.stopPropagation(); onEmojiResizeStart?.(e, node.id, em.id) }}
                   style={{ cursor: 'nwse-resize' }} />
                 <circle r={5} fill="#5b6af0" stroke="#fff" strokeWidth={1} style={{ pointerEvents:'none' }} />
               </g>
