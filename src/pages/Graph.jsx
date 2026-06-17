@@ -1572,6 +1572,7 @@ export default function Graph({ projectId, projectName }) {
             : T.y + (hn.y||0) * T.k + hnHalfH * T.k + 14 + chevronClearance
           return (
             <NodeToolbar
+              key={hn.id}
               x={T.x + (hn.x||0) * T.k}
               y={toolbarY}
               viewProps={vp}
@@ -2860,6 +2861,16 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     return () => document.removeEventListener('paste', onPaste)
   }, [panel, processImageFile])
 
+  // Close sub-panel when clicking outside the toolbar
+  useEffect(() => {
+    if (!panel) return
+    const onDown = e => {
+      if (!e.target.closest('[data-nodetoolbar]')) setPanel(null)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [panel])
+
   const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
 
   const wrap = {
@@ -2885,15 +2896,13 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
   return (
     <div style={wrap}
+      data-nodetoolbar="1"
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
-      {panel !== null && (
-        <div style={{ position:'fixed', inset:0, zIndex:19 }} onClick={() => setPanel(null)} />
-      )}
       {/* â"€â"€ Main icon row â"€â"€ */}
       {panel === null && (
         <div style={{ display:'flex', gap:4, alignItems:'center' }}>
