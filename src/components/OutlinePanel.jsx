@@ -297,7 +297,7 @@ function OutlineItem({
 
         <div className="outline-actions">
           <button style={styles.iconBtn} title="Drill into" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDrill(item.id) }}>⊳</button>
-          <button style={styles.iconBtn} title={isHidden ? 'Show' : 'Hide'} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleVisible(item.id, !isHidden) }}>
+          <button style={styles.iconBtn} title={isHidden ? 'Show' : 'Hide'} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleVisible(item.id, isHidden) }}>
             {isHidden ? '◌' : '●'}
           </button>
           <button style={styles.iconBtn} title="Add child" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onAddChild(item.id) }}>+</button>
