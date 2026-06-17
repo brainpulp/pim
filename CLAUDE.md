@@ -152,6 +152,9 @@ Repo: https://github.com/brainpulp/pim
 
 **CRITICAL: The user tests on the live GitHub Pages URL, NOT localhost. Always run `npm run deploy` after every set of changes.**
 
+## UI color rule — NEVER REGRESS
+**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
+
 ## Past gotchas / never regress
 - `"Invalid schema: pim"` → never use `.schema('pim')` in db.js
 - Anchor not releasing → must also set `simNode.fx/fy = null` directly on D3 node

@@ -174,6 +174,7 @@ export default function Graph({ projectId, projectName }) {
   const [isPanning, setIsPanning] = useState(false)
   const [depthExpand, setDepthExpand] = useState(null) // null = off, { nodeId, radius } = expand from node
   const [showBgPicker, setShowBgPicker] = useState(false)
+  const [showAddMenu, setShowAddMenu] = useState(false)
   const [keepEditId, setKeepEditId] = useState(null)
   const canvasFocused = useRef(true)
   const hideTimerRef = useRef(null)
@@ -262,6 +263,8 @@ export default function Graph({ projectId, projectName }) {
   const set3DModel      = useGraphStore(s => s.set3DModel)
   const setModelThumb   = useGraphStore(s => s.setModelThumb)
   const setImageUrl     = useGraphStore(s => s.setImageUrl)
+  const pushUndo        = useGraphStore(s => s.pushUndo)
+  const undo            = useGraphStore(s => s.undo)
 
   const addFrameToCenter = useCallback(() => {
     if (!svgRef.current) return
@@ -555,9 +558,15 @@ export default function Graph({ projectId, projectName }) {
         return
       }
 
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault()
+        undo()
+        return
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedImageId) { setConfirmDeleteImage(selectedImageId); return }
-        if (selected?.type === 'edge') { removeEdge(selected.id); setSelected(null) }
+        if (selected?.type === 'edge') { pushUndo(); removeEdge(selected.id); setSelected(null) }
         if (selected?.type === 'node') { setConfirmDelete(selected.id) }
         return
       }
@@ -621,7 +630,7 @@ export default function Graph({ projectId, projectName }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -1257,12 +1266,10 @@ export default function Graph({ projectId, projectName }) {
         <ViewManager />
         {/* Tool strip — consolidated canvas actions */}
         <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'8px 10px', display:'flex', flexDirection:'column', gap:6 }}>
-          {drillRoot && (
-            <button style={sideToolBtnStyle} onClick={exitDrill}>→ Exit Drill</button>
-          )}
-          <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap', alignItems:'center' }}>
             <button style={sideToolBtnStyle} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
             <button style={sideToolBtnStyle} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
+            <button style={{ ...sideToolBtnStyle, color: hideFrameOutlines ? '#f6ad55' : undefined }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">{hideFrameOutlines ? '⊞' : '⊟'}</button>
             {/* BG color */}
             <div style={{ position:'relative' }}>
               <button style={{ ...sideToolBtnStyle, display:'flex', alignItems:'center', gap:4 }}
@@ -1287,13 +1294,38 @@ export default function Graph({ projectId, projectName }) {
               )}
             </div>
           </div>
-          <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
-            <button style={sideToolBtnStyle} onClick={() => setPendingEditId(addNode('New node', selected?.type === 'node' ? selected.id : null))}>+ Node</button>
-            <button style={sideToolBtnStyle} onClick={addFrameToCenter}>⊞ Frame</button>
-            <button style={{ ...sideToolBtnStyle, color: hideFrameOutlines ? '#f6ad55' : undefined }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">{hideFrameOutlines ? '⊞ Show' : '⊞ Hide'}</button>
-            <button style={sideToolBtnStyle} onClick={() => setPendingEditId(addNode('New node', null))}>+ Root</button>
-            <button style={sideToolBtnStyle} onClick={() => addView()}>+ View</button>
-          </div>
+          {/* Unified add button */}
+          {(() => {
+            const hasSelected = selected?.type === 'node'
+            return (
+              <div style={{ position:'relative' }}>
+                <button
+                  style={{ ...sideToolBtnStyle, fontSize:'1.1rem', fontWeight:700, padding:'0.35rem 1rem', width:'100%', color:'#a0b4f0', border:'1px solid #3a4a8a' }}
+                  onClick={e => { e.stopPropagation(); setShowAddMenu(v => !v) }}
+                  title="Add…">
+                  +
+                </button>
+                {showAddMenu && (
+                  <div style={{ position:'absolute', bottom:'110%', left:0, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', zIndex:40, boxShadow:'0 4px 20px rgba(0,0,0,0.7)', minWidth:160 }}
+                    onClick={e => e.stopPropagation()}>
+                    {[
+                      ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : null)); setShowAddMenu(false) }],
+                      ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
+                      ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
+                      ['View', () => { addView(); setShowAddMenu(false) }],
+                    ].map(([label, action]) => (
+                      <button key={label} onClick={action}
+                        style={{ display:'block', width:'100%', textAlign:'left', background:'transparent', border:'none', color:'#c5d0ff', cursor:'pointer', padding:'7px 14px', fontSize:'0.82rem' }}
+                        onMouseEnter={e => e.currentTarget.style.background = '#2d3a6a'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
       </div>
       {/* Sidebar resize handle */}
@@ -1552,7 +1584,7 @@ export default function Graph({ projectId, projectName }) {
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDrill={() => { setDrillRoot(hn.id); setHoveredNodeId(null); setTimeout(zoomExtents, 50) }}
-              onHide={() => { setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
+              onHide={() => { pushUndo(); setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
               onRelease={() => handleRelease(hn.id)}
               onDelete={() => { setConfirmDelete(hn.id); setHoveredNodeId(null) }}
               onNotesChange={notes => updateNotes(hn.id, notes)}
@@ -1653,7 +1685,7 @@ export default function Graph({ projectId, projectName }) {
               </div>
               <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                 <button style={confirmCancelBtn} onClick={() => setConfirmDelete(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => { deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }}>Delete</button>
+                <button style={confirmOkBtn} onClick={() => { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }}>Delete</button>
               </div>
             </div>
           </div>
@@ -1722,6 +1754,14 @@ export default function Graph({ projectId, projectName }) {
           )
         })()}
 
+
+        {/* Back arrow -- drill exit, top-left canvas */}
+        {drillRoot && !isPresenting && (
+          <button onClick={exitDrill}
+            style={{ position:'absolute', top:'0.75rem', left:'0.75rem', zIndex:20, background:'rgba(18,18,42,0.9)', border:'1px solid #2d3a6a', color:'#c5d0ff', borderRadius:7, padding:'6px 12px', cursor:'pointer', fontSize:'1rem', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', gap:6 }}>
+            {'←'} Back
+          </button>
+        )}
 
         {/* Build timestamp â€" bottom right */}
         {!isPresenting && <div style={{ position:'absolute', bottom:'0.5rem', right:'0.75rem', zIndex:20, fontSize:'0.62rem', color:'#333', fontFamily:'monospace', userSelect:'none' }}>
@@ -2239,6 +2279,7 @@ function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isAct
         case 'updown':   ty = Math.sin(t * 2.5) * i; break
         case 'sideways': tx = Math.sin(t * 2.5) * i; break
         case 'scale':    sc = 1 + Math.abs(Math.sin(t * 2.5)) * (i * 0.04); break
+        case 'rock':     { const rot = Math.sin(t * 2.5) * i * 0.025; el.style.transformBox = 'fill-box'; el.style.transformOrigin = 'center'; el.style.transform = 'rotate(' + (rot * 180 / Math.PI).toFixed(3) + 'deg)'; rafRef.current = requestAnimationFrame(animate); return }
         default: break
       }
       if (el) {
@@ -2690,7 +2731,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       })}
 
       {/* Collapse/expand chevron — only on nodes that have children, sits centered on the bottom edge */}
-      {hasChildren && (isSelected || isHovered || isCollapsed) && (
+      {hasChildren && (isSelected || isHovered) && (
         <g transform={`translate(0,${bodyHalfH + 11})`}
           onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); onToggleCollapse?.() }}
@@ -3203,7 +3244,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         const numBtn = { background:'transparent', border:'1px solid #2a3358', color:'#88b4e8', borderRadius:4, cursor:'pointer', fontSize:'0.75rem', padding:'2px 6px', lineHeight:1 }
         const motionTypes = [
           [null,'○','off'],['shake','≋','shake'],['circle','◎','circle'],
-          ['jerk','⚡','jerk'],['updown','↕','up/dn'],['sideways','↔','side'],['scale','⬡','scale'],
+          ['jerk','⚡','jerk'],['updown','↕','up/dn'],['sideways','↔','side'],['scale','⬡','scale'],['rock','↺','rock'],
         ]
         return (
           <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:196 }}>

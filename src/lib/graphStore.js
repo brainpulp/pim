@@ -59,6 +59,9 @@ const patchViewNode = (views, activeViewId, nodeId, patch) =>
     },
   })
 
+const _undoHistory = []
+const MAX_UNDO = 50
+
 const useGraphStore = create((set, get) => ({
   // â”€â”€ View-independent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   nodes: [],
@@ -67,6 +70,19 @@ const useGraphStore = create((set, get) => ({
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
   activeViewId: 'view-default',
+
+  // Undo history (module-level array, not reactive state)
+  pushUndo: () => {
+    const s = get()
+    _undoHistory.push(JSON.parse(JSON.stringify({ nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId })))
+    if (_undoHistory.length > MAX_UNDO) _undoHistory.shift()
+  },
+  undo: () => {
+    if (!_undoHistory.length) return
+    const prev = _undoHistory.pop()
+    set({ nodes: prev.nodes, edges: prev.edges, views: prev.views, activeViewId: prev.activeViewId })
+  },
+
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   loadProjectData: ({ nodes, edges, views, activeViewId }) => set({
