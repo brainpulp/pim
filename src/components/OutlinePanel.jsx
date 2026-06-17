@@ -80,7 +80,11 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
   const dragging = useRef(null) // { nodeId }
   const containerRef = useRef()
 
-  const tree = buildTree(nodes, edges)
+  const frameIds = containerNodeIds || new Set()
+  const frameNodes   = nodes.filter(n => frameIds.has(n.id))
+  const regularNodes = nodes.filter(n => !frameIds.has(n.id))
+  const frameTree   = buildTree(frameNodes, [])
+  const regularTree = buildTree(regularNodes, edges.filter(e => !frameIds.has(e.source) && !frameIds.has(e.target)))
 
   const toggleExpand = useCallback((id) => {
     setExpanded(prev => {
@@ -167,10 +171,10 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
       </div>
 
       <div style={styles.tree}>
-        {tree.length === 0 && (
+        {regularTree.length === 0 && frameTree.length === 0 && (
           <div style={styles.empty}>No nodes yet.<br />Click + Root to start.</div>
         )}
-        {tree.map((root, i) => (
+        {regularTree.map((root, i) => (
           <OutlineItem
             key={root.id + '-' + i}
             item={root}
@@ -191,6 +195,35 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
             containerNodeIds={containerNodeIds}
           />
         ))}
+
+        {frameTree.length > 0 && (
+          <>
+            <div style={{ fontSize:'0.6rem', fontWeight:700, color:'#4a5280', letterSpacing:'0.08em', padding:'8px 8px 3px', borderTop:'1px solid #1e1e2e', marginTop:4 }}>
+              FRAMES
+            </div>
+            {frameTree.map((root, i) => (
+              <OutlineItem
+                key={root.id + '-frame-' + i}
+                item={root}
+                depth={0}
+                selectedNodeId={selectedNodeId}
+                onSelect={onSelectNode}
+                onAddChild={parentId => addNode('New node', parentId)}
+                onRename={updateLabel}
+                onDelete={deleteNode}
+                onToggleVisible={(id, val) => setNodeViewProp(id, 'visible', val)}
+                onDrill={setDrillRoot}
+                viewNodeProps={viewNodeProps}
+                dropTarget={dropTarget}
+                draggingId={draggingId}
+                onStartDrag={startDrag}
+                isExpanded={isExpanded}
+                onToggleExpand={toggleExpand}
+                containerNodeIds={containerNodeIds}
+              />
+            ))}
+          </>
+        )}
       </div>
     </div>
   )
