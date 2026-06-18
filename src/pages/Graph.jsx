@@ -183,6 +183,7 @@ export default function Graph({ projectId, projectName }) {
   const svgRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
+  const zoomFilterRef = useRef(null)
   const simNodesRef = useRef([])
   const simEdgesRef = useRef([])
   const zoomTransformRef = useRef(d3.zoomIdentity)
@@ -535,14 +536,16 @@ export default function Graph({ projectId, projectName }) {
   useEffect(() => {
     if (!svgRef.current) return
     const svg = d3.select(svgRef.current)
+    const zoomFilter = e => e.type === 'wheel' || (
+      !e.target.closest?.('[data-node]') &&
+      !e.target.closest?.('[data-frame]') &&
+      !e.target.closest?.('[data-img]') &&
+      !e.target.closest?.('[data-3d-canvas]')
+    )
+    zoomFilterRef.current = zoomFilter
     zoomBehaviorRef.current = d3.zoom()
       .scaleExtent([0.04, 10])
-      .filter(e => e.type === 'wheel' || (
-        !e.target.closest?.('[data-node]') &&
-        !e.target.closest?.('[data-frame]') &&
-        !e.target.closest?.('[data-img]') &&
-        !e.target.closest?.('[data-3d-canvas]')
-      ))
+      .filter(zoomFilter)
       .on('zoom', e => {
         zoomTransformRef.current = e.transform
         scheduleRender()
@@ -1254,8 +1257,8 @@ export default function Graph({ projectId, projectName }) {
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
-      // Re-enable D3 pan
-      zoomBehaviorRef.current?.filter(() => true)
+      // Re-enable D3 pan (restore original filter, not a permissive one)
+      if (zoomFilterRef.current) zoomBehaviorRef.current?.filter(zoomFilterRef.current)
 
       if (moved && rubberBandRef.current) {
         const rb = rubberBandRef.current
