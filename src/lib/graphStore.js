@@ -281,18 +281,21 @@ const useGraphStore = create((set, get) => ({
   })),
 
   groupImages: (imageIds) => {
+    const idSet = new Set(imageIds)
+    // uid() must be outside set() — Zustand may call the updater multiple times
     const gid = uid()
     set(s => ({
       views: s.views.map(v => {
         if (v.id !== s.activeViewId) return v
         // Collect the old groupIds of selected images, to check for orphaned siblings after
         const oldGroupIds = new Set(
-          (v.images || []).filter(i => imageIds.includes(i.id) && i.groupId).map(i => i.groupId)
+          (v.images || []).filter(i => idSet.has(i.id) && i.groupId).map(i => i.groupId)
         )
         // Assign new groupId to selected images
         let imgs = (v.images || []).map(img =>
-          imageIds.includes(img.id) ? { ...img, groupId: gid } : img
+          idSet.has(img.id) ? { ...img, groupId: gid } : img
         )
+        // selected images now have groupId===gid so they won't match oldGroupIds here
         // Orphan cleanup: count remaining members of each old group
         const counts = {}
         imgs.forEach(img => { if (img.groupId && oldGroupIds.has(img.groupId)) counts[img.groupId] = (counts[img.groupId] || 0) + 1 })
@@ -306,13 +309,16 @@ const useGraphStore = create((set, get) => ({
     }))
   },
 
-  ungroupImages: (imageIds) => set(s => ({
-    views: s.views.map(v => v.id !== s.activeViewId ? v : {
-      ...v, images: (v.images || []).map(img =>
-        imageIds.includes(img.id) ? { ...img, groupId: null } : img
-      ),
-    }),
-  })),
+  ungroupImages: (imageIds) => {
+    const idSet = new Set(imageIds)
+    return set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, images: (v.images || []).map(img =>
+          idSet.has(img.id) ? { ...img, groupId: null } : img
+        ),
+      }),
+    }))
+  },
 
   reorderImage: (imageId, direction) => set(s => ({
     views: s.views.map(v => {
@@ -329,20 +335,23 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
-  deleteImages: (imageIds) => set(s => ({
-    views: s.views.map(v => {
-      if (v.id !== s.activeViewId) return v
-      const remaining = (v.images || []).filter(img => !imageIds.includes(img.id))
-      // Orphan cleanup: if a group now has only 1 member, clear its groupId
-      const groupCounts = {}
-      remaining.forEach(img => { if (img.groupId) groupCounts[img.groupId] = (groupCounts[img.groupId] || 0) + 1 })
-      return {
-        ...v, images: remaining.map(img =>
-          img.groupId && groupCounts[img.groupId] === 1 ? { ...img, groupId: null } : img
-        ),
-      }
-    }),
-  })),
+  deleteImages: (imageIds) => {
+    const idSet = new Set(imageIds)
+    return set(s => ({
+      views: s.views.map(v => {
+        if (v.id !== s.activeViewId) return v
+        const remaining = (v.images || []).filter(img => !idSet.has(img.id))
+        // Orphan cleanup: if a group now has only 1 member, clear its groupId
+        const groupCounts = {}
+        remaining.forEach(img => { if (img.groupId) groupCounts[img.groupId] = (groupCounts[img.groupId] || 0) + 1 })
+        return {
+          ...v, images: remaining.map(img =>
+            img.groupId && groupCounts[img.groupId] === 1 ? { ...img, groupId: null } : img
+          ),
+        }
+      }),
+    }))
+  },
 
   // ── Custom uploaded emojis (per view) ──────────────────────────
   addCustomEmoji: (name, src) => {
