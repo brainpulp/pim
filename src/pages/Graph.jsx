@@ -1744,7 +1744,7 @@ export default function Graph({ projectId, projectName }) {
             })()}
 
             {/* Combined selection resize handle */}
-            {selectedImageIds.size >= 1 && (() => {
+            {selectedImageIds.size >= 2 && (() => {
               const sel = (activeView?.images || []).filter(i => selectedImageIds.has(i.id))
               if (sel.length === 0) return null
               const bx1 = Math.min(...sel.map(i => i.x - i.width / 2))
@@ -1755,8 +1755,8 @@ export default function Graph({ projectId, projectName }) {
                 <g>
                   {/* Selection bounding box outline */}
                   <rect x={bx1-3} y={by1-3} width={bx2-bx1+6} height={by2-by1+6}
-                    fill="none" stroke="#5b6af0" strokeWidth={1} strokeDasharray="4,3"
-                    opacity={0.5} pointerEvents="none" />
+                    fill="none" stroke="#ffffff" strokeWidth={1} strokeDasharray="4,3"
+                    opacity={0.35} pointerEvents="none" />
                   {/* Bottom-right corner resize handle */}
                   <rect x={bx2-6} y={by2-6} width={12} height={12}
                     fill="#5b6af0" stroke="#fff" strokeWidth={1} rx={2}
@@ -1770,9 +1770,10 @@ export default function Graph({ projectId, projectName }) {
                       sel.forEach(img => { startSizes[img.id] = { w: img.width, h: img.height } })
                       const onMove = me => {
                         if (origDist < 1) return
+                        const T2 = zoomTransformRef.current
                         const d = Math.hypot(
-                          me.clientX - (T.x + bx1 * T.k),
-                          me.clientY - (T.y + by1 * T.k)
+                          me.clientX - (T2.x + bx1 * T2.k),
+                          me.clientY - (T2.y + by1 * T2.k)
                         )
                         const s = d / origDist
                         sel.forEach(img => {
