@@ -61,6 +61,8 @@ edges: [{ id, source: nodeId, target: nodeId }]
 views: [{ id, name, nodeProps: {[nodeId]: {...}}, drillRoot: null|nodeId,
           bgColor, images: [], slides: [] }]
 activeViewId: string
+// images[i] shape: { id, src, x, y, width, height, rotation, bgColor, groupId: string|null }
+// Note: field is 'src', NOT 'url'. groupId null = ungrouped. groupId missing = treat as null.
 ```
 
 ### Key exports from graphStore.js
@@ -168,14 +170,68 @@ Repo: https://github.com/brainpulp/pim
 - Wheel zoom broken on toolbar → NodeToolbar is an HTML div overlay after `</svg>`; wheel events never reach D3. Fix: `onWheel` on toolbar div dispatches `new WheelEvent('wheel', {...})` to `svgRef.current`
 - Node margins too large → D3 force values were too strong; current values: `charge(-300)`, `link distance(120)`, `forceCollide(NODE_R+8)` — do not increase these
 
-## Last session (2026-06-15) — continued
+## Last session (2026-06-18) — Miro Image Epic
 
-### Changes
+Full multi-select, grouping, and batch operations for free-floating canvas images (`view.images[]`). Merged to `main` and deployed.
+
+### New store actions (`graphStore.js`)
+- `groupImages(imageIds)` — assigns shared new UUID as `groupId` to all listed images; cleans up orphaned single-member groups from old groupIds
+- `ungroupImages(imageIds)` — sets `groupId = null` for listed images
+- `reorderImage(id, direction)` — moves image up/down in `view.images[]` array (SVG paint order)
+- `deleteImages(imageIds)` — batch delete; cleans up single-member group orphans
+
+### New state in `Graph.jsx`
+```js
+const [selectedImageIds, setSelectedImageIds] = useState(new Set())
+const [drilledImageId, setDrilledImageId] = useState(null)   // single grouped image treated as ungrouped
+const [rubberBand, setRubberBand] = useState(null)
+const rubberBandRef = useRef(null)
+const [zoomTick, setZoomTick] = useState(0)   // forces toolbar re-render on pan/zoom
+const [confirmDeleteImages, setConfirmDeleteImages] = useState(null)
+const zoomFilterRef = useRef(null)   // stores original D3 zoom filter for restore after rubber-band
+```
+
+### Selection behavior
+- Click ungrouped image → select only it
+- Click grouped image → `expandGroup()` selects all siblings in the group
+- Shift-click → toggles individual image only (no group expansion)
+- Double-click grouped image → sets `drilledImageId`; that image behaves as ungrouped until selection clears
+- Drag on empty canvas → rubber-band rect select (D3 pan suppressed via `zoomBehaviorRef.current.filter(() => false)` for duration; restored from `zoomFilterRef.current` on mouseup)
+- SVG background `onClick` guarded with `if (e.target !== e.currentTarget) return` to prevent clearing selection after image click
+
+### Keyboard shortcuts
+| Key | Action |
+|---|---|
+| Delete / Backspace | Confirm-delete selected images |
+| Escape | Clear image selection (before node deselect) |
+| Ctrl+A | Select all images (when no node selected and canvas focused) |
+| Ctrl+G | Group selected (2+) |
+| Ctrl+Shift+G | Ungroup selected |
+
+### ImageToolbar component (outside Graph, above it)
+Position: centered horizontally above combined selection bbox, in screen coordinates via `T.x + cx * T.k`. Re-renders on `zoomTick` (D3 zoom fires `setZoomTick(t => t + 1)` via `zoomBehaviorRef.current.on('zoom.toolbar', ...)`).
+
+Buttons shown: Layer ▲/▼ (1 selected), Group (2+), Ungroup (any groupId), Align L/C/R/T/M/B (2+), Dist H/V (3+), Crop (1, disabled), Delete (always).
+
+`alignImages(images, selectedIds, anchor)` and `distributeImages(images, selectedIds, axis)` are pure functions defined before the Graph component.
+
+### Group visual indicator
+Dashed `#5b6af0` bounding box around group members when any member is selected. Computed before `return (` as `groupBounds` object keyed by `groupId`.
+
+### Multi-image resize (2+ selected only)
+White dashed bounding box + 12×12 blue corner handle at `(bx2-6, by2-6)`. Scale: distance from bbox top-left to cursor / original bbox diagonal, both in screen pixels. `T` captured once at mousedown for `origDist`; `T2 = zoomTransformRef.current` read fresh each tick in `onMove` to handle mid-drag pan.
+
+### Gotchas added
+- `zoomFilterRef` pattern: always save original D3 zoom filter before overriding it (rubber-band suppresses pan); restore it on mouseup
+- `drilledImageId` in `handleCanvasMouseDown` dep array: closure captures it to skip group expansion for the drilled image during rubber-band
+- Stale state in drag handlers: use `useGraphStore.getState()` inside handlers, not closed-over React state
+- Double-click in `handleImageMouseDown` needs unconditional `return` to prevent fallthrough into drag logic
+
+## Last session (2026-06-15) — continued
 - Moved canvas buttons (Free, Fit, +Node, +Frame, +Root, +View, BG picker) into left sidebar below ViewManager. ViewManager also moved from canvas overlay into sidebar.
 - Removed nav action buttons (+ View, + Frame, + Node, + Root) from App.jsx nav header.
 - `onSetNavActions` prop removed from Graph; `addFrameToCenter` is now a local `useCallback`.
 - Added `sideToolBtnStyle` constant for sidebar tool strip buttons.
-- Smart/curly quotes replaced with straight quotes throughout Graph.jsx (rolldown/Vite 8 is strict about these in JSX attribute positions).
 - Added `AnimatedG` SVG component: wraps node visual content with optional RAF-driven motion (shake/circle/jerk/updown/sideways/scale) and CSS `hue-rotate` color cycling. Pauses on hover/select.
 - NodeShape now reads `viewProps.nodeMotion` and `viewProps.nodeColorCycle`; passes them to AnimatedG.
 - NodeToolbar: added ✦ (motion) and ❋ (radiate) buttons to main icon row.
