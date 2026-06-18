@@ -1374,6 +1374,23 @@ export default function Graph({ projectId, projectName }) {
 
   const exitPresentation = () => { setPresentingSlideIdx(null) }
 
+  // Group bounding boxes for selected groups
+  const selectedGroupIds = new Set()
+  ;(activeView?.images || []).forEach(img => {
+    if (img.groupId && selectedImageIds.has(img.id)) selectedGroupIds.add(img.groupId)
+  })
+  const groupBounds = {}
+  ;(activeView?.images || []).forEach(img => {
+    if (!img.groupId || !selectedGroupIds.has(img.groupId)) return
+    const b = groupBounds[img.groupId] || { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
+    groupBounds[img.groupId] = {
+      x1: Math.min(b.x1, img.x - img.width / 2),
+      y1: Math.min(b.y1, img.y - img.height / 2),
+      x2: Math.max(b.x2, img.x + img.width / 2),
+      y2: Math.max(b.y2, img.y + img.height / 2),
+    }
+  })
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Outline sidebar â€" hidden while presenting */}
@@ -1534,31 +1551,14 @@ export default function Graph({ projectId, projectName }) {
             {connecting && <line x1={connecting.x1} y1={connecting.y1} x2={connecting.x2} y2={connecting.y2} stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,4" opacity={0.7} />}
 
             {/* Group visual indicators */}
-            {(() => {
-              const selectedGroupIds = new Set()
-              ;(activeView?.images || []).forEach(img => {
-                if (img.groupId && selectedImageIds.has(img.id)) selectedGroupIds.add(img.groupId)
-              })
-              const groupBounds = {}
-              ;(activeView?.images || []).forEach(img => {
-                if (!img.groupId || !selectedGroupIds.has(img.groupId)) return
-                const b = groupBounds[img.groupId] || { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
-                groupBounds[img.groupId] = {
-                  x1: Math.min(b.x1, img.x - img.width / 2),
-                  y1: Math.min(b.y1, img.y - img.height / 2),
-                  x2: Math.max(b.x2, img.x + img.width / 2),
-                  y2: Math.max(b.y2, img.y + img.height / 2),
-                }
-              })
-              return Object.entries(groupBounds).map(([gid, b]) => (
-                <rect key={gid}
-                  x={b.x1 - 6} y={b.y1 - 6}
-                  width={b.x2 - b.x1 + 12} height={b.y2 - b.y1 + 12}
-                  fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="6,4"
-                  rx={6} opacity={0.7} pointerEvents="none"
-                />
-              ))
-            })()}
+            {Object.entries(groupBounds).map(([gid, b]) => (
+              <rect key={gid}
+                x={b.x1 - 6} y={b.y1 - 6}
+                width={b.x2 - b.x1 + 12} height={b.y2 - b.y1 + 12}
+                fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="6,4"
+                rx={6} opacity={0.7} pointerEvents="none"
+              />
+            ))}
 
             {/* 3. Images */}
             {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
