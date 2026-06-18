@@ -1743,6 +1743,58 @@ export default function Graph({ projectId, projectName }) {
                 pointerEvents="none" />
             })()}
 
+            {/* Combined selection resize handle */}
+            {selectedImageIds.size >= 1 && (() => {
+              const sel = (activeView?.images || []).filter(i => selectedImageIds.has(i.id))
+              if (sel.length === 0) return null
+              const bx1 = Math.min(...sel.map(i => i.x - i.width / 2))
+              const by1 = Math.min(...sel.map(i => i.y - i.height / 2))
+              const bx2 = Math.max(...sel.map(i => i.x + i.width / 2))
+              const by2 = Math.max(...sel.map(i => i.y + i.height / 2))
+              return (
+                <g>
+                  {/* Selection bounding box outline */}
+                  <rect x={bx1-3} y={by1-3} width={bx2-bx1+6} height={by2-by1+6}
+                    fill="none" stroke="#5b6af0" strokeWidth={1} strokeDasharray="4,3"
+                    opacity={0.5} pointerEvents="none" />
+                  {/* Bottom-right corner resize handle */}
+                  <rect x={bx2-6} y={by2-6} width={12} height={12}
+                    fill="#5b6af0" stroke="#fff" strokeWidth={1} rx={2}
+                    style={{ cursor: 'se-resize' }}
+                    onMouseDown={e => {
+                      e.preventDefault(); e.stopPropagation()
+                      const T = zoomTransformRef.current
+                      const bboxW = bx2 - bx1, bboxH = by2 - by1
+                      const origDist = Math.hypot(bboxW * T.k, bboxH * T.k)
+                      const startSizes = {}
+                      sel.forEach(img => { startSizes[img.id] = { w: img.width, h: img.height } })
+                      const onMove = me => {
+                        if (origDist < 1) return
+                        const d = Math.hypot(
+                          me.clientX - (T.x + bx1 * T.k),
+                          me.clientY - (T.y + by1 * T.k)
+                        )
+                        const s = d / origDist
+                        sel.forEach(img => {
+                          const { w, h } = startSizes[img.id]
+                          updateImage(img.id, {
+                            width: Math.max(20, Math.round(w * s)),
+                            height: Math.max(10, Math.round(h * s)),
+                          })
+                        })
+                      }
+                      const onUp = () => {
+                        document.removeEventListener('mousemove', onMove)
+                        document.removeEventListener('mouseup', onUp)
+                      }
+                      document.addEventListener('mousemove', onMove)
+                      document.addEventListener('mouseup', onUp)
+                    }}
+                  />
+                </g>
+              )
+            })()}
+
             {/* 3. Images */}
             {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
               <ImageNode key={img.id} img={img}
