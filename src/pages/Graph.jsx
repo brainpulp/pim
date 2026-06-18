@@ -206,6 +206,7 @@ export default function Graph({ projectId, projectName }) {
   const [notePopupId, setNotePopupId] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
+  const [confirmDeleteImages, setConfirmDeleteImages] = useState(null) // string[] | null
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
@@ -566,6 +567,10 @@ export default function Graph({ projectId, projectName }) {
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') {
+        if (selectedImageIds.size > 0) {
+          setSelectedImageIds(new Set()); setDrilledImageId(null)
+          // don't return — let existing Escape handling continue for other state
+        }
         if (fullscreen3dId) { setFullscreen3dId(null); return }
         if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
         setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); return
@@ -600,11 +605,39 @@ export default function Graph({ projectId, projectName }) {
         return
       }
 
+      // Delete / Backspace — canvas images
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedImageIds.size > 0) {
+        e.preventDefault()
+        setConfirmDeleteImages([...selectedImageIds])
+        return
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        // TODO Task 4: replace with confirmDeleteImages — currently only deletes the first selected image
-        if (selectedImageIds.size > 0) { setConfirmDeleteImage([...selectedImageIds][0]); return }
         if (selected?.type === 'edge') { pushUndo(); removeEdge(selected.id); setSelected(null) }
         if (selected?.type === 'node') { setConfirmDelete(selected.id) }
+        return
+      }
+
+      // Ctrl+A — select all images when canvas focused and no node selected
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && !selected && canvasFocused.current) {
+        e.preventDefault()
+        const images = useGraphStore.getState().views
+          .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+        setSelectedImageIds(new Set(images.map(i => i.id)))
+        return
+      }
+
+      // Ctrl+G — group selected images
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'g' && selectedImageIds.size >= 2) {
+        e.preventDefault()
+        groupImages([...selectedImageIds])
+        return
+      }
+
+      // Ctrl+Shift+G — ungroup selected images
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'G' || e.key === 'g') && selectedImageIds.size > 0) {
+        e.preventDefault()
+        ungroupImages([...selectedImageIds])
         return
       }
 
@@ -667,7 +700,7 @@ export default function Graph({ projectId, projectName }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -1796,6 +1829,25 @@ export default function Graph({ projectId, projectName }) {
               <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                 <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImage(null)}>Cancel</button>
                 <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete images confirm (multi-select) */}
+        {confirmDeleteImages && (
+          <div style={confirmStyle} onClick={() => setConfirmDeleteImages(null)}>
+            <div style={confirmBox} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
+                Delete {confirmDeleteImages.length} image{confirmDeleteImages.length > 1 ? 's' : ''}?
+              </div>
+              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImages(null)}>Cancel</button>
+                <button style={confirmOkBtn} onClick={() => {
+                  deleteImages(confirmDeleteImages)
+                  setSelectedImageIds(new Set()); setDrilledImageId(null)
+                  setConfirmDeleteImages(null)
+                }}>Delete</button>
               </div>
             </div>
           </div>
