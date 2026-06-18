@@ -1190,7 +1190,8 @@ export default function Graph({ projectId, projectName }) {
     canvasFocused.current = true
     setSelected(null)
 
-    const images = activeView?.images || []
+    const images = useGraphStore.getState().views
+      .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
     const T = zoomTransformRef.current
 
     if (mode === 'drag') {
@@ -1213,8 +1214,8 @@ export default function Graph({ projectId, projectName }) {
         if (img?.groupId) {
           setDrilledImageId(imageId)
           setSelectedImageIds(new Set([imageId]))
-          return
         }
+        return  // always return on double-click — never start a drag
       }
 
       // Plain click: select image or its whole group (unless drilled)
@@ -1228,8 +1229,7 @@ export default function Graph({ projectId, projectName }) {
       const isDrilledDrag = drilledImageId === imageId
       const dragIds = isDrilledDrag ? [imageId] : ids
 
-      const startSx = (e.clientX - T.x) / T.k
-      const startSy = (e.clientY - T.y) / T.k
+      const startClientX = e.clientX, startClientY = e.clientY
       const origins = {}
       dragIds.forEach(id => {
         const img = images.find(i => i.id === id)
@@ -1237,7 +1237,10 @@ export default function Graph({ projectId, projectName }) {
       })
 
       const onMove = me => {
-        const sx = (me.clientX - T.x) / T.k, sy = (me.clientY - T.y) / T.k
+        const T2 = zoomTransformRef.current
+        const startSx = (startClientX - T2.x) / T2.k
+        const startSy = (startClientY - T2.y) / T2.k
+        const sx = (me.clientX - T2.x) / T2.k, sy = (me.clientY - T2.y) / T2.k
         const dx = sx - startSx, dy = sy - startSy
         dragIds.forEach(id => {
           if (!origins[id]) return
@@ -1281,7 +1284,7 @@ export default function Graph({ projectId, projectName }) {
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [activeView, drilledImageId, updateImage, expandGroup])
+  }, [drilledImageId, updateImage, expandGroup])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -1429,7 +1432,7 @@ export default function Graph({ projectId, projectName }) {
       <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
-          onClick={() => { setSelected(null); setSelectedImageIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
+          onClick={e => { if (e.target !== e.currentTarget) return; setSelected(null); setSelectedImageIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
