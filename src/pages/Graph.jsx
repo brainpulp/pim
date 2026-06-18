@@ -601,6 +601,7 @@ export default function Graph({ projectId, projectName }) {
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        // TODO Task 4: replace with confirmDeleteImages — currently only deletes the first selected image
         if (selectedImageIds.size > 0) { setConfirmDeleteImage([...selectedImageIds][0]); return }
         if (selected?.type === 'edge') { pushUndo(); removeEdge(selected.id); setSelected(null) }
         if (selected?.type === 'node') { setConfirmDelete(selected.id) }
@@ -1697,6 +1698,7 @@ export default function Graph({ projectId, projectName }) {
 
         {/* Image toolbar */}
         {selectedImageIds.size > 0 && (() => {
+          // TODO Task 7: replace with full multi-select toolbar
           const selectedImageId = [...selectedImageIds][0]
           const img = (activeView?.images || []).find(i => i.id === selectedImageId)
           if (!img) return null
