@@ -179,10 +179,107 @@ function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   )
 }
 
+function alignImages(images, selectedIds, anchor) {
+  const sel = images.filter(i => selectedIds.has(i.id))
+  if (sel.length === 0) return []
+  const x1 = Math.min(...sel.map(i => i.x - i.width / 2))
+  const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
+  const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
+  const y2 = Math.max(...sel.map(i => i.y + i.height / 2))
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2
+  return sel.map(img => {
+    let x = img.x, y = img.y
+    if (anchor === 'left')    x = x1 + img.width / 2
+    if (anchor === 'centerH') x = cx
+    if (anchor === 'right')   x = x2 - img.width / 2
+    if (anchor === 'top')     y = y1 + img.height / 2
+    if (anchor === 'middleV') y = cy
+    if (anchor === 'bottom')  y = y2 - img.height / 2
+    return { id: img.id, x, y }
+  })
+}
+
+function distributeImages(images, selectedIds, axis) {
+  const sel = [...images.filter(i => selectedIds.has(i.id))]
+    .sort((a, b) => axis === 'H' ? a.x - b.x : a.y - b.y)
+  if (sel.length < 3) return []
+  const first = axis === 'H' ? sel[0].x : sel[0].y
+  const last  = axis === 'H' ? sel[sel.length-1].x : sel[sel.length-1].y
+  const step = (last - first) / (sel.length - 1)
+  return sel.map((img, i) => ({
+    id: img.id,
+    ...(axis === 'H' ? { x: first + i * step } : { y: first + i * step }),
+  }))
+}
+
+function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onDelete }) {
+  // zoomTick is not read — it forces re-render when D3 zoom fires so `transform` stays current
+  if (selectedImageIds.size === 0) return null
+  const sel = images.filter(i => selectedImageIds.has(i.id))
+  const count = sel.length
+  if (count === 0) return null
+  if (!transform) return null
+
+  // Position: centered above combined bounding box, in screen coordinates
+  const T = transform
+  const x1 = Math.min(...sel.map(i => i.x - i.width / 2))
+  const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
+  const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
+  const cx = (x1 + x2) / 2
+  const screenX = T.x + cx * T.k
+  const screenY = T.y + y1 * T.k - 12
+
+  const hasGroupId = sel.some(i => i.groupId)
+  const isSingle = count === 1
+
+  const btn = (label, onClick, disabled, title, color) => (
+    <button key={label + (title || '')}
+      title={title || label}
+      onClick={disabled ? undefined : onClick}
+      style={{
+        background: 'transparent', border: '1px solid #2d3a6a', borderRadius: 5,
+        color: disabled ? '#3a4070' : (color || '#7080a0'), cursor: disabled ? 'default' : 'pointer',
+        padding: '3px 7px', fontSize: '0.78rem', whiteSpace: 'nowrap',
+      }}
+    >{label}</button>
+  )
+
+  return (
+    <div
+      onMouseDown={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', left: screenX, top: screenY,
+        transform: 'translateX(-50%) translateY(-100%)',
+        background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
+        padding: '5px 7px', display: 'flex', flexWrap: 'wrap', gap: 4,
+        zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)', maxWidth: 400,
+      }}
+    >
+      {isSingle && btn('▲', () => onReorderImage(sel[0].id, 'up'), false, 'Layer up')}
+      {isSingle && btn('▼', () => onReorderImage(sel[0].id, 'down'), false, 'Layer down')}
+      {count >= 2 && btn('Group', onGroup, false, 'Ctrl+G')}
+      {hasGroupId && btn('Ungroup', onUngroup, false, 'Ctrl+Shift+G')}
+      {count >= 2 && btn('⬛L', () => onAlign('left'), false, 'Align left')}
+      {count >= 2 && btn('⬛C', () => onAlign('centerH'), false, 'Align center H')}
+      {count >= 2 && btn('⬛R', () => onAlign('right'), false, 'Align right')}
+      {count >= 2 && btn('⬛T', () => onAlign('top'), false, 'Align top')}
+      {count >= 2 && btn('⬛M', () => onAlign('middleV'), false, 'Align middle V')}
+      {count >= 2 && btn('⬛B', () => onAlign('bottom'), false, 'Align bottom')}
+      {count >= 3 && btn('↔ Dist', () => onDistribute('H'), false, 'Distribute H')}
+      {count >= 3 && btn('↕ Dist', () => onDistribute('V'), false, 'Distribute V')}
+      {isSingle && btn('Crop', undefined, true, 'Coming in v2', '#3a4070')}
+      {btn('✕ Delete', onDelete, false, 'Delete selected', '#f87171')}
+    </div>
+  )
+}
+
 export default function Graph({ projectId, projectName }) {
   const svgRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
+  const zoomFilterRef = useRef(null)
   const simNodesRef = useRef([])
   const simEdgesRef = useRef([])
   const zoomTransformRef = useRef(d3.zoomIdentity)
@@ -206,8 +303,22 @@ export default function Graph({ projectId, projectName }) {
   const [notePopupId, setNotePopupId] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
+  const [confirmDeleteImages, setConfirmDeleteImages] = useState(null) // string[] | null
   const [pendingEditId, setPendingEditId] = useState(null)
-  const [selectedImageId, setSelectedImageId] = useState(null)
+  const [selectedImageIds, setSelectedImageIds] = useState(new Set())
+  const [drilledImageId, setDrilledImageId] = useState(null)
+  const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
+  const rubberBandRef = useRef(null)
+  const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
+
+  // Expand a plain click to select the image's whole group (unless that image is drilled)
+  const expandGroup = useCallback((imageId, images, drilled) => {
+    if (imageId === drilled) return [imageId]
+    const img = images.find(i => i.id === imageId)
+    if (!img?.groupId) return [imageId]
+    return images.filter(i => i.groupId === img.groupId).map(i => i.id)
+  }, [])
+
   const [dragHoverNodeId, setDragHoverNodeId] = useState(null)
   const dragHoverNodeIdRef = useRef(null)
   const [showSlideSidebar, setShowSlideSidebar] = useState(false)
@@ -266,6 +377,10 @@ export default function Graph({ projectId, projectName }) {
   const addImage        = useGraphStore(s => s.addImage)
   const updateImage     = useGraphStore(s => s.updateImage)
   const deleteImage     = useGraphStore(s => s.deleteImage)
+  const groupImages     = useGraphStore(s => s.groupImages)
+  const ungroupImages   = useGraphStore(s => s.ungroupImages)
+  const reorderImage    = useGraphStore(s => s.reorderImage)
+  const deleteImages    = useGraphStore(s => s.deleteImages)
   const addCustomEmoji  = useGraphStore(s => s.addCustomEmoji)
   const removeCustomEmoji = useGraphStore(s => s.removeCustomEmoji)
   const addSlide            = useGraphStore(s => s.addSlide)
@@ -517,20 +632,23 @@ export default function Graph({ projectId, projectName }) {
   useEffect(() => {
     if (!svgRef.current) return
     const svg = d3.select(svgRef.current)
+    const zoomFilter = e => e.type === 'wheel' || (
+      !e.target.closest?.('[data-node]') &&
+      !e.target.closest?.('[data-frame]') &&
+      !e.target.closest?.('[data-img]') &&
+      !e.target.closest?.('[data-3d-canvas]')
+    )
+    zoomFilterRef.current = zoomFilter
     zoomBehaviorRef.current = d3.zoom()
       .scaleExtent([0.04, 10])
-      .filter(e => e.type === 'wheel' || (
-        !e.target.closest?.('[data-node]') &&
-        !e.target.closest?.('[data-frame]') &&
-        !e.target.closest?.('[data-img]') &&
-        !e.target.closest?.('[data-3d-canvas]')
-      ))
+      .filter(zoomFilter)
       .on('zoom', e => {
         zoomTransformRef.current = e.transform
         scheduleRender()
         if (panSaveTimerRef.current) clearTimeout(panSaveTimerRef.current)
         panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
       })
+    zoomBehaviorRef.current.on('zoom.toolbar', () => setZoomTick(t => t + 1))
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
     return () => svg.on('.zoom', null)
@@ -552,9 +670,14 @@ export default function Graph({ projectId, projectName }) {
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') {
+        if (confirmDeleteImages) { setConfirmDeleteImages(null); return }
+        if (selectedImageIds.size > 0) {
+          setSelectedImageIds(new Set()); setDrilledImageId(null)
+          // don't return — let existing Escape handling continue for other state
+        }
         if (fullscreen3dId) { setFullscreen3dId(null); return }
         if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
-        setSelected(null); setSelectedImageId(null); setConfirmDelete(null); return
+        setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); return
       }
 
       // Presentation mode arrow navigation
@@ -586,10 +709,39 @@ export default function Graph({ projectId, projectName }) {
         return
       }
 
+      // Delete / Backspace — canvas images
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedImageIds.size > 0) {
+        e.preventDefault()
+        setConfirmDeleteImages([...selectedImageIds])
+        return
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedImageId) { setConfirmDeleteImage(selectedImageId); return }
         if (selected?.type === 'edge') { pushUndo(); removeEdge(selected.id); setSelected(null) }
         if (selected?.type === 'node') { setConfirmDelete(selected.id) }
+        return
+      }
+
+      // Ctrl+A — select all images when canvas focused and no node selected
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && !selected && canvasFocused.current) {
+        e.preventDefault()
+        const images = useGraphStore.getState().views
+          .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+        setSelectedImageIds(new Set(images.map(i => i.id)))
+        return
+      }
+
+      // Ctrl+G — group selected images
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'g' && selectedImageIds.size >= 2) {
+        e.preventDefault()
+        groupImages([...selectedImageIds])
+        return
+      }
+
+      // Ctrl+Shift+G — ungroup selected images
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'G' || e.key === 'g') && selectedImageIds.size > 0) {
+        e.preventDefault()
+        ungroupImages([...selectedImageIds])
         return
       }
 
@@ -652,7 +804,7 @@ export default function Graph({ projectId, projectName }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -664,6 +816,8 @@ export default function Graph({ projectId, projectName }) {
     e.stopPropagation(); e.preventDefault()
     canvasFocused.current = true
     setSelected({ id: nodeId, type: 'node' })
+    setSelectedImageIds(new Set())
+    setDrilledImageId(null)
     setHoveredNodeId(null) // hide toolbar while dragging
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
@@ -1167,35 +1321,146 @@ export default function Graph({ projectId, projectName }) {
     return () => document.removeEventListener('paste', onPaste)
   }, [addImage])
 
+  // ── Rubber-band rect select ────────────────────────────────────────────────────
+  const handleCanvasMouseDown = useCallback((e) => {
+    if (e.button !== 0) return
+    // Always clear image selection on canvas background click
+    setSelectedImageIds(new Set()); setDrilledImageId(null)
+    setSelected(null)
+    canvasFocused.current = true
+
+    if (e.shiftKey || e.ctrlKey || e.metaKey) return // modifiers: let D3 pan handle it
+
+    const T = zoomTransformRef.current
+    const startClientX = e.clientX, startClientY = e.clientY
+    const startSx = (e.clientX - T.x) / T.k
+    const startSy = (e.clientY - T.y) / T.k
+    let moved = false
+
+    const onMove = me => {
+      const dx = me.clientX - startClientX, dy = me.clientY - startClientY
+      if (!moved && Math.hypot(dx, dy) < 4) return
+      if (!moved) {
+        moved = true
+        // Suppress D3 pan for the duration of the rubber-band
+        zoomBehaviorRef.current?.filter(() => false)
+      }
+      const ex = (me.clientX - T.x) / T.k, ey = (me.clientY - T.y) / T.k
+      rubberBandRef.current = { sx: startSx, sy: startSy, ex, ey }
+      setRubberBand({ sx: startSx, sy: startSy, ex, ey })
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      // Re-enable D3 pan (restore original filter, not a permissive one)
+      if (zoomFilterRef.current) zoomBehaviorRef.current?.filter(zoomFilterRef.current)
+
+      if (moved && rubberBandRef.current) {
+        const rb = rubberBandRef.current
+        const x1 = Math.min(rb.sx, rb.ex), y1 = Math.min(rb.sy, rb.ey)
+        const x2 = Math.max(rb.sx, rb.ex), y2 = Math.max(rb.sy, rb.ey)
+        const images = useGraphStore.getState().views
+          .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+        const drilled = drilledImageId
+        const hit = new Set()
+        images.forEach(img => {
+          const ix1 = img.x - img.width / 2, iy1 = img.y - img.height / 2
+          const ix2 = img.x + img.width / 2, iy2 = img.y + img.height / 2
+          if (ix1 < x2 && ix2 > x1 && iy1 < y2 && iy2 > y1) {
+            // Group expansion — but not for the drilled image
+            if (img.groupId && img.id !== drilled) {
+              images.filter(i => i.groupId === img.groupId).forEach(i => hit.add(i.id))
+            } else {
+              hit.add(img.id)
+            }
+          }
+        })
+        setSelectedImageIds(hit)
+        setDrilledImageId(null)
+      }
+      rubberBandRef.current = null
+      setRubberBand(null)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [drilledImageId])
+
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag') => {
-    e.preventDefault()
+    e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
-    setSelectedImageId(imageId)
     setSelected(null)
 
-    const getImg = () => useGraphStore.getState().views
-      .find(v => v.id === useGraphStore.getState().activeViewId)
-      ?.images?.find(i => i.id === imageId)
-
-    const img = getImg()
-    if (!img) return
+    const images = useGraphStore.getState().views
+      .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
     const T = zoomTransformRef.current
 
     if (mode === 'drag') {
-      const [startSx, startSy] = [
-        (e.clientX - T.x) / T.k,
-        (e.clientY - T.y) / T.k,
-      ]
-      const ox = img.x, oy = img.y
-      const onMove = me => {
-        const sx = (me.clientX - T.x) / T.k, sy = (me.clientY - T.y) / T.k
-        updateImage(imageId, { x: ox + sx - startSx, y: oy + sy - startSy })
+      const isShift = e.shiftKey || e.ctrlKey || e.metaKey
+
+      if (isShift) {
+        // Shift-click toggles only the individual image — never expands to whole group
+        setSelectedImageIds(prev => {
+          const next = new Set(prev)
+          if (next.has(imageId)) next.delete(imageId)
+          else next.add(imageId)
+          return next
+        })
+        return
       }
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
-      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+
+      // Double-click: drill into single group member
+      if (e.detail === 2) {
+        const img = images.find(i => i.id === imageId)
+        if (img?.groupId) {
+          setDrilledImageId(imageId)
+          setSelectedImageIds(new Set([imageId]))
+        }
+        return  // always return on double-click — never start a drag
+      }
+
+      // Plain click: select image or its whole group (unless drilled)
+      const ids = expandGroup(imageId, images, drilledImageId)
+      setSelectedImageIds(new Set(ids))
+      if (imageId !== drilledImageId) setDrilledImageId(null)
+
+      // Begin drag-move.
+      // Use `ids` (synchronously known) not `selectedImageIds` (stale React state).
+      // If the user is dragging the drilled image, move only that one.
+      const isDrilledDrag = drilledImageId === imageId
+      const dragIds = isDrilledDrag ? [imageId] : ids
+
+      const startClientX = e.clientX, startClientY = e.clientY
+      const origins = {}
+      dragIds.forEach(id => {
+        const img = images.find(i => i.id === id)
+        if (img) origins[id] = { x: img.x, y: img.y }
+      })
+
+      const onMove = me => {
+        const T2 = zoomTransformRef.current
+        const startSx = (startClientX - T2.x) / T2.k
+        const startSy = (startClientY - T2.y) / T2.k
+        const sx = (me.clientX - T2.x) / T2.k, sy = (me.clientY - T2.y) / T2.k
+        const dx = sx - startSx, dy = sy - startSy
+        dragIds.forEach(id => {
+          if (!origins[id]) return
+          updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy })
+        })
+      }
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'resize') {
+      // Single-image resize: unchanged from original
+      const img = images.find(i => i.id === imageId)
+      if (!img) return
       const screenCX = T.x + img.x * T.k, screenCY = T.y + img.y * T.k
       const startDist = Math.hypot(e.clientX - screenCX, e.clientY - screenCY)
       const startW = img.width, startH = img.height
@@ -1203,15 +1468,15 @@ export default function Graph({ projectId, projectName }) {
         if (startDist < 1) return
         const d = Math.hypot(me.clientX - screenCX, me.clientY - screenCY)
         const s = d / startDist
-        updateImage(imageId, {
-          width: Math.max(20, Math.round(startW * s)),
-          height: Math.max(10, Math.round(startH * s)),
-        })
+        updateImage(imageId, { width: Math.max(20, Math.round(startW * s)), height: Math.max(10, Math.round(startH * s)) })
       }
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'rotate') {
+      // Unchanged from original
+      const img = images.find(i => i.id === imageId)
+      if (!img) return
       const screenCX = T.x + img.x * T.k, screenCY = T.y + img.y * T.k
       const startAngleDeg = Math.atan2(e.clientY - screenCY, e.clientX - screenCX) * 180 / Math.PI
       const startRot = img.rotation || 0
@@ -1222,7 +1487,7 @@ export default function Graph({ projectId, projectName }) {
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [updateImage])
+  }, [drilledImageId, updateImage, expandGroup])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -1277,6 +1542,23 @@ export default function Graph({ projectId, projectName }) {
   }
 
   const exitPresentation = () => { setPresentingSlideIdx(null) }
+
+  // Group bounding boxes for selected groups
+  const selectedGroupIds = new Set()
+  ;(activeView?.images || []).forEach(img => {
+    if (img.groupId && selectedImageIds.has(img.id)) selectedGroupIds.add(img.groupId)
+  })
+  const groupBounds = {}
+  ;(activeView?.images || []).forEach(img => {
+    if (!img.groupId || !selectedGroupIds.has(img.groupId)) return
+    const b = groupBounds[img.groupId] || { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
+    groupBounds[img.groupId] = {
+      x1: Math.min(b.x1, img.x - img.width / 2),
+      y1: Math.min(b.y1, img.y - img.height / 2),
+      x2: Math.max(b.x2, img.x + img.width / 2),
+      y2: Math.max(b.y2, img.y + img.height / 2),
+    }
+  })
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -1370,7 +1652,7 @@ export default function Graph({ projectId, projectName }) {
       <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
-          onClick={() => { setSelected(null); setSelectedImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
+          onClick={e => { if (e.target !== e.currentTarget) return; setSelected(null); setSelectedImageIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
@@ -1383,7 +1665,10 @@ export default function Graph({ projectId, projectName }) {
               scheduleRender()
             }, 0)
           }}
-          onMouseDown={e => { if (!e.target.closest?.('[data-node]')) setIsPanning(true) }}
+          onMouseDown={e => {
+            if (!e.target.closest?.('[data-node]')) setIsPanning(true)
+            if (e.target === e.currentTarget) handleCanvasMouseDown(e)
+          }}
           onMouseUp={() => setIsPanning(false)}
           onMouseLeave={() => setIsPanning(false)}
         >
@@ -1437,10 +1722,84 @@ export default function Graph({ projectId, projectName }) {
 
             {connecting && <line x1={connecting.x1} y1={connecting.y1} x2={connecting.x2} y2={connecting.y2} stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,4" opacity={0.7} />}
 
+            {/* Group visual indicators */}
+            {Object.entries(groupBounds).map(([gid, b]) => (
+              <rect key={gid}
+                x={b.x1 - 6} y={b.y1 - 6}
+                width={b.x2 - b.x1 + 12} height={b.y2 - b.y1 + 12}
+                fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="6,4"
+                rx={6} opacity={0.7} pointerEvents="none"
+              />
+            ))}
+
+            {/* Rubber-band selection rect */}
+            {rubberBand && (() => {
+              const x = Math.min(rubberBand.sx, rubberBand.ex)
+              const y = Math.min(rubberBand.sy, rubberBand.ey)
+              const w = Math.abs(rubberBand.ex - rubberBand.sx)
+              const h = Math.abs(rubberBand.ey - rubberBand.sy)
+              return <rect x={x} y={y} width={w} height={h}
+                fill="rgba(91,106,240,0.08)" stroke="#5b6af0" strokeWidth={1} strokeDasharray="4,3"
+                pointerEvents="none" />
+            })()}
+
+            {/* Combined selection resize handle */}
+            {selectedImageIds.size >= 2 && (() => {
+              const sel = (activeView?.images || []).filter(i => selectedImageIds.has(i.id))
+              if (sel.length === 0) return null
+              const bx1 = Math.min(...sel.map(i => i.x - i.width / 2))
+              const by1 = Math.min(...sel.map(i => i.y - i.height / 2))
+              const bx2 = Math.max(...sel.map(i => i.x + i.width / 2))
+              const by2 = Math.max(...sel.map(i => i.y + i.height / 2))
+              return (
+                <g>
+                  {/* Selection bounding box outline */}
+                  <rect x={bx1-3} y={by1-3} width={bx2-bx1+6} height={by2-by1+6}
+                    fill="none" stroke="#ffffff" strokeWidth={1} strokeDasharray="4,3"
+                    opacity={0.35} pointerEvents="none" />
+                  {/* Bottom-right corner resize handle */}
+                  <rect x={bx2-6} y={by2-6} width={12} height={12}
+                    fill="#5b6af0" stroke="#fff" strokeWidth={1} rx={2}
+                    style={{ cursor: 'se-resize' }}
+                    onMouseDown={e => {
+                      e.preventDefault(); e.stopPropagation()
+                      const T = zoomTransformRef.current
+                      const bboxW = bx2 - bx1, bboxH = by2 - by1
+                      const origDist = Math.hypot(bboxW * T.k, bboxH * T.k)
+                      const startSizes = {}
+                      sel.forEach(img => { startSizes[img.id] = { w: img.width, h: img.height } })
+                      const onMove = me => {
+                        if (origDist < 1) return
+                        const T2 = zoomTransformRef.current
+                        const d = Math.hypot(
+                          me.clientX - (T2.x + bx1 * T2.k),
+                          me.clientY - (T2.y + by1 * T2.k)
+                        )
+                        const s = d / origDist
+                        sel.forEach(img => {
+                          const { w, h } = startSizes[img.id]
+                          updateImage(img.id, {
+                            width: Math.max(20, Math.round(w * s)),
+                            height: Math.max(10, Math.round(h * s)),
+                          })
+                        })
+                      }
+                      const onUp = () => {
+                        document.removeEventListener('mousemove', onMove)
+                        document.removeEventListener('mouseup', onUp)
+                      }
+                      document.addEventListener('mousemove', onMove)
+                      document.addEventListener('mouseup', onUp)
+                    }}
+                  />
+                </g>
+              )
+            })()}
+
             {/* 3. Images */}
             {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
               <ImageNode key={img.id} img={img}
-                isSelected={selectedImageId === img.id}
+                isSelected={selectedImageIds.has(img.id)}
                 onMouseDown={handleImageMouseDown}
               />
             ))}
@@ -1682,30 +2041,26 @@ export default function Graph({ projectId, projectName }) {
         })()}
 
         {/* Image toolbar */}
-        {selectedImageId && (() => {
-          const img = (activeView?.images || []).find(i => i.id === selectedImageId)
-          if (!img) return null
-          const screenX = T.x + img.x * T.k
-          const screenY = T.y + img.y * T.k + (img.height / 2) * T.k + 10
-          return (
-            <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-              style={{ position: 'absolute', left: screenX, top: screenY, transform: 'translateX(-50%)',
-                background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '6px 8px',
-                display: 'flex', flexDirection: 'column', gap: 6, zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)' }}>
-              {/* Action row */}
-              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                <button onClick={() => updateImage(selectedImageId, { visible: img.visible === false ? true : false })}
-                  title={img.visible === false ? 'Show' : 'Hide'}
-                  style={{ ...tlBtn, color: img.visible === false ? '#f6ad55' : '#aaa' }}>
-                  {img.visible === false ? '◌ Show' : '◌ Hide'}
-                </button>
-                <div style={{ flex: 1 }} />
-                <button onClick={() => { setConfirmDeleteImage(selectedImageId) }}
-                  style={{ ...tlBtn, color: '#f87171' }}>✕ Delete</button>
-              </div>
-            </div>
-          )
-        })()}
+        <ImageToolbar
+          images={activeView?.images || []}
+          selectedImageIds={selectedImageIds}
+          transform={zoomTransformRef.current}
+          zoomTick={zoomTick}
+          onGroup={() => groupImages([...selectedImageIds])}
+          onUngroup={() => ungroupImages([...selectedImageIds])}
+          onReorderImage={(id, dir) => reorderImage(id, dir)}
+          onAlign={anchor => {
+            const imgs = activeView?.images || []
+            const updates = alignImages(imgs, selectedImageIds, anchor)
+            updates.forEach(({ id, x, y }) => updateImage(id, { x, y }))
+          }}
+          onDistribute={axis => {
+            const imgs = activeView?.images || []
+            const updates = distributeImages(imgs, selectedImageIds, axis)
+            updates.forEach(u => updateImage(u.id, u))
+          }}
+          onDelete={() => setConfirmDeleteImages([...selectedImageIds])}
+        />
 
         {/* Delete node confirm */}
         {confirmDelete && (
@@ -1731,7 +2086,26 @@ export default function Graph({ projectId, projectName }) {
               </div>
               <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                 <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImage(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageId(null); setConfirmDeleteImage(null) }}>Delete</button>
+                <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete images confirm (multi-select) */}
+        {confirmDeleteImages && (
+          <div style={confirmStyle} onClick={() => setConfirmDeleteImages(null)}>
+            <div style={confirmBox} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
+                Delete {confirmDeleteImages.length} image{confirmDeleteImages.length > 1 ? 's' : ''}?
+              </div>
+              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImages(null)}>Cancel</button>
+                <button style={confirmOkBtn} onClick={() => {
+                  deleteImages(confirmDeleteImages)
+                  setSelectedImageIds(new Set()); setDrilledImageId(null)
+                  setConfirmDeleteImages(null)
+                }}>Delete</button>
               </div>
             </div>
           </div>
