@@ -207,7 +207,17 @@ export default function Graph({ projectId, projectName }) {
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
   const [pendingEditId, setPendingEditId] = useState(null)
-  const [selectedImageId, setSelectedImageId] = useState(null)
+  const [selectedImageIds, setSelectedImageIds] = useState(new Set())
+  const [drilledImageId, setDrilledImageId] = useState(null)
+
+  // Expand a plain click to select the image's whole group (unless that image is drilled)
+  const expandGroup = useCallback((imageId, images, drilled) => {
+    if (imageId === drilled) return [imageId]
+    const img = images.find(i => i.id === imageId)
+    if (!img?.groupId) return [imageId]
+    return images.filter(i => i.groupId === img.groupId).map(i => i.id)
+  }, [])
+
   const [dragHoverNodeId, setDragHoverNodeId] = useState(null)
   const dragHoverNodeIdRef = useRef(null)
   const [showSlideSidebar, setShowSlideSidebar] = useState(false)
@@ -266,6 +276,10 @@ export default function Graph({ projectId, projectName }) {
   const addImage        = useGraphStore(s => s.addImage)
   const updateImage     = useGraphStore(s => s.updateImage)
   const deleteImage     = useGraphStore(s => s.deleteImage)
+  const groupImages     = useGraphStore(s => s.groupImages)
+  const ungroupImages   = useGraphStore(s => s.ungroupImages)
+  const reorderImage    = useGraphStore(s => s.reorderImage)
+  const deleteImages    = useGraphStore(s => s.deleteImages)
   const addCustomEmoji  = useGraphStore(s => s.addCustomEmoji)
   const removeCustomEmoji = useGraphStore(s => s.removeCustomEmoji)
   const addSlide            = useGraphStore(s => s.addSlide)
@@ -554,7 +568,7 @@ export default function Graph({ projectId, projectName }) {
       if (e.key === 'Escape') {
         if (fullscreen3dId) { setFullscreen3dId(null); return }
         if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
-        setSelected(null); setSelectedImageId(null); setConfirmDelete(null); return
+        setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); return
       }
 
       // Presentation mode arrow navigation
@@ -587,7 +601,7 @@ export default function Graph({ projectId, projectName }) {
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedImageId) { setConfirmDeleteImage(selectedImageId); return }
+        if (selectedImageIds.size > 0) { setConfirmDeleteImage([...selectedImageIds][0]); return }
         if (selected?.type === 'edge') { pushUndo(); removeEdge(selected.id); setSelected(null) }
         if (selected?.type === 'node') { setConfirmDelete(selected.id) }
         return
@@ -1171,7 +1185,7 @@ export default function Graph({ projectId, projectName }) {
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag') => {
     e.preventDefault()
     canvasFocused.current = true
-    setSelectedImageId(imageId)
+    setSelectedImageIds(new Set([imageId]))
     setSelected(null)
 
     const getImg = () => useGraphStore.getState().views
@@ -1370,7 +1384,7 @@ export default function Graph({ projectId, projectName }) {
       <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
-          onClick={() => { setSelected(null); setSelectedImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
+          onClick={() => { setSelected(null); setSelectedImageIds(new Set()); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
@@ -1440,7 +1454,7 @@ export default function Graph({ projectId, projectName }) {
             {/* 3. Images */}
             {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
               <ImageNode key={img.id} img={img}
-                isSelected={selectedImageId === img.id}
+                isSelected={selectedImageIds.has(img.id)}
                 onMouseDown={handleImageMouseDown}
               />
             ))}
@@ -1682,7 +1696,8 @@ export default function Graph({ projectId, projectName }) {
         })()}
 
         {/* Image toolbar */}
-        {selectedImageId && (() => {
+        {selectedImageIds.size > 0 && (() => {
+          const selectedImageId = [...selectedImageIds][0]
           const img = (activeView?.images || []).find(i => i.id === selectedImageId)
           if (!img) return null
           const screenX = T.x + img.x * T.k
@@ -1731,7 +1746,7 @@ export default function Graph({ projectId, projectName }) {
               </div>
               <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                 <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImage(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageId(null); setConfirmDeleteImage(null) }}>Delete</button>
+                <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }}>Delete</button>
               </div>
             </div>
           </div>
