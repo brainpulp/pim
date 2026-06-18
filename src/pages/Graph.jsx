@@ -181,6 +181,7 @@ function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
 
 function alignImages(images, selectedIds, anchor) {
   const sel = images.filter(i => selectedIds.has(i.id))
+  if (sel.length === 0) return []
   const x1 = Math.min(...sel.map(i => i.x - i.width / 2))
   const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
   const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
@@ -213,10 +214,12 @@ function distributeImages(images, selectedIds, axis) {
 
 function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
     onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onDelete }) {
+  // zoomTick is not read — it forces re-render when D3 zoom fires so `transform` stays current
   if (selectedImageIds.size === 0) return null
   const sel = images.filter(i => selectedImageIds.has(i.id))
   const count = sel.length
   if (count === 0) return null
+  if (!transform) return null
 
   // Position: centered above combined bounding box, in screen coordinates
   const T = transform
