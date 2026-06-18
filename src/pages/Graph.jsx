@@ -210,6 +210,9 @@ export default function Graph({ projectId, projectName }) {
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
+  const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
+  const rubberBandRef = useRef(null)
+  const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
 
   // Expand a plain click to select the image's whole group (unless that image is drilled)
   const expandGroup = useCallback((imageId, images, drilled) => {
@@ -546,6 +549,7 @@ export default function Graph({ projectId, projectName }) {
         if (panSaveTimerRef.current) clearTimeout(panSaveTimerRef.current)
         panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
       })
+    zoomBehaviorRef.current.on('zoom.toolbar', () => setZoomTick(t => t + 1))
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
     return () => svg.on('.zoom', null)
@@ -1218,6 +1222,72 @@ export default function Graph({ projectId, projectName }) {
     return () => document.removeEventListener('paste', onPaste)
   }, [addImage])
 
+  // ── Rubber-band rect select ────────────────────────────────────────────────────
+  const handleCanvasMouseDown = useCallback((e) => {
+    if (e.button !== 0) return
+    // Always clear image selection on canvas background click
+    setSelectedImageIds(new Set()); setDrilledImageId(null)
+    setSelected(null)
+    canvasFocused.current = true
+
+    if (e.shiftKey || e.ctrlKey || e.metaKey) return // modifiers: let D3 pan handle it
+
+    const T = zoomTransformRef.current
+    const startClientX = e.clientX, startClientY = e.clientY
+    const startSx = (e.clientX - T.x) / T.k
+    const startSy = (e.clientY - T.y) / T.k
+    let moved = false
+
+    const onMove = me => {
+      const dx = me.clientX - startClientX, dy = me.clientY - startClientY
+      if (!moved && Math.hypot(dx, dy) < 4) return
+      if (!moved) {
+        moved = true
+        // Suppress D3 pan for the duration of the rubber-band
+        zoomBehaviorRef.current?.filter(() => false)
+      }
+      const ex = (me.clientX - T.x) / T.k, ey = (me.clientY - T.y) / T.k
+      rubberBandRef.current = { sx: startSx, sy: startSy, ex, ey }
+      setRubberBand({ sx: startSx, sy: startSy, ex, ey })
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      // Re-enable D3 pan
+      zoomBehaviorRef.current?.filter(() => true)
+
+      if (moved && rubberBandRef.current) {
+        const rb = rubberBandRef.current
+        const x1 = Math.min(rb.sx, rb.ex), y1 = Math.min(rb.sy, rb.ey)
+        const x2 = Math.max(rb.sx, rb.ex), y2 = Math.max(rb.sy, rb.ey)
+        const images = useGraphStore.getState().views
+          .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+        const drilled = drilledImageId
+        const hit = new Set()
+        images.forEach(img => {
+          const ix1 = img.x - img.width / 2, iy1 = img.y - img.height / 2
+          const ix2 = img.x + img.width / 2, iy2 = img.y + img.height / 2
+          if (ix1 < x2 && ix2 > x1 && iy1 < y2 && iy2 > y1) {
+            // Group expansion — but not for the drilled image
+            if (img.groupId && img.id !== drilled) {
+              images.filter(i => i.groupId === img.groupId).forEach(i => hit.add(i.id))
+            } else {
+              hit.add(img.id)
+            }
+          }
+        })
+        setSelectedImageIds(hit)
+        setDrilledImageId(null)
+      }
+      rubberBandRef.current = null
+      setRubberBand(null)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [drilledImageId])
+
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag') => {
     e.preventDefault(); e.stopPropagation()
@@ -1496,7 +1566,10 @@ export default function Graph({ projectId, projectName }) {
               scheduleRender()
             }, 0)
           }}
-          onMouseDown={e => { if (!e.target.closest?.('[data-node]')) setIsPanning(true) }}
+          onMouseDown={e => {
+            if (!e.target.closest?.('[data-node]')) setIsPanning(true)
+            if (e.target === e.currentTarget) handleCanvasMouseDown(e)
+          }}
           onMouseUp={() => setIsPanning(false)}
           onMouseLeave={() => setIsPanning(false)}
         >
@@ -1559,6 +1632,17 @@ export default function Graph({ projectId, projectName }) {
                 rx={6} opacity={0.7} pointerEvents="none"
               />
             ))}
+
+            {/* Rubber-band selection rect */}
+            {rubberBand && (() => {
+              const x = Math.min(rubberBand.sx, rubberBand.ex)
+              const y = Math.min(rubberBand.sy, rubberBand.ey)
+              const w = Math.abs(rubberBand.ex - rubberBand.sx)
+              const h = Math.abs(rubberBand.ey - rubberBand.sy)
+              return <rect x={x} y={y} width={w} height={h}
+                fill="rgba(91,106,240,0.08)" stroke="#5b6af0" strokeWidth={1} strokeDasharray="4,3"
+                pointerEvents="none" />
+            })()}
 
             {/* 3. Images */}
             {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
