@@ -679,6 +679,8 @@ export default function Graph({ projectId, projectName }) {
     e.stopPropagation(); e.preventDefault()
     canvasFocused.current = true
     setSelected({ id: nodeId, type: 'node' })
+    setSelectedImageIds(new Set())
+    setDrilledImageId(null)
     setHoveredNodeId(null) // hide toolbar while dragging
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
@@ -1184,33 +1186,75 @@ export default function Graph({ projectId, projectName }) {
 
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag') => {
-    e.preventDefault()
+    e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
-    setSelectedImageIds(new Set([imageId]))
     setSelected(null)
 
-    const getImg = () => useGraphStore.getState().views
-      .find(v => v.id === useGraphStore.getState().activeViewId)
-      ?.images?.find(i => i.id === imageId)
-
-    const img = getImg()
-    if (!img) return
+    const images = activeView?.images || []
     const T = zoomTransformRef.current
 
     if (mode === 'drag') {
-      const [startSx, startSy] = [
-        (e.clientX - T.x) / T.k,
-        (e.clientY - T.y) / T.k,
-      ]
-      const ox = img.x, oy = img.y
+      const isShift = e.shiftKey || e.ctrlKey || e.metaKey
+
+      if (isShift) {
+        // Shift-click toggles only the individual image — never expands to whole group
+        setSelectedImageIds(prev => {
+          const next = new Set(prev)
+          if (next.has(imageId)) next.delete(imageId)
+          else next.add(imageId)
+          return next
+        })
+        return
+      }
+
+      // Double-click: drill into single group member
+      if (e.detail === 2) {
+        const img = images.find(i => i.id === imageId)
+        if (img?.groupId) {
+          setDrilledImageId(imageId)
+          setSelectedImageIds(new Set([imageId]))
+          return
+        }
+      }
+
+      // Plain click: select image or its whole group (unless drilled)
+      const ids = expandGroup(imageId, images, drilledImageId)
+      setSelectedImageIds(new Set(ids))
+      if (imageId !== drilledImageId) setDrilledImageId(null)
+
+      // Begin drag-move.
+      // Use `ids` (synchronously known) not `selectedImageIds` (stale React state).
+      // If the user is dragging the drilled image, move only that one.
+      const isDrilledDrag = drilledImageId === imageId
+      const dragIds = isDrilledDrag ? [imageId] : ids
+
+      const startSx = (e.clientX - T.x) / T.k
+      const startSy = (e.clientY - T.y) / T.k
+      const origins = {}
+      dragIds.forEach(id => {
+        const img = images.find(i => i.id === id)
+        if (img) origins[id] = { x: img.x, y: img.y }
+      })
+
       const onMove = me => {
         const sx = (me.clientX - T.x) / T.k, sy = (me.clientY - T.y) / T.k
-        updateImage(imageId, { x: ox + sx - startSx, y: oy + sy - startSy })
+        const dx = sx - startSx, dy = sy - startSy
+        dragIds.forEach(id => {
+          if (!origins[id]) return
+          updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy })
+        })
       }
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
-      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'resize') {
+      // Single-image resize: unchanged from original
+      const img = images.find(i => i.id === imageId)
+      if (!img) return
       const screenCX = T.x + img.x * T.k, screenCY = T.y + img.y * T.k
       const startDist = Math.hypot(e.clientX - screenCX, e.clientY - screenCY)
       const startW = img.width, startH = img.height
@@ -1218,15 +1262,15 @@ export default function Graph({ projectId, projectName }) {
         if (startDist < 1) return
         const d = Math.hypot(me.clientX - screenCX, me.clientY - screenCY)
         const s = d / startDist
-        updateImage(imageId, {
-          width: Math.max(20, Math.round(startW * s)),
-          height: Math.max(10, Math.round(startH * s)),
-        })
+        updateImage(imageId, { width: Math.max(20, Math.round(startW * s)), height: Math.max(10, Math.round(startH * s)) })
       }
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'rotate') {
+      // Unchanged from original
+      const img = images.find(i => i.id === imageId)
+      if (!img) return
       const screenCX = T.x + img.x * T.k, screenCY = T.y + img.y * T.k
       const startAngleDeg = Math.atan2(e.clientY - screenCY, e.clientX - screenCX) * 180 / Math.PI
       const startRot = img.rotation || 0
@@ -1237,7 +1281,7 @@ export default function Graph({ projectId, projectName }) {
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [updateImage])
+  }, [activeView, drilledImageId, updateImage, expandGroup])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -1385,7 +1429,7 @@ export default function Graph({ projectId, projectName }) {
       <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
-          onClick={() => { setSelected(null); setSelectedImageIds(new Set()); setShowBgPicker(false); setNotePopupId(null) }}
+          onClick={() => { setSelected(null); setSelectedImageIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
