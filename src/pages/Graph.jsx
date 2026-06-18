@@ -179,6 +179,99 @@ function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   )
 }
 
+function alignImages(images, selectedIds, anchor) {
+  const sel = images.filter(i => selectedIds.has(i.id))
+  const x1 = Math.min(...sel.map(i => i.x - i.width / 2))
+  const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
+  const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
+  const y2 = Math.max(...sel.map(i => i.y + i.height / 2))
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2
+  return sel.map(img => {
+    let x = img.x, y = img.y
+    if (anchor === 'left')    x = x1 + img.width / 2
+    if (anchor === 'centerH') x = cx
+    if (anchor === 'right')   x = x2 - img.width / 2
+    if (anchor === 'top')     y = y1 + img.height / 2
+    if (anchor === 'middleV') y = cy
+    if (anchor === 'bottom')  y = y2 - img.height / 2
+    return { id: img.id, x, y }
+  })
+}
+
+function distributeImages(images, selectedIds, axis) {
+  const sel = [...images.filter(i => selectedIds.has(i.id))]
+    .sort((a, b) => axis === 'H' ? a.x - b.x : a.y - b.y)
+  if (sel.length < 3) return []
+  const first = axis === 'H' ? sel[0].x : sel[0].y
+  const last  = axis === 'H' ? sel[sel.length-1].x : sel[sel.length-1].y
+  const step = (last - first) / (sel.length - 1)
+  return sel.map((img, i) => ({
+    id: img.id,
+    ...(axis === 'H' ? { x: first + i * step } : { y: first + i * step }),
+  }))
+}
+
+function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onDelete }) {
+  if (selectedImageIds.size === 0) return null
+  const sel = images.filter(i => selectedImageIds.has(i.id))
+  const count = sel.length
+  if (count === 0) return null
+
+  // Position: centered above combined bounding box, in screen coordinates
+  const T = transform
+  const x1 = Math.min(...sel.map(i => i.x - i.width / 2))
+  const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
+  const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
+  const cx = (x1 + x2) / 2
+  const screenX = T.x + cx * T.k
+  const screenY = T.y + y1 * T.k - 12
+
+  const hasGroupId = sel.some(i => i.groupId)
+  const isSingle = count === 1
+
+  const btn = (label, onClick, disabled, title, color) => (
+    <button key={label + (title || '')}
+      title={title || label}
+      onClick={disabled ? undefined : onClick}
+      style={{
+        background: 'transparent', border: '1px solid #2d3a6a', borderRadius: 5,
+        color: disabled ? '#3a4070' : (color || '#7080a0'), cursor: disabled ? 'default' : 'pointer',
+        padding: '3px 7px', fontSize: '0.78rem', whiteSpace: 'nowrap',
+      }}
+    >{label}</button>
+  )
+
+  return (
+    <div
+      onMouseDown={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', left: screenX, top: screenY,
+        transform: 'translateX(-50%) translateY(-100%)',
+        background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
+        padding: '5px 7px', display: 'flex', flexWrap: 'wrap', gap: 4,
+        zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)', maxWidth: 400,
+      }}
+    >
+      {isSingle && btn('▲', () => onReorderImage(sel[0].id, 'up'), false, 'Layer up')}
+      {isSingle && btn('▼', () => onReorderImage(sel[0].id, 'down'), false, 'Layer down')}
+      {count >= 2 && btn('Group', onGroup, false, 'Ctrl+G')}
+      {hasGroupId && btn('Ungroup', onUngroup, false, 'Ctrl+Shift+G')}
+      {count >= 2 && btn('⬛L', () => onAlign('left'), false, 'Align left')}
+      {count >= 2 && btn('⬛C', () => onAlign('centerH'), false, 'Align center H')}
+      {count >= 2 && btn('⬛R', () => onAlign('right'), false, 'Align right')}
+      {count >= 2 && btn('⬛T', () => onAlign('top'), false, 'Align top')}
+      {count >= 2 && btn('⬛M', () => onAlign('middleV'), false, 'Align middle V')}
+      {count >= 2 && btn('⬛B', () => onAlign('bottom'), false, 'Align bottom')}
+      {count >= 3 && btn('↔ Dist', () => onDistribute('H'), false, 'Distribute H')}
+      {count >= 3 && btn('↕ Dist', () => onDistribute('V'), false, 'Distribute V')}
+      {isSingle && btn('Crop', undefined, true, 'Coming in v2', '#3a4070')}
+      {btn('✕ Delete', onDelete, false, 'Delete selected', '#f87171')}
+    </div>
+  )
+}
+
 export default function Graph({ projectId, projectName }) {
   const svgRef = useRef()
   const simRef = useRef(null)
@@ -1892,32 +1985,26 @@ export default function Graph({ projectId, projectName }) {
         })()}
 
         {/* Image toolbar */}
-        {selectedImageIds.size > 0 && (() => {
-          // TODO Task 7: replace with full multi-select toolbar
-          const selectedImageId = [...selectedImageIds][0]
-          const img = (activeView?.images || []).find(i => i.id === selectedImageId)
-          if (!img) return null
-          const screenX = T.x + img.x * T.k
-          const screenY = T.y + img.y * T.k + (img.height / 2) * T.k + 10
-          return (
-            <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-              style={{ position: 'absolute', left: screenX, top: screenY, transform: 'translateX(-50%)',
-                background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '6px 8px',
-                display: 'flex', flexDirection: 'column', gap: 6, zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)' }}>
-              {/* Action row */}
-              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                <button onClick={() => updateImage(selectedImageId, { visible: img.visible === false ? true : false })}
-                  title={img.visible === false ? 'Show' : 'Hide'}
-                  style={{ ...tlBtn, color: img.visible === false ? '#f6ad55' : '#aaa' }}>
-                  {img.visible === false ? '◌ Show' : '◌ Hide'}
-                </button>
-                <div style={{ flex: 1 }} />
-                <button onClick={() => { setConfirmDeleteImage(selectedImageId) }}
-                  style={{ ...tlBtn, color: '#f87171' }}>✕ Delete</button>
-              </div>
-            </div>
-          )
-        })()}
+        <ImageToolbar
+          images={activeView?.images || []}
+          selectedImageIds={selectedImageIds}
+          transform={zoomTransformRef.current}
+          zoomTick={zoomTick}
+          onGroup={() => groupImages([...selectedImageIds])}
+          onUngroup={() => ungroupImages([...selectedImageIds])}
+          onReorderImage={(id, dir) => reorderImage(id, dir)}
+          onAlign={anchor => {
+            const imgs = activeView?.images || []
+            const updates = alignImages(imgs, selectedImageIds, anchor)
+            updates.forEach(({ id, x, y }) => updateImage(id, { x, y }))
+          }}
+          onDistribute={axis => {
+            const imgs = activeView?.images || []
+            const updates = distributeImages(imgs, selectedImageIds, axis)
+            updates.forEach(u => updateImage(u.id, u))
+          }}
+          onDelete={() => setConfirmDeleteImages([...selectedImageIds])}
+        />
 
         {/* Delete node confirm */}
         {confirmDelete && (
