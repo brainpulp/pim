@@ -342,3 +342,28 @@ In the outline sidebar, show a slider on hover next to each row that controls ho
 **Source:** Notion "Tasks as animals" (2016)
 
 Map task parameters (value, speed, joy, urgency) to animal archetypes. Charming concept but fails the "solves real friction" test — the animal vocabulary is learning overhead with no actionable payoff. Better served by emotional weight + status fields.
+
+### Bundle code-splitting (shrink initial load)
+**Priority:** low | **Effort:** ~2-3 hours | **Risk:** low
+
+The production bundle is one ~1.69 MB chunk (470 kB gzip), over Vite's 500 kB warning threshold. Everything loads eagerly even though most of it isn't needed on first paint. No user-facing bug, purely load-time — worth doing only if startup ever feels slow. Target: initial bundle down to ~600–800 kB (React + d3 + Graph), with three.js and tldraw loading on demand.
+
+**Where the weight is**
+| Dependency | Used by | ~Weight | Currently loaded |
+|---|---|---|---|
+| `three` + `@react-three/fiber` + `drei` | `Node3DViewer.jsx` (3D nodes only) | ~600–800 kB | Eagerly, always ← biggest waste |
+| `@tldraw/tldraw` | `Canvas.jsx` | ~500 kB+ | Possibly dead code |
+| `d3` | `Graph.jsx` (main view) | ~250 kB | Needed on load anyway |
+| `@tanstack/react-table` | `Table.jsx` | ~120 kB | Only on "table" tab |
+
+**Plan, in payoff order**
+1. **Verify `@tldraw/tldraw` is dead — possible free 500 kB.** `Canvas.jsx` imports the giant tldraw lib, but `App.jsx` only imports `Projects`, `Graph`, `Table` — `Canvas` is not routed anywhere. Confirm it's truly unreferenced (`grep -rn "Canvas" src`), then delete `Canvas.jsx` (or confirm tree-shaking already drops it). Zero behavior change if orphaned.
+2. **Lazy-load the 3D viewer — highest-value real split.** `three`/fiber/drei are only needed when a node has shape `'3d'`. Wrap `Node3DViewer` in `React.lazy(() => import('./components/Node3DViewer'))` + `<Suspense>`. Defers all of three.js until the first 3D node renders. Most graphs have zero 3D nodes, so this shrinks the common-case initial load the most.
+3. **Lazy-load `Table`.** Behind the "table" tab. `const Table = React.lazy(() => import('./pages/Table'))` in `App.jsx`, wrap the `{view === 'table' && ...}` branch in `<Suspense>`.
+
+**Skip**
+- `d3` — it's the graph engine, needed immediately on the main view; splitting just adds a load waterfall.
+- Manual `manualChunks` vendor splitting — marginal for a single-user app; the lazy boundaries above matter more.
+
+**Gotcha — 3D lazy-load (per "3D node architecture" rules above)**
+`Node3DViewer` renders inside an SVG `<foreignObject>`. The `<Suspense>` fallback must not break the foreignObject layout — use a minimal/empty fallback (e.g. `null` or a same-size placeholder), not a block element that reflows. Test on the live deploy: load a project with a 3D node and confirm the canvas, orbit controls, and thumbnail still work after the split.
