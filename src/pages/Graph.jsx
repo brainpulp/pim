@@ -2996,17 +2996,18 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {viewProps.borderBlur > 0 ? (
           <>
             <defs>
-              <filter id={`bglow-${node.id}`} x="-80%" y="-80%" width="260%" height="260%">
+              <filter id={`bedge-${node.id}`} x="-80%" y="-80%" width="260%" height="260%">
                 <feGaussianBlur in="SourceGraphic" stdDeviation={viewProps.borderBlur} />
               </filter>
             </defs>
-            {/* Glow: a solid shape the SAME size as the node, blurred — the Gaussian
-                fade straddles the true edge so there's no hard ring before it fades out */}
-            <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR}
-              fill={viewProps.strokeColor || '#5b6af0'} stroke="none"
-              filter={`url(#bglow-${node.id})`} />
-            {/* Crisp fill on top, exact same size — covers the glow's solid interior entirely */}
-            <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill} stroke="none" strokeWidth={0} />
+            {/* Blurred edges: the actual body (fill + stroke) is Gaussian-softened so
+                its edge feathers out. No crisp overlay, no colored glow halo.
+                Wrapped in a <g> so the filter applies to every shape (rect/roundrect
+                don't take a filter prop directly). */}
+            <g filter={`url(#bedge-${node.id})`}>
+              <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
+                stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
+            </g>
           </>
         ) : (
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
