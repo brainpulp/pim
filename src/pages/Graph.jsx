@@ -3151,13 +3151,20 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         opacity={viewProps.opacity}
       >
         {viewProps.borderBlur > 0 ? (
-          // CSS blur (not SVG feGaussianBlur): SVG filters blur in linearRGB by default,
-          // which washes a saturated fill toward white at the fringe. CSS blur() keeps the
-          // color and fades cleanly to transparent. The body feathers; no crisp overlay/glow.
-          <g style={{ filter: `blur(${viewProps.borderBlur}px)` }}>
-            <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
-              stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
-          </g>
+          // SVG feGaussianBlur with sRGB on the primitive: avoids the linearRGB white
+          // fringe AND the Chromium white-box bug that CSS filter+transform triggers.
+          // The body feathers to transparent; no crisp overlay, no colored glow.
+          <>
+            <defs>
+              <filter id={`bedge-${node.id}`} x="-150%" y="-150%" width="400%" height="400%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation={viewProps.borderBlur} colorInterpolationFilters="sRGB" />
+              </filter>
+            </defs>
+            <g filter={`url(#bedge-${node.id})`}>
+              <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
+                stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
+            </g>
+          </>
         ) : (
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
             stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
