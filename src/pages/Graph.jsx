@@ -327,6 +327,9 @@ export default function Graph({ projectId, projectName }) {
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
+  const [selectedNodeIds, setSelectedNodeIds] = useState(new Set())   // multi-node selection (rubber-band)
+  const selectedNodeIdsRef = useRef(selectedNodeIds)
+  useEffect(() => { selectedNodeIdsRef.current = selectedNodeIds }, [selectedNodeIds])
   const selectedImageIdsRef = useRef(selectedImageIds)   // live mirror for drag handlers
   useEffect(() => { selectedImageIdsRef.current = selectedImageIds }, [selectedImageIds])
   const [cropImageId, setCropImageId] = useState(null)   // free-floating image in crop mode (single)
@@ -550,6 +553,8 @@ export default function Graph({ projectId, projectName }) {
     }
     return base
   }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds])
+  const visibleNodeIdsRef = useRef(visibleNodeIds)
+  visibleNodeIdsRef.current = visibleNodeIds
 
   const nodesWithChildren = useMemo(() => new Set(storeEdges.map(e => e.source)), [storeEdges])
   const collapsedSet = useMemo(() => new Set(collapsedNodeIds), [collapsedNodeIds])
@@ -655,12 +660,13 @@ export default function Graph({ projectId, projectName }) {
   useEffect(() => {
     if (!svgRef.current) return
     const svg = d3.select(svgRef.current)
-    const zoomFilter = e => e.type === 'wheel' || (
-      !e.target.closest?.('[data-node]') &&
-      !e.target.closest?.('[data-frame]') &&
-      !e.target.closest?.('[data-img]') &&
-      !e.target.closest?.('[data-3d-canvas]')
-    )
+    // Pan is RIGHT-button drag (or wheel/touch); LEFT-drag is reserved for
+    // rubber-band selection, so the two no longer conflict.
+    const zoomFilter = e => {
+      if (e.type === 'wheel') return true
+      if (e.type.startsWith('touch')) return true
+      return e.button === 2   // right-button drag pans (anywhere)
+    }
     zoomFilterRef.current = zoomFilter
     zoomBehaviorRef.current = d3.zoom()
       .scaleExtent([0.04, 10])
@@ -674,6 +680,7 @@ export default function Graph({ projectId, projectName }) {
     zoomBehaviorRef.current.on('zoom.toolbar', () => setZoomTick(t => t + 1))
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
+    svg.on('contextmenu', e => e.preventDefault())   // don't pop the menu when right-drag panning
     return () => svg.on('.zoom', null)
   }, [scheduleRender, loading])
 
@@ -700,6 +707,7 @@ export default function Graph({ projectId, projectName }) {
           // don't return — let existing Escape handling continue for other state
         }
         if (fullscreen3dId) { setFullscreen3dId(null); return }
+        if (selectedNodeIds.size > 0) { setSelectedNodeIds(new Set()); return }
         if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
         setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); return
       }
@@ -828,7 +836,7 @@ export default function Graph({ projectId, projectName }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -839,10 +847,18 @@ export default function Graph({ projectId, projectName }) {
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
     canvasFocused.current = true
-    setSelected({ id: nodeId, type: 'node' })
-    setSelectedImageIds(new Set())
-    setDrilledImageId(null)
-    setCropImageId(null)
+
+    // If this node is part of a multi-selection, keep that selection and move all
+    // of them together; otherwise it's a normal single selection.
+    const curNodeSel = selectedNodeIdsRef.current
+    const multiDrag = curNodeSel.has(nodeId) && curNodeSel.size > 1
+    if (!multiDrag) {
+      setSelected({ id: nodeId, type: 'node' })
+      setSelectedNodeIds(new Set())
+      setSelectedImageIds(new Set())
+      setDrilledImageId(null)
+      setCropImageId(null)
+    }
     setHoveredNodeId(null) // hide toolbar while dragging
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
@@ -852,7 +868,9 @@ export default function Graph({ projectId, projectName }) {
 
     // Collect drag group
     let dragGroup = [simNode]
-    if (isFrame) {
+    if (multiDrag) {
+      dragGroup = simNodesRef.current.filter(n => curNodeSel.has(n.id))
+    } else if (isFrame) {
       // Frame drag: also move all nodes contained in this frame
       simNodesRef.current.forEach(n => {
         if (n.id !== nodeId && (viewNodePropsRef.current[n.id] || {}).containedIn === nodeId)
@@ -886,7 +904,7 @@ export default function Graph({ projectId, projectName }) {
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
 
       // Hover-detect: find node under cursor to highlight as reparent target
-      if (!isFrame) {
+      if (!isFrame && !multiDrag) {
         let found = null
         for (const n of simNodesRef.current) {
           if (n.id === nodeId) continue
@@ -919,7 +937,7 @@ export default function Graph({ projectId, projectName }) {
         const ddx = sx - startSx, ddy = sy - startSy
 
         // Reparent: if dropped on another regular node, make it a child
-        if (!isFrame && dragHoverNodeIdRef.current === null) {
+        if (!isFrame && !multiDrag && dragHoverNodeIdRef.current === null) {
           // re-check at drop position since ref was just cleared
           let dropTarget = null
           for (const n of simNodesRef.current) {
@@ -958,7 +976,7 @@ export default function Graph({ projectId, projectName }) {
         })
 
         // For regular nodes: check if dropped inside a frame → update containedIn
-        if (!isFrame) {
+        if (!isFrame && !multiDrag) {
           const sp = startPositions.find(p => p.node.id === nodeId)
           const dropX = sp ? sp.ox + ddx : sx
           const dropY = sp ? sp.oy + ddy : sy
@@ -1348,13 +1366,12 @@ export default function Graph({ projectId, projectName }) {
 
   // ── Rubber-band rect select ────────────────────────────────────────────────────
   const handleCanvasMouseDown = useCallback((e) => {
-    if (e.button !== 0) return
-    // Always clear image selection on canvas background click
+    if (e.button !== 0) return   // left-drag only; right-drag is pan (D3)
+    // Clear all selection on canvas background click
     setSelectedImageIds(new Set()); setDrilledImageId(null); setCropImageId(null)
+    setSelectedNodeIds(new Set())
     setSelected(null)
     canvasFocused.current = true
-
-    if (e.shiftKey || e.ctrlKey || e.metaKey) return // modifiers: let D3 pan handle it
 
     const T = zoomTransformRef.current
     const startClientX = e.clientX, startClientY = e.clientY
@@ -1403,6 +1420,24 @@ export default function Graph({ projectId, projectName }) {
         })
         setSelectedImageIds(hit)
         setDrilledImageId(null)
+
+        // Also rubber-band-select nodes whose body falls in the box
+        const nodeHits = new Set()
+        simNodesRef.current.forEach(n => {
+          if (!visibleNodeIdsRef.current.has(n.id) || n.x == null) return
+          const nvp = viewNodePropsRef.current[n.id] || {}
+          const nr = NODE_R * (nvp.scale || 1)
+          const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '',
+            Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
+          if ((n.x - halfW) < x2 && (n.x + halfW) > x1 && (n.y - halfH) < y2 && (n.y + halfH) > y1) {
+            nodeHits.add(n.id)
+          }
+        })
+        setSelectedNodeIds(nodeHits)
+        // If exactly one node and no images, treat as a normal single selection (shows toolbar)
+        if (nodeHits.size === 1 && hit.size === 0) {
+          setSelected({ id: [...nodeHits][0], type: 'node' })
+        }
       }
       rubberBandRef.current = null
       setRubberBand(null)
@@ -1417,6 +1452,7 @@ export default function Graph({ projectId, projectName }) {
     e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
     setSelected(null)
+    setSelectedNodeIds(new Set())
 
     const images = useGraphStore.getState().views
       .find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
@@ -1775,7 +1811,7 @@ export default function Graph({ projectId, projectName }) {
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
                 viewProps={getVP(n.id)}
-                isSelected={selected?.id === n.id && selected?.type === 'node'}
+                isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
                 inSlides={slideIds.includes(n.id)}
                 isPresenting={isPresenting}
                 onMouseDown={handleNodeMouseDown}
@@ -1898,7 +1934,7 @@ export default function Graph({ projectId, projectName }) {
                 modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
                 viewProps={getVP(n.id)}
-                isSelected={selected?.id === n.id && selected?.type === 'node'}
+                isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
                 isHovered={hoveredNodeId === n.id}
                 isDropTarget={dragHoverNodeId === n.id}
                 autoEdit={pendingEditId === n.id}
@@ -3422,8 +3458,6 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     fontSize:'0.78rem', padding:'0 4px 0 0', lineHeight:1,
   }
 
-  const divider = <div style={{ width:1, background:'#2a3358', alignSelf:'stretch', margin:'0 2px' }} />
-
   return (
     <div style={wrap}
       data-nodetoolbar="1"
@@ -3433,29 +3467,30 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
-      {/* â"€â"€ Main icon row â"€â"€ */}
-      {panel === null && (
-        <div style={{ display:'flex', gap:4, alignItems:'center' }}>
-          <button style={iconBtn(false)} title="Color" onClick={() => setPanel('color')}>🎨</button>
-          <button style={iconBtn(false)} title="Shape" onClick={() => setPanel('shape')}>◯</button>
-          {shape === 'image' && <button style={iconBtn(false)} title="Set image URL" onClick={() => setPanel('imageUrl')}>🖼</button>}
-          {divider}
-          <button style={iconBtn(false)} title="Show/hide" onClick={onHide}>👁</button>
-          <button style={iconBtn(false)} title="Drill" onClick={onDrill}>⊕</button>
-          <button style={iconBtn(depthExpand !== null)} title="Expand hops" onClick={() => {
+      {/* â"€â"€ Main icon grid â"€â"€ */}
+      {panel === null && (() => {
+        const cell = (s) => ({ ...s, width:'100%', display:'inline-flex', alignItems:'center', justifyContent:'center' })
+        return (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(6, 34px)', gap:4, justifyContent:'center' }}>
+          <button style={cell(iconBtn(false))} title="Color" onClick={() => setPanel('color')}>🎨</button>
+          <button style={cell(iconBtn(false))} title="Shape" onClick={() => setPanel('shape')}>◯</button>
+          {shape === 'image' && <button style={cell(iconBtn(false))} title="Set image URL" onClick={() => setPanel('imageUrl')}>🖼</button>}
+          <button style={cell(iconBtn(false))} title="Show/hide" onClick={onHide}>👁</button>
+          <button style={cell(iconBtn(false))} title="Drill" onClick={onDrill}>⊕</button>
+          <button style={cell(iconBtn(depthExpand !== null))} title="Expand hops" onClick={() => {
             if (depthExpand !== null) { onSetDepthExpand?.(null) }
             else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
           }}>⊛</button>
-          <button style={iconBtn(false)} title="Note" onClick={() => setPanel('note')}>✎</button>
-          <button style={iconBtn(!!viewProps.nodeMotion || !!viewProps.nodeColorCycle)} title="Motion & color cycle" onClick={() => setPanel('motion')}>✦</button>
-          <button style={iconBtn(false)} title="Radiate to children" onClick={() => setPanel('radiate')}>❋</button>
-          {isAnchored && <button style={{ ...iconBtn(false), color:'#f6ad55' }} title="Release anchor" onClick={onRelease}>⊙</button>}
-          <button style={iconBtn(panel === 'emoji')} title="Emoji" onClick={() => setPanel(panel === 'emoji' ? null : 'emoji')}>😊</button>
-          <button style={iconBtn(panel === 'image' || (viewProps.nodeImages || []).length > 0)} title="Image" onClick={() => setPanel(panel === 'image' ? null : 'image')}>🖼️</button>
-          {divider}
-          <button style={{ ...iconBtn(false), color:'#f87171' }} title="Delete" onClick={onDelete}>✕</button>
+          <button style={cell(iconBtn(false))} title="Note" onClick={() => setPanel('note')}>✎</button>
+          <button style={cell(iconBtn(!!viewProps.nodeMotion || !!viewProps.nodeColorCycle))} title="Motion & color cycle" onClick={() => setPanel('motion')}>✦</button>
+          <button style={cell(iconBtn(false))} title="Radiate to children" onClick={() => setPanel('radiate')}>❋</button>
+          {isAnchored && <button style={cell({ ...iconBtn(false), color:'#f6ad55' })} title="Release anchor" onClick={onRelease}>⊙</button>}
+          <button style={cell(iconBtn(panel === 'emoji'))} title="Emoji" onClick={() => setPanel(panel === 'emoji' ? null : 'emoji')}>😊</button>
+          <button style={cell(iconBtn(panel === 'image' || (viewProps.nodeImages || []).length > 0))} title="Image" onClick={() => setPanel(panel === 'image' ? null : 'image')}>🖼️</button>
+          <button style={cell({ ...iconBtn(false), color:'#f87171' })} title="Delete" onClick={onDelete}>✕</button>
         </div>
-      )}
+        )
+      })()}
 
       {/* â"€â"€ Color panel â"€â"€ */}
       {panel === 'color' && (
