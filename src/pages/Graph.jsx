@@ -1724,7 +1724,10 @@ export default function Graph({ projectId, projectName }) {
     const arrowPts = `${tipX},${tipY} ${basX+perpX*AW},${basY+perpY*AW} ${basX-perpX*AW},${basY-perpY*AW}`
     const mx = (x1+basX)/2, my = (y1+basY)/2
     const edgeColor = isSel ? '#5b6af0' : '#334155'
-    return { id: e.id, x1, y1, x2: basX, y2: basY, tipX, tipY, arrowPts, mx, my, edgeColor, isSel }
+    // Blur fade: if an endpoint node is blurred, the edge dissolves into its halo.
+    const sBlur = svp.borderBlur || 0, tBlur = tvp.borderBlur || 0
+    const lineLen = Math.hypot(tipX - x1, tipY - y1) || 1
+    return { id: e.id, x1, y1, x2: basX, y2: basY, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen }
   }).filter(Boolean)
 
   const frameSimNodes = simNodesRef.current.filter(n => (viewNodeProps[n.id]?.shape) === 'frame')
@@ -1903,14 +1906,30 @@ export default function Graph({ projectId, projectName }) {
             ))}
 
             {/* 2. Edges â€" node fill covers the tips cleanly */}
-            {edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel }) => (
+            {edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen }) => {
+              const hasBlur = sBlur > 0 || tBlur > 0
+              const gid = `eg-${id}`
+              const sFade = Math.min(0.5, (sBlur * 2) / lineLen)
+              const tFade = Math.min(0.5, (tBlur * 2) / lineLen)
+              const lineStroke = hasBlur ? `url(#${gid})` : edgeColor
+              return (
               <g key={id} onClick={ev => { ev.stopPropagation(); setSelected({ id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
+                {hasBlur && (
+                  <defs>
+                    <linearGradient id={gid} gradientUnits="userSpaceOnUse" x1={x1} y1={y1} x2={tipX} y2={tipY}>
+                      <stop offset="0" stopColor={edgeColor} stopOpacity={sBlur > 0 ? 0 : 1} />
+                      {sBlur > 0 && <stop offset={sFade} stopColor={edgeColor} stopOpacity={1} />}
+                      {tBlur > 0 && <stop offset={Math.max(sFade, 1 - tFade)} stopColor={edgeColor} stopOpacity={1} />}
+                      <stop offset="1" stopColor={edgeColor} stopOpacity={tBlur > 0 ? 0 : 1} />
+                    </linearGradient>
+                  </defs>
+                )}
                 <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke="transparent" strokeWidth={12} />
-                {/* thin bg-tinted moat that separates the line from overlapping elements */}
-                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} />
-                <polygon points={arrowPts} fill={bgColor} fillOpacity={0.4} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} strokeLinejoin="round" />
-                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} filter="url(#edge-shadow)" />
-                <polygon points={arrowPts} fill={edgeColor} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} strokeLinejoin="round" filter="url(#edge-shadow)" />
+                {/* thin bg-tinted moat that separates the line from overlapping elements (skip for faded edges) */}
+                {!hasBlur && <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} />}
+                {!hasBlur && <polygon points={arrowPts} fill={bgColor} fillOpacity={0.4} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} strokeLinejoin="round" />}
+                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={lineStroke} strokeWidth={isSel?2.5:1.5} filter={hasBlur ? undefined : "url(#edge-shadow)"} />
+                <polygon points={arrowPts} fill={lineStroke} stroke={lineStroke} strokeWidth={isSel?2.5:1.5} strokeLinejoin="round" filter={hasBlur ? undefined : "url(#edge-shadow)"} />
                 {isSel && (
                   <g transform={`translate(${mx},${my})`} onClick={ev => { ev.stopPropagation(); removeEdge(id); setSelected(null) }} style={{ cursor:'pointer' }}>
                     <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
@@ -1918,7 +1937,8 @@ export default function Graph({ projectId, projectName }) {
                   </g>
                 )}
               </g>
-            ))}
+              )
+            })}
 
             {connecting && <line x1={connecting.x1} y1={connecting.y1} x2={connecting.x2} y2={connecting.y2} stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,4" opacity={0.7} />}
 
