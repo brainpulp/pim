@@ -158,6 +158,16 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter, 
   return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
 }
 
+// True if a hex color reads as "light" (so we know whether to contrast with black or white).
+function isLightColor(hex) {
+  if (typeof hex !== 'string') return false
+  let h = hex.replace('#', '')
+  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  if (h.length !== 6) return false
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5
+}
+
 // Clip shape matching a node's body, for clipping a background image into it.
 function shapeClipShape(shape, halfW, halfH, r) {
   switch (shape) {
@@ -465,6 +475,7 @@ export default function Graph({ projectId, projectName }) {
   const viewNodeProps = activeView?.nodeProps || {}
   const drillRoot     = activeView?.drillRoot || null
   const bgColor       = activeView?.bgColor || '#0c0c1a'
+  const edgeGlowColor = isLightColor(bgColor) ? '#000000' : '#ffffff'  // contrast halo for edge legibility
   const slideshows    = activeView?.slideshows || [{ id: 'ss-default', name: 'Default', slides: [] }]
   const activeSlideshowId = activeView?.activeSlideshowId || slideshows[0]?.id
   const activeSlideshow   = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
@@ -1809,9 +1820,10 @@ export default function Graph({ projectId, projectName }) {
           <defs>
             <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
             <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
-            <filter id="edge-shadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.6" />
-              <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#000" floodOpacity="0.4" />
+            {/* Subtle, background-aware legibility halo for edges (not a glow):
+                one tight, low-opacity contrast outline — light on dark bg, dark on light bg. */}
+            <filter id="edge-shadow" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="0" stdDeviation="0.8" floodColor={edgeGlowColor} floodOpacity="0.35" />
             </filter>
             <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
               <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="#000" floodOpacity="0.5" />
@@ -1840,9 +1852,9 @@ export default function Graph({ projectId, projectName }) {
             {edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel }) => (
               <g key={id} onClick={ev => { ev.stopPropagation(); setSelected({ id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
                 <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke="transparent" strokeWidth={12} />
-                {/* halo â€” bg-tinted outline that separates line from overlapping elements */}
-                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={bgColor} strokeWidth={isSel?6:4} strokeOpacity={0.55} />
-                <polygon points={arrowPts} fill={bgColor} fillOpacity={0.55} stroke={bgColor} strokeWidth={isSel?6:4} strokeOpacity={0.55} strokeLinejoin="round" />
+                {/* thin bg-tinted moat that separates the line from overlapping elements */}
+                <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} />
+                <polygon points={arrowPts} fill={bgColor} fillOpacity={0.4} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} strokeLinejoin="round" />
                 <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} filter="url(#edge-shadow)" />
                 <polygon points={arrowPts} fill={edgeColor} stroke={edgeColor} strokeWidth={isSel?2.5:1.5} strokeLinejoin="round" filter="url(#edge-shadow)" />
                 {isSel && (
@@ -2996,7 +3008,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {viewProps.borderBlur > 0 ? (
           <>
             <defs>
-              <filter id={`bedge-${node.id}`} x="-80%" y="-80%" width="260%" height="260%">
+              <filter id={`bedge-${node.id}`} x="-200%" y="-200%" width="500%" height="500%">
                 <feGaussianBlur in="SourceGraphic" stdDeviation={viewProps.borderBlur} />
               </filter>
             </defs>
@@ -3559,7 +3571,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             <div style={{ display:'flex', gap:5, alignItems:'center' }}>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.max(0, ((viewProps.borderBlur||0)-1)))}>-</button>
               <span style={{ fontSize:'0.7rem', color: (viewProps.borderBlur||0) > 0 ? '#88b4e8' : '#445', width:18, textAlign:'center' }}>{(viewProps.borderBlur||0)}</span>
-              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.min(14, ((viewProps.borderBlur||0)+1)))}>+</button>
+              <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.min(30, ((viewProps.borderBlur||0)+1)))}>+</button>
               {(viewProps.borderBlur||0) > 0 && <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:10 }} onClick={() => onSetBorderBlur(0)}>x</button>}
             </div>
           </div>
