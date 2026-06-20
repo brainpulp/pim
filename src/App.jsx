@@ -92,9 +92,9 @@ export default function App() {
         ) : (
           <span
             style={projectNameStyle}
-            title="Click to rename"
+            title="Rename project"
             onClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
-          >{project.name}</span>
+          >{project.name}<span style={{ marginLeft: 6, opacity: 0.6, fontSize: '0.8em' }}>✎</span></span>
         )}
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {['graph', 'table'].map(v => (

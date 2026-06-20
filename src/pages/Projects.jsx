@@ -5,6 +5,10 @@ export default function Projects({ onOpen, onSignOut }) {
   const [projects, setProjects] = useState(null) // null = loading
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState(null) // null = not naming; string = typing a name
+  const newInputRef = useRef()
+
+  useEffect(() => { if (newName !== null) newInputRef.current?.focus() }, [newName])
 
   const load = async () => {
     try {
@@ -16,10 +20,10 @@ export default function Projects({ onOpen, onSignOut }) {
 
   useEffect(() => { load() }, [])
 
-  const handleCreate = async () => {
+  const handleCreate = async (name) => {
     setCreating(true)
     try {
-      const p = await createProject('Untitled')
+      const p = await createProject((name || '').trim() || 'Untitled')
       onOpen(p.id, p.name)
     } catch (e) {
       setError(e.message)
@@ -77,9 +81,29 @@ export default function Projects({ onOpen, onSignOut }) {
           </div>
         )}
 
-        <button style={styles.createBtn} onClick={handleCreate} disabled={creating}>
-          {creating ? 'Creating…' : '+ New project'}
-        </button>
+        {newName === null ? (
+          <button style={styles.createBtn} onClick={() => setNewName('')} disabled={creating}>
+            + New project
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              ref={newInputRef}
+              value={newName}
+              placeholder="Project name…"
+              style={{ ...styles.rowInput, flex: 1 }}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleCreate(newName)
+                if (e.key === 'Escape') setNewName(null)
+              }}
+            />
+            <button style={{ ...styles.createBtn, flex: 'none', padding: '0.6rem 1rem' }}
+              onClick={() => handleCreate(newName)} disabled={creating}>
+              {creating ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

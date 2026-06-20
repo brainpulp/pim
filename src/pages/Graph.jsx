@@ -356,6 +356,7 @@ export default function Graph({ projectId, projectName }) {
   const selectedImageIdsRef = useRef(selectedImageIds)   // live mirror for drag handlers
   useEffect(() => { selectedImageIdsRef.current = selectedImageIds }, [selectedImageIds])
   const [cropImageId, setCropImageId] = useState(null)   // free-floating image in crop mode (single)
+  const [newNodeAt, setNewNodeAt] = useState(null)       // { px, py, sx, sy } floating new-node name input
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
   const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
@@ -1656,8 +1657,10 @@ export default function Graph({ projectId, projectName }) {
     const { halfW: twW, halfH: twH } = shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize, tvp.labelWidth)
     const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
     const ux = dx/dist, uy = dy/dist
-    const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
-    const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy)
+    // Push endpoints out past a blurred node's soft halo so edges don't show
+    // through its translucent fringe (the halo extends ~1.5×blur beyond the edge).
+    const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy) + (svp.borderBlur || 0) * 1.5
+    const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy) + (tvp.borderBlur || 0) * 1.5
     const x1 = s.x + ux*(sd - 5), y1 = s.y + uy*(sd - 5)
     const ALEN = 10, AW = 5
     const tipX = t.x - ux*(td - 5), tipY = t.y - uy*(td - 5)
@@ -1802,13 +1805,8 @@ export default function Graph({ projectId, projectName }) {
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
             const [sx, sy] = zoomTransformRef.current.invert([e.clientX - rect.left, e.clientY - rect.top])
-            const id = addNode('New node', null, sx, sy)
-            setPendingEditId(id)
-            setTimeout(() => {
-              const sn = simNodesRef.current.find(n => n.id === id)
-              if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy }
-              scheduleRender()
-            }, 0)
+            // Conventional: a small "name your node" input at the cursor; create on Enter.
+            setNewNodeAt({ px: e.clientX - rect.left, py: e.clientY - rect.top, sx, sy })
           }}
           onMouseDown={e => {
             if (!e.target.closest?.('[data-node]')) setIsPanning(true)
@@ -1993,6 +1991,40 @@ export default function Graph({ projectId, projectName }) {
 
           </g>
         </svg>
+
+        {/* New-node name input — appears at the double-clicked spot */}
+        {newNodeAt && (
+          <input
+            autoFocus
+            placeholder="New node…"
+            defaultValue=""
+            onMouseDown={e => e.stopPropagation()}
+            onBlur={e => {
+              const label = e.target.value.trim()
+              const { sx, sy } = newNodeAt
+              setNewNodeAt(null)
+              if (!label) return
+              const id = addNode(label, null, sx, sy)
+              setTimeout(() => {
+                const sn = simNodesRef.current.find(n => n.id === id)
+                if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy }
+                scheduleRender()
+              }, 0)
+            }}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Escape') { e.currentTarget.value = ''; e.currentTarget.blur() }
+            }}
+            style={{
+              position: 'absolute', left: newNodeAt.px, top: newNodeAt.py,
+              transform: 'translate(-50%, -50%)', zIndex: 30, width: 150,
+              background: '#16162a', border: '1px solid #5b6af0', borderRadius: 6,
+              color: '#fff', fontSize: '0.85rem', padding: '5px 8px', outline: 'none',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+            }}
+          />
+        )}
 
         {/* Always-on 3D viewers (rotate mode 'always', not currently selected) */}
         {simNodesRef.current.filter(n => {
