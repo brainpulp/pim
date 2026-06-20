@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/ensure-supabase-env.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "predeploy": "node scripts/ensure-supabase-env.mjs",
     "deploy": "vite build && gh-pages -d dist"
   },
   "dependencies": {
