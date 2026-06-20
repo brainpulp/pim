@@ -357,6 +357,7 @@ export default function Graph({ projectId, projectName }) {
   useEffect(() => { selectedImageIdsRef.current = selectedImageIds }, [selectedImageIds])
   const [cropImageId, setCropImageId] = useState(null)   // free-floating image in crop mode (single)
   const [newNodeAt, setNewNodeAt] = useState(null)       // { px, py, sx, sy } floating new-node name input
+  const [contextMenu, setContextMenu] = useState(null)   // { px, py, sx, sy } right-click menu (only on click, not drag)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
   const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
@@ -1472,6 +1473,26 @@ export default function Graph({ projectId, projectName }) {
     document.addEventListener('mouseup', onUp)
   }, [drilledImageId])
 
+  // â"€â"€ Right-click: open a context menu only if the press didn't turn into a pan-drag â"€â"€
+  const handleRmbDown = useCallback((e) => {
+    if (e.button !== 2) return
+    setContextMenu(null)
+    const startX = e.clientX, startY = e.clientY
+    let moved = false
+    const onMove = me => { if (!moved && Math.hypot(me.clientX - startX, me.clientY - startY) > 4) moved = true }
+    const onUp = me => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (moved || me.button !== 2 || !svgRef.current) return   // it was a pan → no menu
+      const rect = svgRef.current.getBoundingClientRect()
+      const px = me.clientX - rect.left, py = me.clientY - rect.top
+      const [sx, sy] = zoomTransformRef.current.invert([px, py])
+      setContextMenu({ px, py, sx, sy })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag', arg) => {
     e.preventDefault(); e.stopPropagation()
@@ -1809,6 +1830,7 @@ export default function Graph({ projectId, projectName }) {
             setNewNodeAt({ px: e.clientX - rect.left, py: e.clientY - rect.top, sx, sy })
           }}
           onMouseDown={e => {
+            if (e.button === 2) { handleRmbDown(e); return }
             if (!e.target.closest?.('[data-node]')) setIsPanning(true)
             if (e.target === e.currentTarget) handleCanvasMouseDown(e)
           }}
@@ -2025,6 +2047,44 @@ export default function Graph({ projectId, projectName }) {
             }}
           />
         )}
+
+        {/* Right-click context menu */}
+        {contextMenu && (() => {
+          const close = () => setContextMenu(null)
+          const item = (label, onClick) => (
+            <div onClick={onClick}
+              onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4 }}>
+              {label}
+            </div>
+          )
+          return (
+            <>
+              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
+                style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
+              <div onMouseDown={e => e.stopPropagation()}
+                style={{
+                  position: 'absolute', left: contextMenu.px, top: contextMenu.py, zIndex: 35,
+                  background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4,
+                  boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 150,
+                }}>
+                {item('New node here', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
+                {item('New frame here', () => {
+                  pushUndo()
+                  const { sx, sy } = contextMenu
+                  const id = addNode('Frame', null, sx, sy)
+                  setNodeViewProp(id, 'shape', 'frame'); setNodeViewProp(id, 'fillColor', 'none'); setNodeViewProp(id, 'strokeColor', null)
+                  addSlide(id)
+                  setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                  close()
+                })}
+                {item('Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
+                {item('Fit to view', () => { zoomExtents(); close() })}
+              </div>
+            </>
+          )
+        })()}
 
         {/* Always-on 3D viewers (rotate mode 'always', not currently selected) */}
         {simNodesRef.current.filter(n => {
