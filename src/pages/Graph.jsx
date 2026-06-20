@@ -323,7 +323,6 @@ export default function Graph({ projectId, projectName }) {
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
   const zoomFilterRef = useRef(null)
-  const rmbStartRef = useRef(null)   // right-button gesture start, for click-vs-pan detection
   const simNodesRef = useRef([])
   const simEdgesRef = useRef([])
   const zoomTransformRef = useRef(d3.zoomIdentity)
@@ -706,28 +705,36 @@ export default function Graph({ projectId, projectName }) {
         panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
       })
     zoomBehaviorRef.current.on('zoom.toolbar', () => setZoomTick(t => t + 1))
-    // Right-button gesture: if it starts and ends in ~the same spot (no pan), open the
-    // context menu. We use d3's own start/end events because d3-zoom stopImmediatePropagation's
-    // the right-button mousedown, so a React onMouseDown handler never sees it.
-    zoomBehaviorRef.current
-      .on('start.rmb', e => {
-        rmbStartRef.current = (e.sourceEvent && e.sourceEvent.button === 2)
-          ? { x: e.sourceEvent.clientX, y: e.sourceEvent.clientY } : null
-      })
-      .on('end.rmb', e => {
-        const start = rmbStartRef.current
-        rmbStartRef.current = null
-        if (!start || !e.sourceEvent || e.sourceEvent.button !== 2 || !svgRef.current) return
-        if (Math.hypot(e.sourceEvent.clientX - start.x, e.sourceEvent.clientY - start.y) >= 5) return
-        const rect = svgRef.current.getBoundingClientRect()
-        const px = e.sourceEvent.clientX - rect.left, py = e.sourceEvent.clientY - rect.top
-        const [sx, sy] = zoomTransformRef.current.invert([px, py])
-        setContextMenu({ px, py, sx, sy })
-      })
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
-    svg.on('contextmenu', e => e.preventDefault())   // don't pop the menu when right-drag panning
-    return () => svg.on('.zoom', null)
+
+    // Right-click context menu via the native `contextmenu` event (fires on every
+    // right-click and is NOT swallowed by d3-zoom). Suppress it only when the right
+    // button was dragged — i.e. the user was panning. Drag is tracked with a
+    // capture-phase mousedown (runs before d3's bubble listener stops propagation).
+    const el = svgRef.current
+    let rmb = null
+    const onDownCapture = ev => { if (ev.button === 2) rmb = { x: ev.clientX, y: ev.clientY, moved: false } }
+    const onMoveCapture = ev => { if (rmb && Math.hypot(ev.clientX - rmb.x, ev.clientY - rmb.y) >= 5) rmb.moved = true }
+    const onContext = ev => {
+      ev.preventDefault()
+      const dragged = rmb?.moved
+      rmb = null
+      if (dragged || !el) return
+      const rect = el.getBoundingClientRect()
+      const px = ev.clientX - rect.left, py = ev.clientY - rect.top
+      const [sx, sy] = zoomTransformRef.current.invert([px, py])
+      setContextMenu({ px, py, sx, sy })
+    }
+    el.addEventListener('mousedown', onDownCapture, true)
+    window.addEventListener('mousemove', onMoveCapture, true)
+    el.addEventListener('contextmenu', onContext)
+    return () => {
+      svg.on('.zoom', null)
+      el.removeEventListener('mousedown', onDownCapture, true)
+      window.removeEventListener('mousemove', onMoveCapture, true)
+      el.removeEventListener('contextmenu', onContext)
+    }
   }, [scheduleRender, loading])
 
   // Restore pan/zoom when switching views
@@ -1419,10 +1426,9 @@ export default function Graph({ projectId, projectName }) {
     setSelected(null)
     canvasFocused.current = true
 
-    const T = zoomTransformRef.current
     const startClientX = e.clientX, startClientY = e.clientY
-    const startSx = (e.clientX - T.x) / T.k
-    const startSy = (e.clientY - T.y) / T.k
+    // Convert via clientToSim so the SVG's left/top offset (sidebar + nav) is accounted for.
+    const [startSx, startSy] = clientToSim(e.clientX, e.clientY)
     let moved = false
 
     const onMove = me => {
@@ -1433,7 +1439,7 @@ export default function Graph({ projectId, projectName }) {
         // Suppress D3 pan for the duration of the rubber-band
         zoomBehaviorRef.current?.filter(() => false)
       }
-      const ex = (me.clientX - T.x) / T.k, ey = (me.clientY - T.y) / T.k
+      const [ex, ey] = clientToSim(me.clientX, me.clientY)
       rubberBandRef.current = { sx: startSx, sy: startSy, ex, ey }
       setRubberBand({ sx: startSx, sy: startSy, ex, ey })
     }
@@ -1491,7 +1497,7 @@ export default function Graph({ projectId, projectName }) {
 
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [drilledImageId])
+  }, [drilledImageId, clientToSim])
 
   // Paste an image from the clipboard at a given sim position (used by the context menu).
   const pasteImageAt = useCallback(async (sx, sy) => {
