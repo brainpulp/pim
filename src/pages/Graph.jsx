@@ -1871,7 +1871,7 @@ export default function Graph({ projectId, projectName }) {
             <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
             {/* Subtle, background-aware legibility halo for edges (not a glow):
                 one tight, low-opacity contrast outline — light on dark bg, dark on light bg. */}
-            <filter id="edge-shadow" x="-30%" y="-30%" width="160%" height="160%">
+            <filter id="edge-shadow" x="-30%" y="-30%" width="160%" height="160%" colorInterpolationFilters="sRGB">
               <feDropShadow dx="0" dy="0" stdDeviation="0.8" floodColor={edgeGlowColor} floodOpacity="0.35" />
             </filter>
             <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
@@ -3146,7 +3146,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {viewProps.borderBlur > 0 ? (
           <>
             <defs>
-              <filter id={`bedge-${node.id}`} x="-200%" y="-200%" width="500%" height="500%">
+              <filter id={`bedge-${node.id}`} x="-200%" y="-200%" width="500%" height="500%" colorInterpolationFilters="sRGB">
                 <feGaussianBlur in="SourceGraphic" stdDeviation={viewProps.borderBlur} />
               </filter>
             </defs>
