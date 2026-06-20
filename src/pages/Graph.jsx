@@ -1934,16 +1934,7 @@ export default function Graph({ projectId, projectName }) {
               />
             ))}
 
-            {/* Rubber-band selection rect */}
-            {rubberBand && (() => {
-              const x = Math.min(rubberBand.sx, rubberBand.ex)
-              const y = Math.min(rubberBand.sy, rubberBand.ey)
-              const w = Math.abs(rubberBand.ex - rubberBand.sx)
-              const h = Math.abs(rubberBand.ey - rubberBand.sy)
-              return <rect x={x} y={y} width={w} height={h}
-                fill="rgba(91,106,240,0.08)" stroke="#5b6af0" strokeWidth={1} strokeDasharray="4,3"
-                pointerEvents="none" />
-            })()}
+            {/* Rubber-band selection rect — rendered after nodes (below) so it's on top */}
 
             {/* Combined selection resize handle */}
             {selectedImageIds.size >= 2 && (() => {
@@ -2046,6 +2037,17 @@ export default function Graph({ projectId, projectName }) {
                 onMouseLeave={hideToolbar}
               />
             ))}
+
+            {/* Rubber-band selection rect — on top of nodes/images */}
+            {rubberBand && (() => {
+              const x = Math.min(rubberBand.sx, rubberBand.ex)
+              const y = Math.min(rubberBand.sy, rubberBand.ey)
+              const w = Math.abs(rubberBand.ex - rubberBand.sx)
+              const h = Math.abs(rubberBand.ey - rubberBand.sy)
+              return <rect x={x} y={y} width={w} height={h}
+                fill="rgba(91,106,240,0.08)" stroke="#5b6af0" strokeWidth={1} strokeDasharray="4,3"
+                pointerEvents="none" />
+            })()}
 
           </g>
         </svg>
