@@ -235,40 +235,31 @@ function distributeImages(images, selectedIds, axis) {
   }))
 }
 
-function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute }) {
-  // zoomTick is not read — it forces re-render when D3 zoom fires so `transform` stays current
+function ImageToolbar({ images, selectedImageIds, anchor,
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onCrop, onDelete }) {
   const [alignOpen, setAlignOpen] = useState(false)
 
-  if (selectedImageIds.size === 0) return null
+  if (selectedImageIds.size === 0 || !anchor) return null
   const sel = images.filter(i => selectedImageIds.has(i.id))
   const count = sel.length
   if (count === 0) return null
-  if (!transform) return null
-
-  // Position: centered above combined bounding box, in screen coordinates
-  const T = transform
-  const x1 = Math.min(...sel.map(i => i.x - i.width / 2))
-  const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
-  const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
-  const cx = (x1 + x2) / 2
   const hasGroupId = sel.some(i => i.groupId)
   const isSingle = count === 1
-
-  const screenX = T.x + cx * T.k
-  // For a single image, lift the toolbar clear of the in-canvas rotate handle above it
-  const screenY = T.y + y1 * T.k - 12 - (isSingle ? 42 * T.k : 0)
+  const blur = sel[0]?.blur || 0
 
   // Square icon button for the main toolbar row
-  const iconBtn = (glyph, onClick, title, active) => (
+  const iconBtn = (glyph, onClick, title, active, color) => (
     <button title={title} onClick={onClick}
       style={{
         background: active ? '#23234a' : 'transparent', border: '1px solid #2d3a6a',
-        borderRadius: 6, color: '#c5d0ff', cursor: 'pointer',
+        borderRadius: 6, color: color || '#c5d0ff', cursor: 'pointer',
         width: 28, height: 26, fontSize: '0.95rem', lineHeight: 1, padding: 0,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
     >{glyph}</button>
+  )
+  const stepBtn = (label, onClick, color) => (
+    <button onClick={onClick} style={{ padding: '1px 6px', borderRadius: 4, border: '1px solid #2a3358', background: 'transparent', color: color || '#7b8fcc', cursor: 'pointer', fontSize: 12 }}>{label}</button>
   )
 
   return (
@@ -276,18 +267,20 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
       style={{
-        position: 'absolute', left: screenX, top: screenY,
-        transform: 'translateX(-50%) translateY(-100%)',
+        position: 'absolute', left: anchor.px, top: anchor.py,
         background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
-        padding: '5px 7px', display: 'flex', gap: 4,
-        zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+        padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 6,
+        zIndex: 25, boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
       }}
     >
+      <div style={{ display: 'flex', gap: 4, position: 'relative' }}>
       {isSingle && iconBtn('▲', () => onReorderImage(sel[0].id, 'up'), 'Bring forward')}
       {isSingle && iconBtn('▼', () => onReorderImage(sel[0].id, 'down'), 'Send backward')}
       {count >= 2 && iconBtn('⧉', onGroup, 'Group  (Ctrl+G)')}
       {hasGroupId && iconBtn('⊟', onUngroup, 'Ungroup  (Ctrl+Shift+G)')}
       {count >= 2 && iconBtn('▤', () => setAlignOpen(o => !o), 'Align & distribute', alignOpen)}
+      {isSingle && iconBtn('⛶', onCrop, 'Crop')}
+      {iconBtn('✕', onDelete, 'Delete', false, '#f87171')}
 
       {/* Align / distribute popup — a real grid */}
       {count >= 2 && alignOpen && (
@@ -312,6 +305,16 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
             {iconBtn('↔', () => onDistribute('H'), 'Distribute horizontally')}
             {iconBtn('↕', () => onDistribute('V'), 'Distribute vertically')}
           </>)}
+        </div>
+      )}
+      </div>
+      {isSingle && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: '0.72rem', color: '#8090b8', width: 30 }}>Blur</span>
+          {stepBtn('–', () => onSetBlur(Math.max(0, blur - 1)))}
+          <span style={{ fontSize: '0.72rem', color: blur > 0 ? '#88b4e8' : '#7080a0', width: 16, textAlign: 'center' }}>{blur}</span>
+          {stepBtn('+', () => onSetBlur(Math.min(40, blur + 1)))}
+          {blur > 0 && stepBtn('×', () => onSetBlur(0), '#f87171')}
         </div>
       )}
     </div>
@@ -359,6 +362,8 @@ export default function Graph({ projectId, projectName }) {
   const [newNodeAt, setNewNodeAt] = useState(null)       // { px, py, sx, sy } floating new-node name input
   const [contextMenu, setContextMenu] = useState(null)   // { px, py, sx, sy } right-click menu (only on click, not drag)
   const [ctxColors, setCtxColors] = useState(false)      // context-menu background-color submenu open
+  const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
+  const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
   const didRubberBandRef = useRef(false)   // set after a rubber-band drag so the trailing click doesn't clear it
@@ -725,6 +730,38 @@ export default function Graph({ projectId, projectName }) {
       const rect = el.getBoundingClientRect()
       const px = ev.clientX - rect.left, py = ev.clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
+
+      // Topmost non-frame node under the cursor → node menu
+      let hitNode = null
+      for (const n of simNodesRef.current) {
+        if (!visibleNodeIdsRef.current.has(n.id) || n.x == null) continue
+        const nvp = viewNodePropsRef.current[n.id] || {}
+        if (nvp.shape === 'frame') continue
+        const nr = NODE_R * (nvp.scale || 1)
+        const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '',
+          Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
+        if (Math.abs(sx - n.x) <= halfW && Math.abs(sy - n.y) <= halfH) hitNode = n
+      }
+      if (hitNode) {
+        setContextMenu(null); setPhotoMenu(null)
+        setSelected({ id: hitNode.id, type: 'node' })
+        setSelectedImageIds(new Set()); setSelectedNodeIds(new Set())
+        setNodeMenu({ nodeId: hitNode.id, px, py })
+        return
+      }
+
+      // Topmost photo under the cursor → photo menu (select it if not already selected)
+      const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+      let hitImg = null
+      imgs.forEach(im => { if (im.visible !== false && Math.abs(sx - im.x) <= im.width / 2 && Math.abs(sy - im.y) <= im.height / 2) hitImg = im })
+      if (hitImg) {
+        setContextMenu(null); setNodeMenu(null)
+        setSelectedImageIds(prev => prev.has(hitImg.id) ? prev : new Set([hitImg.id]))
+        setPhotoMenu({ px, py, imageId: hitImg.id })
+        return
+      }
+
+      setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
     }
     el.addEventListener('mousedown', onDownCapture, true)
@@ -754,6 +791,9 @@ export default function Graph({ projectId, projectName }) {
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') {
+        if (nodeMenu) { setNodeMenu(null); return }
+        if (photoMenu) { setPhotoMenu(null); return }
+        if (contextMenu) { setContextMenu(null); return }
         if (confirmDeleteImages) { setConfirmDeleteImages(null); return }
         if (cropImageId) { setCropImageId(null); return }
         if (selectedImageIds.size > 0) {
@@ -890,7 +930,7 @@ export default function Graph({ projectId, projectName }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds, nodeMenu, photoMenu, contextMenu])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -2255,23 +2295,21 @@ export default function Graph({ projectId, projectName }) {
           )
         })()}
 
-        {/* Node toolbar â€" shows on hover */}
-        {(() => {
-          const hn = hoveredNodeId && simNodesRef.current.find(n => n.id === hoveredNodeId)
+        {/* Node menu â€" opens on right-click, anchored at the cursor */}
+        {nodeMenu && (() => {
+          const hn = simNodesRef.current.find(n => n.id === nodeMenu.nodeId)
           const hs = hn && storeNodes.find(n => n.id === hn.id)
           if (!hn || !hs || !visibleNodeIds.has(hn.id)) return null
           const vp = getVP(hn.id)
-          const { halfH: hnHalfH } = shapeDims(vp.shape||'circle', NODE_R*(vp.scale||1), hs.label, Math.max(9, Math.round(12*(vp.scale||1))), vp.labelWidth)
-          // Extra clearance so the popup doesn't sit on top of the collapse/expand chevron
-          const chevronClearance = nodesWithChildren.has(hn.id) ? 26 * T.k : 0
-          const toolbarY = vp.shape === '3d'
-            ? T.y + (hn.y||0) * T.k - hnHalfH * T.k - 14
-            : T.y + (hn.y||0) * T.k + hnHalfH * T.k + 14 + chevronClearance
+          const close = () => setNodeMenu(null)
           return (
+            <>
+              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
+                style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
             <NodeToolbar
               key={hn.id}
-              x={T.x + (hn.x||0) * T.k}
-              y={toolbarY}
+              x={nodeMenu.px}
+              y={nodeMenu.py}
               viewProps={vp}
               notes={hs.notes || ''}
               onSetFill={c => setNodeViewProp(hn.id, 'fillColor', c)}
@@ -2281,10 +2319,10 @@ export default function Graph({ projectId, projectName }) {
               onSetBorderBlur={v => setNodeViewProp(hn.id, 'borderBlur', v)}
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
-              onDrill={() => { setDrillRoot(hn.id); setHoveredNodeId(null); setTimeout(zoomExtents, 50) }}
-              onHide={() => { pushUndo(); setNodeViewProp(hn.id, 'visible', false); setHoveredNodeId(null) }}
+              onDrill={() => { setDrillRoot(hn.id); close(); setTimeout(zoomExtents, 50) }}
+              onHide={() => { pushUndo(); setNodeViewProp(hn.id, 'visible', false); close() }}
               onRelease={() => handleRelease(hn.id)}
-              onDelete={() => { setConfirmDelete(hn.id); setHoveredNodeId(null) }}
+              onDelete={() => { setConfirmDelete(hn.id); close() }}
               onNotesChange={notes => updateNotes(hn.id, notes)}
               isAnchored={hn.fx != null}
               imageUrl={hs.imageUrl || ''}
@@ -2316,63 +2354,43 @@ export default function Graph({ projectId, projectName }) {
               }}
               onSetNodeImagePosition={(imId, position) => handleSetNodeImagePosition(hn.id, imId, position)}
               onRemoveNodeImageById={imId => handleRemoveNodeImage(hn.id, imId)}
-              onMouseEnter={() => showToolbar(hn.id)}
-              onMouseLeave={hideToolbar}
               onWheel={e => svgRef.current?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode, clientX: e.clientX, clientY: e.clientY, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }))}
               nodeId={hn.id}
               depthExpand={depthExpand?.nodeId === hn.id ? depthExpand : null}
               onSetDepthExpand={setDepthExpand}
               maxExpandRadius={maxExpandRadius}
             />
+            </>
           )
         })()}
 
-        {/* Note popup */}
-        {notePopupId && (() => {
-          const nn = simNodesRef.current.find(n => n.id === notePopupId)
-          const ns = storeNodes.find(n => n.id === notePopupId)
-          if (!nn || !ns || !ns.notes) return null
-          const vp = getVP(notePopupId)
-          const sc = vp.scale || 1
-          const { halfH: nh } = shapeDims(vp.shape || 'circle', NODE_R * sc, ns.label, Math.max(9, Math.round(12 * sc)), vp.labelWidth)
-          const bOffset = (nh + 40) * T.k
-          const screenX = T.x + (nn.x || 0) * T.k
-          const screenY = T.y + (nn.y || 0) * T.k - bOffset
-          return (
-            <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-              style={{ position:'absolute', left:screenX, top:screenY, transform:'translateX(-50%)',
-                background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'8px 12px',
-                maxWidth:260, minWidth:120, zIndex:30, boxShadow:'0 4px 16px rgba(0,0,0,0.7)' }}>
-              <pre style={{ fontSize:'0.8rem', color:'#c7d0f8', fontFamily:'inherit', whiteSpace:'pre-wrap', margin:0, lineHeight:1.5 }}>
-                {ns.notes}
-              </pre>
-              <button onClick={() => setNotePopupId(null)}
-                style={{ position:'absolute', top:4, right:6, background:'none', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14 }}>x</button>
-            </div>
-          )
-        })()}
-
-        {/* Image toolbar — hidden while cropping a single image */}
-        {!cropImageId && <ImageToolbar
-          images={activeView?.images || []}
-          selectedImageIds={selectedImageIds}
-          transform={zoomTransformRef.current}
-          zoomTick={zoomTick}
-          onGroup={() => groupImages([...selectedImageIds])}
-          onUngroup={() => ungroupImages([...selectedImageIds])}
-          onReorderImage={(id, dir) => reorderImage(id, dir)}
-          onAlign={anchor => {
-            const imgs = activeView?.images || []
-            const updates = alignImages(imgs, selectedImageIds, anchor)
-            updates.forEach(({ id, x, y }) => updateImage(id, { x, y }))
-          }}
-          onDistribute={axis => {
-            const imgs = activeView?.images || []
-            const updates = distributeImages(imgs, selectedImageIds, axis)
-            updates.forEach(u => updateImage(u.id, u))
-          }}
-          onDelete={() => setConfirmDeleteImages([...selectedImageIds])}
-        />}
+        {/* Photo menu / image toolbar — hidden while cropping a single image */}
+        {/* Photo menu — opens on right-click, anchored at the cursor */}
+        {photoMenu && !cropImageId && (<>
+          <div onMouseDown={() => setPhotoMenu(null)} onContextMenu={e => { e.preventDefault(); setPhotoMenu(null) }}
+            style={{ position: 'fixed', inset: 0, zIndex: 24 }} />
+          <ImageToolbar
+            images={activeView?.images || []}
+            selectedImageIds={selectedImageIds}
+            anchor={photoMenu}
+            onGroup={() => groupImages([...selectedImageIds])}
+            onUngroup={() => ungroupImages([...selectedImageIds])}
+            onReorderImage={(id, dir) => reorderImage(id, dir)}
+            onSetBlur={v => selectedImageIds.forEach(id => updateImage(id, { blur: v }))}
+            onCrop={() => { const id = photoMenu.imageId || [...selectedImageIds][0]; if (id) { setCropImageId(id); setDrilledImageId(id); setSelectedImageIds(new Set([id])) } setPhotoMenu(null) }}
+            onAlign={anchor => {
+              const imgs = activeView?.images || []
+              const updates = alignImages(imgs, selectedImageIds, anchor)
+              updates.forEach(({ id, x, y }) => updateImage(id, { x, y }))
+            }}
+            onDistribute={axis => {
+              const imgs = activeView?.images || []
+              const updates = distributeImages(imgs, selectedImageIds, axis)
+              updates.forEach(u => updateImage(u.id, u))
+            }}
+            onDelete={() => { setConfirmDeleteImages([...selectedImageIds]); setPhotoMenu(null) }}
+          />
+        </>)}
 
         {/* Delete node confirm */}
         {confirmDelete && (
@@ -2792,6 +2810,8 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const cx = -hw + width * crop.x, cy = -hh + height * crop.y
   const cw = width * crop.w, ch = height * crop.h
   const clipId = `fimg-clip-${id}`
+  const blur = img.blur || 0
+  const blurId = `fimg-blur-${id}`
 
   // Visible-rect geometry drives the selection chrome (so handles hug the cropped area).
   const vL = cx, vT = cy, vR = cx + cw, vB = cy + ch
@@ -2814,9 +2834,14 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
       style={{ cursor: isCropping ? 'default' : 'move' }}
     >
-      {hasCrop && (
+      {(hasCrop || blur > 0) && (
         <defs>
-          <clipPath id={clipId}><rect x={cx} y={cy} width={cw} height={ch} /></clipPath>
+          {hasCrop && <clipPath id={clipId}><rect x={cx} y={cy} width={cw} height={ch} /></clipPath>}
+          {blur > 0 && (
+            <filter id={blurId} x="-100%" y="-100%" width="300%" height="300%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation={blur} colorInterpolationFilters="sRGB" />
+            </filter>
+          )}
         </defs>
       )}
       {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2} />}
@@ -2825,8 +2850,15 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
         <image href={src} x={-hw} y={-hh} width={width} height={height} opacity={0.3}
           style={{ pointerEvents: 'none' }} />
       )}
-      <image href={src} x={-hw} y={-hh} width={width} height={height}
-        clipPath={hasCrop ? `url(#${clipId})` : undefined} />
+      {blur > 0 ? (
+        <g filter={`url(#${blurId})`}>
+          <image href={src} x={-hw} y={-hh} width={width} height={height}
+            clipPath={hasCrop ? `url(#${clipId})` : undefined} />
+        </g>
+      ) : (
+        <image href={src} x={-hw} y={-hh} width={width} height={height}
+          clipPath={hasCrop ? `url(#${clipId})` : undefined} />
+      )}
 
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
