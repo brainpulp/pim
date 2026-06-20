@@ -227,11 +227,12 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
   const y1 = Math.min(...sel.map(i => i.y - i.height / 2))
   const x2 = Math.max(...sel.map(i => i.x + i.width / 2))
   const cx = (x1 + x2) / 2
-  const screenX = T.x + cx * T.k
-  const screenY = T.y + y1 * T.k - 12
-
   const hasGroupId = sel.some(i => i.groupId)
   const isSingle = count === 1
+
+  const screenX = T.x + cx * T.k
+  // For a single image, lift the toolbar clear of the in-canvas rotate handle above it
+  const screenY = T.y + y1 * T.k - 12 - (isSingle ? 42 * T.k : 0)
 
   const btn = (label, onClick, disabled, title, color) => (
     <button key={label + (title || '')}
@@ -269,8 +270,6 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
       {count >= 2 && btn('⬛B', () => onAlign('bottom'), false, 'Align bottom')}
       {count >= 3 && btn('↔ Dist', () => onDistribute('H'), false, 'Distribute H')}
       {count >= 3 && btn('↕ Dist', () => onDistribute('V'), false, 'Distribute V')}
-      {isSingle && btn('Crop', undefined, true, 'Coming in v2', '#3a4070')}
-      {btn('✕ Delete', onDelete, false, 'Delete selected', '#f87171')}
     </div>
   )
 }
@@ -307,6 +306,7 @@ export default function Graph({ projectId, projectName }) {
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
+  const [cropImageId, setCropImageId] = useState(null)   // free-floating image in crop mode (single)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
   const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
@@ -671,6 +671,7 @@ export default function Graph({ projectId, projectName }) {
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') {
         if (confirmDeleteImages) { setConfirmDeleteImages(null); return }
+        if (cropImageId) { setCropImageId(null); return }
         if (selectedImageIds.size > 0) {
           setSelectedImageIds(new Set()); setDrilledImageId(null)
           // don't return — let existing Escape handling continue for other state
@@ -804,7 +805,7 @@ export default function Graph({ projectId, projectName }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -818,6 +819,7 @@ export default function Graph({ projectId, projectName }) {
     setSelected({ id: nodeId, type: 'node' })
     setSelectedImageIds(new Set())
     setDrilledImageId(null)
+    setCropImageId(null)
     setHoveredNodeId(null) // hide toolbar while dragging
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
@@ -1325,7 +1327,7 @@ export default function Graph({ projectId, projectName }) {
   const handleCanvasMouseDown = useCallback((e) => {
     if (e.button !== 0) return
     // Always clear image selection on canvas background click
-    setSelectedImageIds(new Set()); setDrilledImageId(null)
+    setSelectedImageIds(new Set()); setDrilledImageId(null); setCropImageId(null)
     setSelected(null)
     canvasFocused.current = true
 
@@ -1388,7 +1390,7 @@ export default function Graph({ projectId, projectName }) {
   }, [drilledImageId])
 
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  const handleImageMouseDown = useCallback((e, imageId, mode = 'drag') => {
+  const handleImageMouseDown = useCallback((e, imageId, mode = 'drag', arg) => {
     e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
     setSelected(null)
@@ -1411,13 +1413,11 @@ export default function Graph({ projectId, projectName }) {
         return
       }
 
-      // Double-click: drill into single group member
+      // Double-click: enter crop mode for this single image
       if (e.detail === 2) {
-        const img = images.find(i => i.id === imageId)
-        if (img?.groupId) {
-          setDrilledImageId(imageId)
-          setSelectedImageIds(new Set([imageId]))
-        }
+        setSelectedImageIds(new Set([imageId]))
+        setDrilledImageId(imageId)   // treat as ungrouped so it can be cropped/moved alone
+        setCropImageId(imageId)
         return  // always return on double-click — never start a drag
       }
 
@@ -1425,6 +1425,7 @@ export default function Graph({ projectId, projectName }) {
       const ids = expandGroup(imageId, images, drilledImageId)
       setSelectedImageIds(new Set(ids))
       if (imageId !== drilledImageId) setDrilledImageId(null)
+      if (imageId !== cropImageId) setCropImageId(null)
 
       // Begin drag-move.
       // Use `ids` (synchronously known) not `selectedImageIds` (stale React state).
@@ -1458,17 +1459,73 @@ export default function Graph({ projectId, projectName }) {
       document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'resize') {
-      // Single-image resize: unchanged from original
+      // Proportional corner resize: the OPPOSITE corner of the visible (crop) rect
+      // stays pinned while the dragged corner scales the image. `corner` ∈ tl|tr|bl|br.
       const img = images.find(i => i.id === imageId)
       if (!img) return
-      const screenCX = T.x + img.x * T.k, screenCY = T.y + img.y * T.k
-      const startDist = Math.hypot(e.clientX - screenCX, e.clientY - screenCY)
-      const startW = img.width, startH = img.height
+      const corner = arg || 'br'
+      const sx = corner.includes('l') ? -1 : 1   // sign of dragged corner X
+      const sy = corner.includes('t') ? -1 : 1   // sign of dragged corner Y
+      const th = ((img.rotation || 0) * Math.PI) / 180
+      const cos = Math.cos(th), sin = Math.sin(th)
+      const crop = img.crop || { x: 0, y: 0, w: 1, h: 1 }
+      const w0 = img.width, h0 = img.height
+      // Visible (crop) rect, in image-local coords relative to the image centre
+      const visHW0 = (w0 * crop.w) / 2, visHH0 = (h0 * crop.h) / 2
+      const ox0 = w0 * (crop.x + crop.w / 2) - w0 / 2   // local centre offset of crop rect
+      const oy0 = h0 * (crop.y + crop.h / 2) - h0 / 2
+      // Pivot = opposite corner of the crop rect (image-local, relative to centre)
+      const pivLx = ox0 - sx * visHW0, pivLy = oy0 - sy * visHH0
+      // Pivot in world/sim coords (stays fixed for the whole drag)
+      const pivWx = img.x + cos * pivLx - sin * pivLy
+      const pivWy = img.y + sin * pivLx + cos * pivLy
+      // Vector pivot→draggedCorner in local space (its length sets the scale baseline)
+      const baseLx = 2 * sx * visHW0, baseLy = 2 * sy * visHH0
+      const baseLen2 = baseLx * baseLx + baseLy * baseLy
       const onMove = me => {
-        if (startDist < 1) return
-        const d = Math.hypot(me.clientX - screenCX, me.clientY - screenCY)
-        const s = d / startDist
-        updateImage(imageId, { width: Math.max(20, Math.round(startW * s)), height: Math.max(10, Math.round(startH * s)) })
+        if (baseLen2 < 1) return
+        const [wx, wy] = clientToSim(me.clientX, me.clientY)
+        const dwx = wx - pivWx, dwy = wy - pivWy
+        // Rotate world delta back into the image's local frame
+        const curLx = cos * dwx + sin * dwy
+        const curLy = -sin * dwx + cos * dwy
+        let s = (curLx * baseLx + curLy * baseLy) / baseLen2  // projection → uniform scale
+        const minS = Math.max(20 / w0, 10 / h0)
+        if (s < minS) s = minS
+        // Keep the pivot pinned: new centre = pivot + R(θ)·(s · pivotLocal)
+        const npLx = pivLx * s, npLy = pivLy * s
+        const ncx = pivWx - (cos * npLx - sin * npLy)
+        const ncy = pivWy - (sin * npLx + cos * npLy)
+        updateImage(imageId, {
+          width: Math.max(20, Math.round(w0 * s)),
+          height: Math.max(10, Math.round(h0 * s)),
+          x: ncx, y: ncy,
+        })
+      }
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+
+    } else if (mode === 'crop') {
+      // Drag a median handle (t|r|b|l) of the crop rect to trim that edge.
+      const img = images.find(i => i.id === imageId)
+      if (!img) return
+      const edge = arg
+      const th = ((img.rotation || 0) * Math.PI) / 180
+      const cos = Math.cos(th), sin = Math.sin(th)
+      const startCrop = img.crop || { x: 0, y: 0, w: 1, h: 1 }
+      const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
+      const onMove = me => {
+        const [mx, my] = clientToSim(me.clientX, me.clientY)
+        // World delta → image-local delta → normalised fractions
+        const dwx = mx - sx0, dwy = my - sy0
+        const ddx = (cos * dwx + sin * dwy) / img.width
+        const ddy = (-sin * dwx + cos * dwy) / img.height
+        let { x, y, w, h } = startCrop
+        if (edge === 'l') { const nx = Math.max(0, Math.min(x + w - 0.05, x + ddx)); w = w - (nx - x); x = nx }
+        if (edge === 'r') { w = Math.max(0.05, Math.min(1 - x, w + ddx)) }
+        if (edge === 't') { const ny = Math.max(0, Math.min(y + h - 0.05, y + ddy)); h = h - (ny - y); y = ny }
+        if (edge === 'b') { h = Math.max(0.05, Math.min(1 - y, h + ddy)) }
+        updateImage(imageId, { crop: { x, y, w, h } })
       }
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
@@ -1487,7 +1544,7 @@ export default function Graph({ projectId, projectName }) {
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [drilledImageId, updateImage, expandGroup])
+  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -1800,6 +1857,7 @@ export default function Graph({ projectId, projectName }) {
             {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
               <ImageNode key={img.id} img={img}
                 isSelected={selectedImageIds.has(img.id)}
+                isCropping={cropImageId === img.id}
                 onMouseDown={handleImageMouseDown}
               />
             ))}
@@ -2040,8 +2098,8 @@ export default function Graph({ projectId, projectName }) {
           )
         })()}
 
-        {/* Image toolbar */}
-        <ImageToolbar
+        {/* Image toolbar — hidden while cropping a single image */}
+        {!cropImageId && <ImageToolbar
           images={activeView?.images || []}
           selectedImageIds={selectedImageIds}
           transform={zoomTransformRef.current}
@@ -2060,7 +2118,7 @@ export default function Graph({ projectId, projectName }) {
             updates.forEach(u => updateImage(u.id, u))
           }}
           onDelete={() => setConfirmDeleteImages([...selectedImageIds])}
-        />
+        />}
 
         {/* Delete node confirm */}
         {confirmDelete && (
@@ -2470,37 +2528,81 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
 }
 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function ImageNode({ img, isSelected, onMouseDown }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const hw = width / 2, hh = height / 2
+
+  // Crop rect (normalised source rect → local box coords). Defaults to the whole box.
+  const crop = img.crop || { x: 0, y: 0, w: 1, h: 1 }
+  const hasCrop = crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1
+  const cx = -hw + width * crop.x, cy = -hh + height * crop.y
+  const cw = width * crop.w, ch = height * crop.h
+  const clipId = `fimg-clip-${id}`
+
+  // Visible-rect geometry drives the selection chrome (so handles hug the cropped area).
+  const vL = cx, vT = cy, vR = cx + cw, vB = cy + ch
+  const HS = 5  // half-size of square handles (px in local space)
+  const SQ = { width: HS * 2, height: HS * 2, fill: '#fff', stroke: '#5b6af0', strokeWidth: 1.5 }
+
+  const corners = [
+    ['tl', vL, vT, 'nwse-resize'], ['tr', vR, vT, 'nesw-resize'],
+    ['bl', vL, vB, 'nesw-resize'], ['br', vR, vB, 'nwse-resize'],
+  ]
+  const medians = [
+    ['t', (vL + vR) / 2, vT, 'ns-resize'], ['b', (vL + vR) / 2, vB, 'ns-resize'],
+    ['l', vL, (vT + vB) / 2, 'ew-resize'], ['r', vR, (vT + vB) / 2, 'ew-resize'],
+  ]
 
   return (
     <g transform={`translate(${x},${y}) rotate(${rotation})`}
       data-img="true"
       onClick={e => e.stopPropagation()}
-      onMouseDown={e => { if (e.button !== 0) return; e.stopPropagation(); onMouseDown(e, id) }}
-      style={{ cursor: 'move' }}
+      onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
+      style={{ cursor: isCropping ? 'default' : 'move' }}
     >
-      {bgColor && <rect x={-hw} y={-hh} width={width} height={height} fill={bgColor} rx={2} />}
-      {isSelected && (
-        <rect x={-hw - 3} y={-hh - 3} width={width + 6} height={height + 6}
-          fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+      {hasCrop && (
+        <defs>
+          <clipPath id={clipId}><rect x={cx} y={cy} width={cw} height={ch} /></clipPath>
+        </defs>
       )}
-      <image href={src} x={-hw} y={-hh} width={width} height={height} />
-      {isSelected && (<>
-        {/* Resize â€" bottom-right (ratio-locked from center distance) */}
-        <g transform={`translate(${hw},${hh})`}
-          onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize') }} style={{ cursor: 'nwse-resize' }}>
-          <circle r={8} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>⤡</text>
-        </g>
-        {/* Rotate â€" top-center */}
-        <line x1={0} y1={-hh} x2={0} y2={-hh - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
-        <g transform={`translate(0,${-hh - 28})`}
+      {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2} />}
+      {/* While cropping, show the full image dimmed so trimmed areas stay visible */}
+      {isCropping && (
+        <image href={src} x={-hw} y={-hh} width={width} height={height} opacity={0.3}
+          style={{ pointerEvents: 'none' }} />
+      )}
+      <image href={src} x={-hw} y={-hh} width={width} height={height}
+        clipPath={hasCrop ? `url(#${clipId})` : undefined} />
+
+      {isSelected && !isCropping && (<>
+        <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
+          fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+        {/* Four square corner resize handles — pivot on the opposite corner (Miro style) */}
+        {corners.map(([c, hx, hy, cur]) => (
+          <rect key={c} x={hx - HS} y={hy - HS} {...SQ} rx={1.5}
+            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize', c) }}
+            style={{ cursor: cur }} />
+        ))}
+        {/* Rotate — top-center */}
+        <line x1={(vL + vR) / 2} y1={vT} x2={(vL + vR) / 2} y2={vT - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
+        <g transform={`translate(${(vL + vR) / 2},${vT - 28})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'rotate') }} style={{ cursor: 'grab' }}>
           <circle r={8} fill="#16162a" stroke="#a78bfa" strokeWidth={1.5} />
           <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#a78bfa" style={{ userSelect: 'none' }}>↻</text>
         </g>
+      </>)}
+
+      {isCropping && (<>
+        <rect x={vL} y={vT} width={cw} height={ch}
+          fill="none" stroke="#fff" strokeWidth={1.5} strokeDasharray="4,2" style={{ pointerEvents: 'none' }} />
+        {/* Four square crop handles at the edge medians */}
+        {medians.map(([edge, hx, hy, cur]) => (
+          <rect key={edge} x={hx - HS} y={hy - HS} {...SQ} rx={1.5}
+            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'crop', edge) }}
+            style={{ cursor: cur }} />
+        ))}
+        <text x={(vL + vR) / 2} y={vT - 8} textAnchor="middle" fontSize={9} fill="#fff"
+          style={{ pointerEvents: 'none', userSelect: 'none' }}>ESC or click outside to finish</text>
       </>)}
     </g>
   )
