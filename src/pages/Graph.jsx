@@ -266,33 +266,28 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
       {hasGroupId && iconBtn('⊟', onUngroup, 'Ungroup  (Ctrl+Shift+G)')}
       {count >= 2 && iconBtn('▤', () => setAlignOpen(o => !o), 'Align & distribute', alignOpen)}
 
-      {/* Align / distribute popup */}
+      {/* Align / distribute popup — a real grid */}
       {count >= 2 && alignOpen && (
         <div
           style={{
             position: 'absolute', top: '100%', right: 0, marginTop: 6,
             background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
-            padding: 8, display: 'flex', flexDirection: 'column', gap: 6,
+            padding: 8, display: 'grid', gridTemplateColumns: 'repeat(3, 28px)',
+            gap: 5, justifyContent: 'center',
             boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
           }}
         >
-          <div style={{ fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>ALIGN</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {iconBtn('⇤', () => onAlign('left'), 'Align left')}
-            {iconBtn('⇔', () => onAlign('centerH'), 'Align center')}
-            {iconBtn('⇥', () => onAlign('right'), 'Align right')}
-          </div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {iconBtn('⤒', () => onAlign('top'), 'Align top')}
-            {iconBtn('⇕', () => onAlign('middleV'), 'Align middle')}
-            {iconBtn('⤓', () => onAlign('bottom'), 'Align bottom')}
-          </div>
+          <div style={{ gridColumn: '1 / -1', fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>ALIGN</div>
+          {iconBtn('⇤', () => onAlign('left'), 'Align left')}
+          {iconBtn('⇔', () => onAlign('centerH'), 'Align center')}
+          {iconBtn('⇥', () => onAlign('right'), 'Align right')}
+          {iconBtn('⤒', () => onAlign('top'), 'Align top')}
+          {iconBtn('⇕', () => onAlign('middleV'), 'Align middle')}
+          {iconBtn('⤓', () => onAlign('bottom'), 'Align bottom')}
           {count >= 3 && (<>
-            <div style={{ fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>DISTRIBUTE</div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {iconBtn('↔', () => onDistribute('H'), 'Distribute horizontally')}
-              {iconBtn('↕', () => onDistribute('V'), 'Distribute vertically')}
-            </div>
+            <div style={{ gridColumn: '1 / -1', fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>DISTRIBUTE</div>
+            {iconBtn('↔', () => onDistribute('H'), 'Distribute horizontally')}
+            {iconBtn('↕', () => onDistribute('V'), 'Distribute vertically')}
           </>)}
         </div>
       )}
