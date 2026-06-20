@@ -1714,10 +1714,8 @@ export default function Graph({ projectId, projectName }) {
     const { halfW: twW, halfH: twH } = shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize, tvp.labelWidth)
     const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
     const ux = dx/dist, uy = dy/dist
-    // Push endpoints out past a blurred node's soft halo so edges don't show
-    // through its translucent fringe (the halo extends ~1.5×blur beyond the edge).
-    const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy) + (svp.borderBlur || 0) * 1.5
-    const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy) + (tvp.borderBlur || 0) * 1.5
+    const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
+    const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy)
     const x1 = s.x + ux*(sd - 5), y1 = s.y + uy*(sd - 5)
     const ALEN = 10, AW = 5
     const tipX = t.x - ux*(td - 5), tipY = t.y - uy*(td - 5)
