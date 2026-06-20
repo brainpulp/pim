@@ -158,6 +158,19 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter, 
   return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
 }
 
+// Clip shape matching a node's body, for clipping a background image into it.
+function shapeClipShape(shape, halfW, halfH, r) {
+  switch (shape) {
+    case 'ellipse':   return <ellipse rx={halfW} ry={halfH} />
+    case 'rect':      return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} />
+    case 'roundrect': return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={halfH*0.45} ry={halfH*0.45} />
+    case 'image':     return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={8} />
+    case 'diamond':   return <polygon points={`0,${-halfH} ${halfW},0 0,${halfH} ${-halfW},0`} />
+    case 'none':      return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} />
+    default:          return <circle r={r} />   // circle
+  }
+}
+
 // â"€â"€ Label rendering (foreignObject for word-wrap) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
@@ -2909,6 +2922,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const belowImgsRaw = supportsInlineImages ? nodeImages.filter(im => im.position === 'below').map(sizedImg) : []
   const besideImgsRaw = supportsInlineImages ? nodeImages.filter(im => im.position === 'beside').map(sizedImg) : []
   const perimeterImgs = nodeImages.filter(im => !im.position || im.position === 'perimeter').map(sizedImg)
+  const bgImg = supportsInlineImages ? nodeImages.find(im => im.position === 'background') : null
   const bodyHalfW = halfW, bodyHalfH = halfH, bodyR = r // node size never changes for inline images
 
   // Shrink (never grow) a row of images uniformly so it fits within maxW × maxH.
@@ -2999,6 +3013,24 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
         )}
 
+        {/* Background image — covers the node body, clipped to its shape, behind the label */}
+        {bgImg && (
+          <>
+            <defs>
+              <clipPath id={`nbg-${node.id}`}>
+                {shapeClipShape(shape, bodyHalfW, bodyHalfH, bodyR)}
+              </clipPath>
+            </defs>
+            <image href={bgImg.src} x={-bodyHalfW} y={-bodyHalfH} width={bodyHalfW*2} height={bodyHalfH*2}
+              preserveAspectRatio="xMidYMid slice" clipPath={`url(#nbg-${node.id})`}
+              style={{ pointerEvents:'none' }} />
+            {viewProps.strokeColor && (
+              <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill="none"
+                stroke={viewProps.strokeColor} strokeWidth={viewProps.strokeWidth || 1.5} />
+            )}
+          </>
+        )}
+
         {/* 3D thumbnail — shown when not live (node not selected) */}
         {shape === '3d' && modelThumb && !isSelected && (
           <>
@@ -3049,13 +3081,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             const cx = bodyHalfW - besideFit.w / 2
             besideImgs.forEach(im => { rows.push({ im, x: cx, y: cy + im.h / 2 }); cy += im.h + IMG_GAP })
           }
-          const FADE = 6
           return rows.map(({ im, x: ix, y: iy }) => {
             const crop = im.crop || { x: 0, y: 0, w: 1, h: 1 }
             const isCropping = croppingImgId === im.id
             const clipId = `imc-${im.id}`
-            const maskId = `imm-${im.id}`
-            const filterId = `imf-${im.id}`
             const cx = -im.w / 2 + im.w * crop.x, cy = -im.h / 2 + im.h * crop.y
             const cw = im.w * crop.w, ch = im.h * crop.h
             const cropHandles = [
@@ -3066,23 +3095,15 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             const hCursor = e => e==='tl'||e==='br' ? 'nwse-resize' : e==='tr'||e==='bl' ? 'nesw-resize' : e==='l'||e==='r' ? 'ew-resize' : 'ns-resize'
             return (
               <g key={im.id} transform={`translate(${ix.toFixed(1)},${iy.toFixed(1)})`}>
-                <defs>
-                  <filter id={filterId} x="-20%" y="-20%" width="140%" height="140%">
-                    <feGaussianBlur stdDeviation={FADE} />
-                  </filter>
-                  <mask id={maskId}>
-                    <rect x={-im.w/2 + FADE} y={-im.h/2 + FADE} width={im.w - FADE*2} height={im.h - FADE*2}
-                      rx={FADE/2} fill="white" filter={`url(#${filterId})`} />
-                  </mask>
-                  {(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) && (
+                {(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) && (
+                  <defs>
                     <clipPath id={clipId}>
                       <rect x={cx} y={cy} width={cw} height={ch} />
                     </clipPath>
-                  )}
-                </defs>
+                  </defs>
+                )}
                 {isCropping && <image href={im.src} x={-im.w/2} y={-im.h/2} width={im.w} height={im.h} opacity={0.3} style={{ pointerEvents:'none' }} />}
                 <image href={im.src} x={-im.w / 2} y={-im.h / 2} width={im.w} height={im.h}
-                  mask={`url(#${maskId})`}
                   clipPath={(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) ? `url(#${clipId})` : undefined}
                   onDoubleClick={e => { e.stopPropagation(); setCroppingImgId(isCropping ? null : im.id) }}
                   style={{ pointerEvents: isSelected ? 'auto' : 'none', cursor: isSelected ? (isCropping ? 'crosshair' : 'default') : undefined }} />
@@ -3095,7 +3116,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
                       <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
                     </g>
                     <g transform={`translate(${im.w / 2},${im.h / 2})`}
-                      onMouseDown={e => { e.stopPropagation(); onImageResizeStart?.(e, node.id, im.id, x + ix, y + iy) }}
+                      onMouseDown={e => { e.stopPropagation(); onImageResizeStart?.(e, node.id, im.id, (node.x || 0) + ix, (node.y || 0) + iy) }}
                       style={{ cursor: 'nwse-resize' }}>
                       <circle r={12} fill="transparent" />
                       <circle r={5} fill="#5b6af0" stroke="#fff" strokeWidth={1} style={{ pointerEvents:'none' }} />
@@ -3196,9 +3217,8 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           ix = cosA * d
           iy = sinA * d
         }
-        const pFADE = 6
         const isCropping = croppingImgId === im.id
-        const pClipId = `pmc-${im.id}`, pMaskId = `pmm-${im.id}`, pFiltId = `pmf-${im.id}`
+        const pClipId = `pmc-${im.id}`
         const crop = im.crop || { x: 0, y: 0, w: 1, h: 1 }
         const cx = -im.w/2 + im.w*crop.x, cy = -im.h/2 + im.h*crop.y
         const cw = im.w*crop.w, ch = im.h*crop.h
@@ -3210,21 +3230,13 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         const hCursor = e => e==='tl'||e==='br' ? 'nwse-resize' : e==='tr'||e==='bl' ? 'nesw-resize' : e==='l'||e==='r' ? 'ew-resize' : 'ns-resize'
         return (
           <g key={im.id} transform={`translate(${ix.toFixed(1)},${iy.toFixed(1)})`}>
-            <defs>
-              <filter id={pFiltId} x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur stdDeviation={pFADE} />
-              </filter>
-              <mask id={pMaskId}>
-                <rect x={-im.w/2 + pFADE} y={-im.h/2 + pFADE} width={im.w - pFADE*2} height={im.h - pFADE*2}
-                  rx={pFADE/2} fill="white" filter={`url(#${pFiltId})`} />
-              </mask>
-              {(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) && (
+            {(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) && (
+              <defs>
                 <clipPath id={pClipId}><rect x={cx} y={cy} width={cw} height={ch} /></clipPath>
-              )}
-            </defs>
+              </defs>
+            )}
             {isCropping && <image href={im.src} x={-im.w/2} y={-im.h/2} width={im.w} height={im.h} opacity={0.3} style={{ pointerEvents:'none' }} />}
             <image href={im.src} x={-im.w / 2} y={-im.h / 2} width={im.w} height={im.h}
-              mask={`url(#${pMaskId})`}
               clipPath={(crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1) ? `url(#${pClipId})` : undefined}
               onDoubleClick={e => { e.stopPropagation(); setCroppingImgId(isCropping ? null : im.id) }}
               style={{ pointerEvents: isSelected || isHovered ? 'auto' : 'none', cursor: isCropping ? 'crosshair' : 'default' }} />
@@ -3724,7 +3736,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         const curImages = viewProps.nodeImages || []
         const fileInputId = `nodeimg-upload-${x}-${y}`
         const POSITIONS = [
-          ['above', 'Above'], ['below', 'Below'], ['beside', 'Beside'], ['perimeter', 'Perimeter'],
+          ['above', 'Above'], ['below', 'Below'], ['beside', 'Beside'], ['perimeter', 'Perimeter'], ['background', 'Background'],
         ]
         return (
           <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:230 }}>
