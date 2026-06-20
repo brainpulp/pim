@@ -361,6 +361,7 @@ export default function Graph({ projectId, projectName }) {
   const [ctxColors, setCtxColors] = useState(false)      // context-menu background-color submenu open
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
+  const didRubberBandRef = useRef(false)   // set after a rubber-band drag so the trailing click doesn't clear it
   const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
 
   // Expand a plain click to select the image's whole group (unless that image is drilled)
@@ -1451,6 +1452,7 @@ export default function Graph({ projectId, projectName }) {
       if (zoomFilterRef.current) zoomBehaviorRef.current?.filter(zoomFilterRef.current)
 
       if (moved && rubberBandRef.current) {
+        didRubberBandRef.current = true   // suppress the trailing canvas click that would clear this
         const rb = rubberBandRef.current
         const x1 = Math.min(rb.sx, rb.ex), y1 = Math.min(rb.sy, rb.ey)
         const x2 = Math.max(rb.sx, rb.ex), y2 = Math.max(rb.sy, rb.ey)
@@ -1855,7 +1857,7 @@ export default function Graph({ projectId, projectName }) {
       <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
-          onClick={e => { if (e.target !== e.currentTarget) return; setSelected(null); setSelectedImageIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
+          onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
@@ -3149,21 +3151,13 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         opacity={viewProps.opacity}
       >
         {viewProps.borderBlur > 0 ? (
-          <>
-            <defs>
-              <filter id={`bedge-${node.id}`} x="-200%" y="-200%" width="500%" height="500%" colorInterpolationFilters="sRGB">
-                <feGaussianBlur in="SourceGraphic" stdDeviation={viewProps.borderBlur} />
-              </filter>
-            </defs>
-            {/* Blurred edges: the actual body (fill + stroke) is Gaussian-softened so
-                its edge feathers out. No crisp overlay, no colored glow halo.
-                Wrapped in a <g> so the filter applies to every shape (rect/roundrect
-                don't take a filter prop directly). */}
-            <g filter={`url(#bedge-${node.id})`}>
-              <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
-                stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
-            </g>
-          </>
+          // CSS blur (not SVG feGaussianBlur): SVG filters blur in linearRGB by default,
+          // which washes a saturated fill toward white at the fringe. CSS blur() keeps the
+          // color and fades cleanly to transparent. The body feathers; no crisp overlay/glow.
+          <g style={{ filter: `blur(${viewProps.borderBlur}px)` }}>
+            <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
+              stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
+          </g>
         ) : (
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
             stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
