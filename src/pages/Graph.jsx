@@ -358,6 +358,7 @@ export default function Graph({ projectId, projectName }) {
   const [cropImageId, setCropImageId] = useState(null)   // free-floating image in crop mode (single)
   const [newNodeAt, setNewNodeAt] = useState(null)       // { px, py, sx, sy } floating new-node name input
   const [contextMenu, setContextMenu] = useState(null)   // { px, py, sx, sy } right-click menu (only on click, not drag)
+  const [ctxColors, setCtxColors] = useState(false)      // context-menu background-color submenu open
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
   const [zoomTick, setZoomTick] = useState(0) // eslint-disable-line no-unused-vars
@@ -1473,6 +1474,34 @@ export default function Graph({ projectId, projectName }) {
     document.addEventListener('mouseup', onUp)
   }, [drilledImageId])
 
+  // Paste an image from the clipboard at a given sim position (used by the context menu).
+  const pasteImageAt = useCallback(async (sx, sy) => {
+    try {
+      const clip = await navigator.clipboard.read()
+      for (const it of clip) {
+        const type = it.types.find(t => t.startsWith('image/'))
+        if (!type) continue
+        const blob = await it.getType(type)
+        const reader = new FileReader()
+        reader.onload = () => {
+          const el = new window.Image()
+          el.onload = () => {
+            const MAX = 220
+            const ar = el.naturalWidth / el.naturalHeight || 1
+            const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
+            addImage(reader.result, sx, sy, w, h)
+          }
+          el.src = reader.result
+        }
+        reader.readAsDataURL(blob)
+        return
+      }
+      alert('No image found on the clipboard.')
+    } catch {
+      alert('Could not read the clipboard. Try copying the image again, or paste with Ctrl/Cmd+V.')
+    }
+  }, [addImage])
+
   // â"€â"€ Right-click: open a context menu only if the press didn't turn into a pan-drag â"€â"€
   const handleRmbDown = useCallback((e) => {
     if (e.button !== 2) return
@@ -2050,12 +2079,12 @@ export default function Graph({ projectId, projectName }) {
 
         {/* Right-click context menu */}
         {contextMenu && (() => {
-          const close = () => setContextMenu(null)
+          const close = () => { setContextMenu(null); setCtxColors(false) }
           const item = (label, onClick) => (
             <div onClick={onClick}
               onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4 }}>
+              style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
               {label}
             </div>
           )
@@ -2067,20 +2096,37 @@ export default function Graph({ projectId, projectName }) {
                 style={{
                   position: 'absolute', left: contextMenu.px, top: contextMenu.py, zIndex: 35,
                   background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4,
-                  boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 150,
+                  boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 160,
                 }}>
-                {item('New node here', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
-                {item('New frame here', () => {
-                  pushUndo()
-                  const { sx, sy } = contextMenu
-                  const id = addNode('Frame', null, sx, sy)
-                  setNodeViewProp(id, 'shape', 'frame'); setNodeViewProp(id, 'fillColor', 'none'); setNodeViewProp(id, 'strokeColor', null)
-                  addSlide(id)
-                  setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
-                  close()
-                })}
-                {item('Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
-                {item('Fit to view', () => { zoomExtents(); close() })}
+                {ctxColors ? (
+                  <>
+                    {item(<span style={{ color: '#8090b8' }}>‹ Background color</span>, () => setCtxColors(false))}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 168, padding: '4px 8px 6px' }}>
+                      {[...BG_COLORS, ...COLOR_PALETTE].map(c => (
+                        <div key={c} title={c} onClick={() => { setViewBgColor(c); close() }}
+                          style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer',
+                            border: bgColor === c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {item('New node here', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
+                    {item('New frame here', () => {
+                      pushUndo()
+                      const { sx, sy } = contextMenu
+                      const id = addNode('Frame', null, sx, sy)
+                      setNodeViewProp(id, 'shape', 'frame'); setNodeViewProp(id, 'fillColor', 'none'); setNodeViewProp(id, 'strokeColor', null)
+                      addSlide(id)
+                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                      close()
+                    })}
+                    {item('Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
+                    {item(<>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
+                    {item('Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
+                    {item('Fit to view', () => { zoomExtents(); close() })}
+                  </>
+                )}
               </div>
             </>
           )
