@@ -213,8 +213,10 @@ function distributeImages(images, selectedIds, axis) {
 }
 
 function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onDelete }) {
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute }) {
   // zoomTick is not read — it forces re-render when D3 zoom fires so `transform` stays current
+  const [alignOpen, setAlignOpen] = useState(false)
+
   if (selectedImageIds.size === 0) return null
   const sel = images.filter(i => selectedImageIds.has(i.id))
   const count = sel.length
@@ -234,16 +236,16 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
   // For a single image, lift the toolbar clear of the in-canvas rotate handle above it
   const screenY = T.y + y1 * T.k - 12 - (isSingle ? 42 * T.k : 0)
 
-  const btn = (label, onClick, disabled, title, color) => (
-    <button key={label + (title || '')}
-      title={title || label}
-      onClick={disabled ? undefined : onClick}
+  // Square icon button for the main toolbar row
+  const iconBtn = (glyph, onClick, title, active) => (
+    <button title={title} onClick={onClick}
       style={{
-        background: 'transparent', border: '1px solid #2d3a6a', borderRadius: 5,
-        color: disabled ? '#3a4070' : (color || '#7080a0'), cursor: disabled ? 'default' : 'pointer',
-        padding: '3px 7px', fontSize: '0.78rem', whiteSpace: 'nowrap',
+        background: active ? '#23234a' : 'transparent', border: '1px solid #2d3a6a',
+        borderRadius: 6, color: '#c5d0ff', cursor: 'pointer',
+        width: 28, height: 26, fontSize: '0.95rem', lineHeight: 1, padding: 0,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
-    >{label}</button>
+    >{glyph}</button>
   )
 
   return (
@@ -254,22 +256,46 @@ function ImageToolbar({ images, selectedImageIds, transform, zoomTick,
         position: 'absolute', left: screenX, top: screenY,
         transform: 'translateX(-50%) translateY(-100%)',
         background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
-        padding: '5px 7px', display: 'flex', flexWrap: 'wrap', gap: 4,
-        zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)', maxWidth: 400,
+        padding: '5px 7px', display: 'flex', gap: 4,
+        zIndex: 25, boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
       }}
     >
-      {isSingle && btn('▲', () => onReorderImage(sel[0].id, 'up'), false, 'Layer up')}
-      {isSingle && btn('▼', () => onReorderImage(sel[0].id, 'down'), false, 'Layer down')}
-      {count >= 2 && btn('Group', onGroup, false, 'Ctrl+G')}
-      {hasGroupId && btn('Ungroup', onUngroup, false, 'Ctrl+Shift+G')}
-      {count >= 2 && btn('⬛L', () => onAlign('left'), false, 'Align left')}
-      {count >= 2 && btn('⬛C', () => onAlign('centerH'), false, 'Align center H')}
-      {count >= 2 && btn('⬛R', () => onAlign('right'), false, 'Align right')}
-      {count >= 2 && btn('⬛T', () => onAlign('top'), false, 'Align top')}
-      {count >= 2 && btn('⬛M', () => onAlign('middleV'), false, 'Align middle V')}
-      {count >= 2 && btn('⬛B', () => onAlign('bottom'), false, 'Align bottom')}
-      {count >= 3 && btn('↔ Dist', () => onDistribute('H'), false, 'Distribute H')}
-      {count >= 3 && btn('↕ Dist', () => onDistribute('V'), false, 'Distribute V')}
+      {isSingle && iconBtn('▲', () => onReorderImage(sel[0].id, 'up'), 'Bring forward')}
+      {isSingle && iconBtn('▼', () => onReorderImage(sel[0].id, 'down'), 'Send backward')}
+      {count >= 2 && iconBtn('⧉', onGroup, 'Group  (Ctrl+G)')}
+      {hasGroupId && iconBtn('⊟', onUngroup, 'Ungroup  (Ctrl+Shift+G)')}
+      {count >= 2 && iconBtn('▤', () => setAlignOpen(o => !o), 'Align & distribute', alignOpen)}
+
+      {/* Align / distribute popup */}
+      {count >= 2 && alignOpen && (
+        <div
+          style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: 6,
+            background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
+            padding: 8, display: 'flex', flexDirection: 'column', gap: 6,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+          }}
+        >
+          <div style={{ fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>ALIGN</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {iconBtn('⇤', () => onAlign('left'), 'Align left')}
+            {iconBtn('⇔', () => onAlign('centerH'), 'Align center')}
+            {iconBtn('⇥', () => onAlign('right'), 'Align right')}
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {iconBtn('⤒', () => onAlign('top'), 'Align top')}
+            {iconBtn('⇕', () => onAlign('middleV'), 'Align middle')}
+            {iconBtn('⤓', () => onAlign('bottom'), 'Align bottom')}
+          </div>
+          {count >= 3 && (<>
+            <div style={{ fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>DISTRIBUTE</div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {iconBtn('↔', () => onDistribute('H'), 'Distribute horizontally')}
+              {iconBtn('↕', () => onDistribute('V'), 'Distribute vertically')}
+            </div>
+          </>)}
+        </div>
+      )}
     </div>
   )
 }
@@ -306,6 +332,8 @@ export default function Graph({ projectId, projectName }) {
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
+  const selectedImageIdsRef = useRef(selectedImageIds)   // live mirror for drag handlers
+  useEffect(() => { selectedImageIdsRef.current = selectedImageIds }, [selectedImageIds])
   const [cropImageId, setCropImageId] = useState(null)   // free-floating image in crop mode (single)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
@@ -1422,16 +1450,21 @@ export default function Graph({ projectId, projectName }) {
       }
 
       // Plain click: select image or its whole group (unless drilled)
-      const ids = expandGroup(imageId, images, drilledImageId)
-      setSelectedImageIds(new Set(ids))
-      if (imageId !== drilledImageId) setDrilledImageId(null)
-      if (imageId !== cropImageId) setCropImageId(null)
-
-      // Begin drag-move.
-      // Use `ids` (synchronously known) not `selectedImageIds` (stale React state).
-      // If the user is dragging the drilled image, move only that one.
-      const isDrilledDrag = drilledImageId === imageId
-      const dragIds = isDrilledDrag ? [imageId] : ids
+      // If the clicked photo is already part of a multi-selection, keep that whole
+      // selection and drag all of them together — don't collapse to just this one.
+      const curSel = selectedImageIdsRef.current
+      let dragIds
+      if (curSel.has(imageId) && curSel.size > 1) {
+        dragIds = [...curSel]            // preserve the existing multi-selection
+      } else {
+        const ids = expandGroup(imageId, images, drilledImageId)
+        setSelectedImageIds(new Set(ids))
+        if (imageId !== drilledImageId) setDrilledImageId(null)
+        if (imageId !== cropImageId) setCropImageId(null)
+        // If the user is dragging the drilled image, move only that one.
+        const isDrilledDrag = drilledImageId === imageId
+        dragIds = isDrilledDrag ? [imageId] : ids
+      }
 
       const startClientX = e.clientX, startClientY = e.clientY
       const origins = {}
