@@ -323,6 +323,7 @@ export default function Graph({ projectId, projectName }) {
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
   const zoomFilterRef = useRef(null)
+  const rmbStartRef = useRef(null)   // right-button gesture start, for click-vs-pan detection
   const simNodesRef = useRef([])
   const simEdgesRef = useRef([])
   const zoomTransformRef = useRef(d3.zoomIdentity)
@@ -705,6 +706,24 @@ export default function Graph({ projectId, projectName }) {
         panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
       })
     zoomBehaviorRef.current.on('zoom.toolbar', () => setZoomTick(t => t + 1))
+    // Right-button gesture: if it starts and ends in ~the same spot (no pan), open the
+    // context menu. We use d3's own start/end events because d3-zoom stopImmediatePropagation's
+    // the right-button mousedown, so a React onMouseDown handler never sees it.
+    zoomBehaviorRef.current
+      .on('start.rmb', e => {
+        rmbStartRef.current = (e.sourceEvent && e.sourceEvent.button === 2)
+          ? { x: e.sourceEvent.clientX, y: e.sourceEvent.clientY } : null
+      })
+      .on('end.rmb', e => {
+        const start = rmbStartRef.current
+        rmbStartRef.current = null
+        if (!start || !e.sourceEvent || e.sourceEvent.button !== 2 || !svgRef.current) return
+        if (Math.hypot(e.sourceEvent.clientX - start.x, e.sourceEvent.clientY - start.y) >= 5) return
+        const rect = svgRef.current.getBoundingClientRect()
+        const px = e.sourceEvent.clientX - rect.left, py = e.sourceEvent.clientY - rect.top
+        const [sx, sy] = zoomTransformRef.current.invert([px, py])
+        setContextMenu({ px, py, sx, sy })
+      })
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
     svg.on('contextmenu', e => e.preventDefault())   // don't pop the menu when right-drag panning
@@ -1502,27 +1521,7 @@ export default function Graph({ projectId, projectName }) {
     }
   }, [addImage])
 
-  // â"€â"€ Right-click: open a context menu only if the press didn't turn into a pan-drag â"€â"€
-  const handleRmbDown = useCallback((e) => {
-    if (e.button !== 2) return
-    setContextMenu(null)
-    const startX = e.clientX, startY = e.clientY
-    let moved = false
-    const onMove = me => { if (!moved && Math.hypot(me.clientX - startX, me.clientY - startY) > 4) moved = true }
-    const onUp = me => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      if (moved || me.button !== 2 || !svgRef.current) return   // it was a pan → no menu
-      const rect = svgRef.current.getBoundingClientRect()
-      const px = me.clientX - rect.left, py = me.clientY - rect.top
-      const [sx, sy] = zoomTransformRef.current.invert([px, py])
-      setContextMenu({ px, py, sx, sy })
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [])
-
-  // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag', arg) => {
     e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
@@ -1859,7 +1858,7 @@ export default function Graph({ projectId, projectName }) {
             setNewNodeAt({ px: e.clientX - rect.left, py: e.clientY - rect.top, sx, sy })
           }}
           onMouseDown={e => {
-            if (e.button === 2) { handleRmbDown(e); return }
+            if (e.button === 2) return   // right-button handled by d3-zoom start/end (pan vs menu)
             if (!e.target.closest?.('[data-node]')) setIsPanning(true)
             if (e.target === e.currentTarget) handleCanvasMouseDown(e)
           }}
