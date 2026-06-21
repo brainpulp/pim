@@ -2845,11 +2845,14 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
             </filter>
           )}
           {edgeBlur > 0 && (<>
-            <filter id={edgeFilterId} x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur in="SourceGraphic" stdDeviation={edgeBlur} colorInterpolationFilters="sRGB" />
+            <filter id={edgeFilterId} x="-100%" y="-100%" width="300%" height="300%">
+              {/* stdDeviation is half the inset so the photo edge sits ~2σ outside the white
+                  rect → alpha ≈ 2% (invisible). With stdDeviation == inset the edge sits at
+                  1σ ≈ 16% opacity, which left a distinct hard line at the photo boundary. */}
+              <feGaussianBlur in="SourceGraphic" stdDeviation={edgeBlur * 0.5} colorInterpolationFilters="sRGB" />
             </filter>
             {/* White rect inset by the blur radius, then blurred → an alpha matte that is
-                opaque in the middle and feathers to transparent right at the photo edges. */}
+                opaque in the middle and feathers fully to transparent right at the photo edges. */}
             <mask id={edgeMaskId} maskUnits="userSpaceOnUse" x={cx - edgeBlur * 2} y={cy - edgeBlur * 2}
               width={cw + edgeBlur * 4} height={ch + edgeBlur * 4}>
               <rect x={cx + edgeBlur} y={cy + edgeBlur}
