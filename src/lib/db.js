@@ -64,6 +64,47 @@ export async function deleteProject(id) {
   if (error) throw error
 }
 
+// ── Sharing ──────────────────────────────────────────────────────────────────
+// Owner creates a share link. role: 'viewer' | 'editor'. expiresAt: ISO string | null.
+export async function createShareLink(projectId, role = 'viewer', expiresAt = null) {
+  const { data, error } = await supabase
+    .from('pim_share_links')
+    .insert({ project_id: projectId, role, expires_at: expiresAt })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function listShareLinks(projectId) {
+  const { data, error } = await supabase
+    .from('pim_share_links')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return data
+}
+
+export async function revokeShareLink(token) {
+  const { error } = await supabase.from('pim_share_links').update({ revoked: true }).eq('token', token)
+  if (error) throw error
+}
+
+// Public: load a shared project by token (works without login for viewer/editor links).
+export async function getSharedProject(token) {
+  const { data, error } = await supabase.rpc('pim_get_shared_project', { p_token: token })
+  if (error) throw error
+  return data // { id, name, nodes, edges, views, active_view_id, role } | null
+}
+
+// Signed-in: redeem a link → become a member so the project opens with normal RLS.
+export async function redeemShareLink(token) {
+  const { data, error } = await supabase.rpc('pim_redeem_share_link', { p_token: token })
+  if (error) throw error
+  return data // { id, name, role } | null
+}
+
 // Upload a 3D model file to Supabase Storage; returns { url, type }
 export async function uploadModel(file, projectId, nodeId) {
   const ext = file.name.split('.').pop().toLowerCase()

@@ -307,7 +307,7 @@ function ImageToolbar({ images, selectedImageIds, anchor,
   )
 }
 
-export default function Graph({ projectId, projectName }) {
+export default function Graph({ projectId, projectName, readOnly = false, sharedData = null }) {
   const svgRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
@@ -396,6 +396,13 @@ export default function Graph({ projectId, projectName }) {
 
   useEffect(() => {
     setLoading(true)
+    // Shared read-only view: data is fetched up-front (via a public RPC) and passed in,
+    // so we never hit loadProject (which is gated by RLS to the owner/members).
+    if (sharedData) {
+      loadProjectData({ nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views, activeViewId: sharedData.active_view_id })
+      setLoading(false)
+      return
+    }
     loadProject(projectId)
       .then(d => loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id }))
       .catch(e => console.error('Load failed:', e))
@@ -494,7 +501,7 @@ export default function Graph({ projectId, projectName }) {
   viewNodePropsRef.current = viewNodeProps
 
   useEffect(() => {
-    if (loading) return
+    if (loading || readOnly) return   // shared viewers never write back
     setSaveStatus('saving')
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
@@ -712,7 +719,7 @@ export default function Graph({ projectId, projectName }) {
       ev.preventDefault()
       const dragged = rmb?.moved
       rmb = null
-      if (dragged || !el) return
+      if (dragged || !el || readOnly) return   // no edit menus in shared read-only view
       const rect = el.getBoundingClientRect()
       const px = ev.clientX - rect.left, py = ev.clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
@@ -774,6 +781,7 @@ export default function Graph({ projectId, projectName }) {
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = e => {
+      if (readOnly) return   // shared read-only view: no keyboard mutations
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') {
@@ -1794,8 +1802,8 @@ export default function Graph({ projectId, projectName }) {
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* Outline sidebar â€" hidden while presenting */}
-      {!isPresenting && (<>
+      {/* Outline sidebar â€" hidden while presenting or in shared read-only view */}
+      {!isPresenting && !readOnly && (<>
       <div onMouseDown={() => { canvasFocused.current = false }}
         style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <OutlinePanel
@@ -1886,6 +1894,7 @@ export default function Graph({ projectId, projectName }) {
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
+            if (readOnly) return
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
             const rect = svgRef.current.getBoundingClientRect()
             const [sx, sy] = zoomTransformRef.current.invert([e.clientX - rect.left, e.clientY - rect.top])
@@ -1895,7 +1904,7 @@ export default function Graph({ projectId, projectName }) {
           onMouseDown={e => {
             if (e.button === 2) return   // right-button handled by d3-zoom start/end (pan vs menu)
             if (!e.target.closest?.('[data-node]')) setIsPanning(true)
-            if (e.target === e.currentTarget) handleCanvasMouseDown(e)
+            if (!readOnly && e.target === e.currentTarget) handleCanvasMouseDown(e)
           }}
           onMouseUp={() => setIsPanning(false)}
           onMouseLeave={() => setIsPanning(false)}
@@ -1914,7 +1923,8 @@ export default function Graph({ projectId, projectName }) {
             </filter>
           </defs>
 
-          <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}>
+          <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}
+            style={readOnly ? { pointerEvents: 'none' } : undefined}>
             {/* 1. Frame containers */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}

@@ -5,6 +5,13 @@ import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
 import Table from './pages/Table'
+import SharedView from './pages/SharedView'
+import ShareDialog from './components/ShareDialog'
+
+const parseShareToken = () => {
+  const m = window.location.hash.match(/^#\/share\/([A-Za-z0-9]+)/)
+  return m ? m[1] : null
+}
 
 class AppErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { err: null } }
@@ -33,7 +40,15 @@ export default function App() {
   const [view, setView] = useState('graph')
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
+  const [shareToken, setShareToken] = useState(() => parseShareToken())
+  const [showShare, setShowShare] = useState(false)
   const renameInputRef = useRef()
+
+  useEffect(() => {
+    const onHash = () => setShareToken(parseShareToken())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
 
   const openProject = (id, name) => {
     localStorage.setItem('pim_last_project', JSON.stringify({ id, name }))
@@ -52,6 +67,14 @@ export default function App() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // A `#/share/<token>` link is handled before the auth gate so view-only links
+  // work with no sign-in. Wait for the session to resolve first (editor links redeem).
+  if (shareToken) {
+    if (session === undefined) return <div style={loadingStyle}>Loading…</div>
+    return <SharedView token={shareToken} session={session}
+      onOpenOwned={(id, name) => { window.location.hash = ''; setShareToken(null); openProject(id, name) }} />
+  }
 
   if (session === undefined) return <div style={loadingStyle}>Loading…</div>
   if (!session) return <Auth />
@@ -107,10 +130,16 @@ export default function App() {
             </button>
           ))}
         </div>
+        <button style={shareBtnStyle} onClick={() => setShowShare(true)} title="Share this project">
+          Share
+        </button>
         <button style={signOutStyle} onClick={() => supabase.auth.signOut()}>
           Sign out
         </button>
       </nav>
+      {showShare && (
+        <ShareDialog projectId={project.id} projectName={project.name} onClose={() => setShowShare(false)} />
+      )}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {view === 'graph' && (
           <AppErrorBoundary>
@@ -151,8 +180,13 @@ const navBtnStyle = {
   background: 'transparent', color: '#666', cursor: 'pointer', fontSize: '0.82rem', textTransform: 'capitalize',
 }
 const navBtnActiveStyle = { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' }
+const shareBtnStyle = {
+  marginLeft: 'auto', padding: '0.25rem 0.85rem', borderRadius: 6,
+  border: '1px solid #3a4a8a', background: '#1a1f4a', color: '#c5d0ff',
+  cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+}
 const signOutStyle = {
-  marginLeft: 'auto', padding: '0.25rem 0.75rem', borderRadius: 6,
+  padding: '0.25rem 0.75rem', borderRadius: 6,
   border: '1px solid #2a2a3e', background: 'transparent', color: '#555',
   cursor: 'pointer', fontSize: '0.78rem',
 }
