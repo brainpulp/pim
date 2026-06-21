@@ -236,8 +236,8 @@ function distributeImages(images, selectedIds, axis) {
 }
 
 function ImageToolbar({ images, selectedImageIds, anchor,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onCrop, onDelete }) {
-  const [alignOpen, setAlignOpen] = useState(false)
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onCrop, onDelete }) {
+  const [sub, setSub] = useState(null) // null | 'align'
 
   if (selectedImageIds.size === 0 || !anchor) return null
   const sel = images.filter(i => selectedImageIds.has(i.id))
@@ -246,20 +246,29 @@ function ImageToolbar({ images, selectedImageIds, anchor,
   const hasGroupId = sel.some(i => i.groupId)
   const isSingle = count === 1
   const blur = sel[0]?.blur || 0
+  const edgeBlur = sel[0]?.edgeBlur || 0
 
-  // Square icon button for the main toolbar row
-  const iconBtn = (glyph, onClick, title, active, color) => (
-    <button title={title} onClick={onClick}
-      style={{
-        background: active ? '#23234a' : 'transparent', border: '1px solid #2d3a6a',
-        borderRadius: 6, color: color || '#c5d0ff', cursor: 'pointer',
-        width: 28, height: 26, fontSize: '0.95rem', lineHeight: 1, padding: 0,
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      }}
-    >{glyph}</button>
+  // Text menu row — matches the canvas right-click menu styling.
+  const row = (label, onClick, opts = {}) => (
+    <div onClick={onClick}
+      onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+      style={{ padding: '6px 12px', fontSize: '0.82rem', color: opts.color || '#c5d0ff', cursor: 'pointer',
+        whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+      <span>{label}</span>{opts.right && <span style={{ color: '#8090b8' }}>{opts.right}</span>}
+    </div>
   )
   const stepBtn = (label, onClick, color) => (
-    <button onClick={onClick} style={{ padding: '1px 6px', borderRadius: 4, border: '1px solid #2a3358', background: 'transparent', color: color || '#7b8fcc', cursor: 'pointer', fontSize: 12 }}>{label}</button>
+    <button onClick={onClick} style={{ padding: '0 6px', borderRadius: 4, border: '1px solid #2a3358', background: 'transparent', color: color || '#7b8fcc', cursor: 'pointer', fontSize: 13, lineHeight: 1.6 }}>{label}</button>
+  )
+  const stepperRow = (label, value, set, max) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}>
+      <span style={{ fontSize: '0.82rem', color: '#c5d0ff', flex: 1 }}>{label}</span>
+      {stepBtn('–', () => set(Math.max(0, value - 1)))}
+      <span style={{ fontSize: '0.75rem', color: value > 0 ? '#88b4e8' : '#7080a0', width: 16, textAlign: 'center' }}>{value}</span>
+      {stepBtn('+', () => set(Math.min(max, value + 1)))}
+      {value > 0 && stepBtn('×', () => set(0), '#f87171')}
+    </div>
   )
 
   return (
@@ -269,54 +278,31 @@ function ImageToolbar({ images, selectedImageIds, anchor,
       style={{
         position: 'absolute', left: anchor.px, top: anchor.py,
         background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
-        padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 6,
+        padding: 4, display: 'flex', flexDirection: 'column', minWidth: 168,
         zIndex: 25, boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
       }}
     >
-      <div style={{ display: 'flex', gap: 4, position: 'relative' }}>
-      {isSingle && iconBtn('▲', () => onReorderImage(sel[0].id, 'up'), 'Bring forward')}
-      {isSingle && iconBtn('▼', () => onReorderImage(sel[0].id, 'down'), 'Send backward')}
-      {count >= 2 && iconBtn('⧉', onGroup, 'Group  (Ctrl+G)')}
-      {hasGroupId && iconBtn('⊟', onUngroup, 'Ungroup  (Ctrl+Shift+G)')}
-      {count >= 2 && iconBtn('▤', () => setAlignOpen(o => !o), 'Align & distribute', alignOpen)}
-      {isSingle && iconBtn('⛶', onCrop, 'Crop')}
-      {iconBtn('✕', onDelete, 'Delete', false, '#f87171')}
-
-      {/* Align / distribute popup — a real grid */}
-      {count >= 2 && alignOpen && (
-        <div
-          style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: 6,
-            background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
-            padding: 8, display: 'grid', gridTemplateColumns: 'repeat(3, 28px)',
-            gap: 5, justifyContent: 'center',
-            boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
-          }}
-        >
-          <div style={{ gridColumn: '1 / -1', fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>ALIGN</div>
-          {iconBtn('⇤', () => onAlign('left'), 'Align left')}
-          {iconBtn('⇔', () => onAlign('centerH'), 'Align center')}
-          {iconBtn('⇥', () => onAlign('right'), 'Align right')}
-          {iconBtn('⤒', () => onAlign('top'), 'Align top')}
-          {iconBtn('⇕', () => onAlign('middleV'), 'Align middle')}
-          {iconBtn('⤓', () => onAlign('bottom'), 'Align bottom')}
-          {count >= 3 && (<>
-            <div style={{ gridColumn: '1 / -1', fontSize: '0.66rem', color: '#8090b8', letterSpacing: 0.4 }}>DISTRIBUTE</div>
-            {iconBtn('↔', () => onDistribute('H'), 'Distribute horizontally')}
-            {iconBtn('↕', () => onDistribute('V'), 'Distribute vertically')}
-          </>)}
-        </div>
-      )}
-      </div>
-      {isSingle && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: '0.72rem', color: '#8090b8', width: 30 }}>Blur</span>
-          {stepBtn('–', () => onSetBlur(Math.max(0, blur - 1)))}
-          <span style={{ fontSize: '0.72rem', color: blur > 0 ? '#88b4e8' : '#7080a0', width: 16, textAlign: 'center' }}>{blur}</span>
-          {stepBtn('+', () => onSetBlur(Math.min(40, blur + 1)))}
-          {blur > 0 && stepBtn('×', () => onSetBlur(0), '#f87171')}
-        </div>
-      )}
+      {sub === 'align' ? (<>
+        {row('‹ Align & distribute', () => setSub(null), { color: '#8090b8' })}
+        {row('Align left', () => onAlign('left'))}
+        {row('Align center', () => onAlign('centerH'))}
+        {row('Align right', () => onAlign('right'))}
+        {row('Align top', () => onAlign('top'))}
+        {row('Align middle', () => onAlign('middleV'))}
+        {row('Align bottom', () => onAlign('bottom'))}
+        {count >= 3 && row('Distribute horizontally', () => onDistribute('H'))}
+        {count >= 3 && row('Distribute vertically', () => onDistribute('V'))}
+      </>) : (<>
+        {isSingle && row('Bring forward', () => onReorderImage(sel[0].id, 'up'))}
+        {isSingle && row('Send backward', () => onReorderImage(sel[0].id, 'down'))}
+        {count >= 2 && row('Group', onGroup, { right: 'Ctrl+G' })}
+        {hasGroupId && row('Ungroup', onUngroup, { right: '⇧Ctrl+G' })}
+        {count >= 2 && row('Align & distribute', () => setSub('align'), { right: '›' })}
+        {isSingle && row('Crop', onCrop)}
+        {isSingle && stepperRow('Blur', blur, onSetBlur, 40)}
+        {isSingle && stepperRow('Edge blur', edgeBlur, onSetEdgeBlur, 40)}
+        {row('Delete', onDelete, { color: '#f87171' })}
+      </>)}
     </div>
   )
 }
@@ -2377,6 +2363,7 @@ export default function Graph({ projectId, projectName }) {
             onUngroup={() => ungroupImages([...selectedImageIds])}
             onReorderImage={(id, dir) => reorderImage(id, dir)}
             onSetBlur={v => selectedImageIds.forEach(id => updateImage(id, { blur: v }))}
+            onSetEdgeBlur={v => selectedImageIds.forEach(id => updateImage(id, { edgeBlur: v }))}
             onCrop={() => { const id = photoMenu.imageId || [...selectedImageIds][0]; if (id) { setCropImageId(id); setDrilledImageId(id); setSelectedImageIds(new Set([id])) } setPhotoMenu(null) }}
             onAlign={anchor => {
               const imgs = activeView?.images || []
@@ -2812,6 +2799,11 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const clipId = `fimg-clip-${id}`
   const blur = img.blur || 0
   const blurId = `fimg-blur-${id}`
+  // Edge blur feathers ONLY the photo's outer edges (a blurred alpha mask), leaving the
+  // interior sharp — distinct from `blur`, which softens the whole image. The two combine.
+  const edgeBlur = img.edgeBlur || 0
+  const edgeMaskId = `fimg-edgemask-${id}`
+  const edgeFilterId = `fimg-edgefilter-${id}`
 
   // Visible-rect geometry drives the selection chrome (so handles hug the cropped area).
   const vL = cx, vT = cy, vR = cx + cw, vB = cy + ch
@@ -2834,7 +2826,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
       style={{ cursor: isCropping ? 'default' : 'move' }}
     >
-      {(hasCrop || blur > 0) && (
+      {(hasCrop || blur > 0 || edgeBlur > 0) && (
         <defs>
           {hasCrop && <clipPath id={clipId}><rect x={cx} y={cy} width={cw} height={ch} /></clipPath>}
           {blur > 0 && (
@@ -2842,22 +2834,37 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
               <feGaussianBlur in="SourceGraphic" stdDeviation={blur} colorInterpolationFilters="sRGB" />
             </filter>
           )}
+          {edgeBlur > 0 && (<>
+            <filter id={edgeFilterId} x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation={edgeBlur} colorInterpolationFilters="sRGB" />
+            </filter>
+            {/* White rect inset by the blur radius, then blurred → an alpha matte that is
+                opaque in the middle and feathers to transparent right at the photo edges. */}
+            <mask id={edgeMaskId} maskUnits="userSpaceOnUse" x={cx - edgeBlur * 2} y={cy - edgeBlur * 2}
+              width={cw + edgeBlur * 4} height={ch + edgeBlur * 4}>
+              <rect x={cx + edgeBlur} y={cy + edgeBlur}
+                width={Math.max(1, cw - edgeBlur * 2)} height={Math.max(1, ch - edgeBlur * 2)}
+                fill="#fff" filter={`url(#${edgeFilterId})`} />
+            </mask>
+          </>)}
         </defs>
       )}
-      {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2} />}
+      {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2}
+        mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />}
       {/* While cropping, show the full image dimmed so trimmed areas stay visible */}
       {isCropping && (
         <image href={src} x={-hw} y={-hh} width={width} height={height} opacity={0.3}
           style={{ pointerEvents: 'none' }} />
       )}
       {blur > 0 ? (
-        <g filter={`url(#${blurId})`}>
+        <g filter={`url(#${blurId})`} mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined}>
           <image href={src} x={-hw} y={-hh} width={width} height={height}
             clipPath={hasCrop ? `url(#${clipId})` : undefined} />
         </g>
       ) : (
         <image href={src} x={-hw} y={-hh} width={width} height={height}
-          clipPath={hasCrop ? `url(#${clipId})` : undefined} />
+          clipPath={hasCrop ? `url(#${clipId})` : undefined}
+          mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />
       )}
 
       {isSelected && !isCropping && (<>
@@ -3663,9 +3670,19 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const wrap = {
     position:'absolute', left: x, top: y, transform:'translateX(-50%)',
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
-    padding:'6px 8px', minWidth: panel ? 230 : undefined,
+    padding: panel ? '6px 8px' : 4, minWidth: panel ? 230 : 184,
     boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:20, pointerEvents:'all',
   }
+  // Text menu row — matches the canvas right-click menu styling.
+  const textRow = (label, onClick, opts = {}) => (
+    <div onClick={onClick}
+      onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+      style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
+        whiteSpace:'nowrap', borderRadius:4, display:'flex', justifyContent:'space-between', gap:16 }}>
+      <span>{label}</span>{opts.right && <span style={{ color: opts.rightColor || '#8090b8' }}>{opts.right}</span>}
+    </div>
+  )
 
   const iconBtn = (active) => ({
     background: active ? '#2d3a6a' : 'transparent',
@@ -3688,30 +3705,26 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
-      {/* â"€â"€ Main icon grid â"€â"€ */}
-      {panel === null && (() => {
-        const cell = (s) => ({ ...s, width:'100%', display:'inline-flex', alignItems:'center', justifyContent:'center' })
-        return (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(6, 34px)', gap:4, justifyContent:'center' }}>
-          <button style={cell(iconBtn(false))} title="Color" onClick={() => setPanel('color')}>🎨</button>
-          <button style={cell(iconBtn(false))} title="Shape" onClick={() => setPanel('shape')}>◯</button>
-          {shape === 'image' && <button style={cell(iconBtn(false))} title="Set image URL" onClick={() => setPanel('imageUrl')}>🖼</button>}
-          <button style={cell(iconBtn(false))} title="Show/hide" onClick={onHide}>👁</button>
-          <button style={cell(iconBtn(false))} title="Drill" onClick={onDrill}>⊕</button>
-          <button style={cell(iconBtn(depthExpand !== null))} title="Expand hops" onClick={() => {
-            if (depthExpand !== null) { onSetDepthExpand?.(null) }
-            else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
-          }}>⊛</button>
-          <button style={cell(iconBtn(false))} title="Note" onClick={() => setPanel('note')}>✎</button>
-          <button style={cell(iconBtn(!!viewProps.nodeMotion || !!viewProps.nodeColorCycle))} title="Motion & color cycle" onClick={() => setPanel('motion')}>✦</button>
-          <button style={cell(iconBtn(false))} title="Radiate to children" onClick={() => setPanel('radiate')}>❋</button>
-          {isAnchored && <button style={cell({ ...iconBtn(false), color:'#f6ad55' })} title="Release anchor" onClick={onRelease}>⊙</button>}
-          <button style={cell(iconBtn(panel === 'emoji'))} title="Emoji" onClick={() => setPanel(panel === 'emoji' ? null : 'emoji')}>😊</button>
-          <button style={cell(iconBtn(panel === 'image' || (viewProps.nodeImages || []).length > 0))} title="Image" onClick={() => setPanel(panel === 'image' ? null : 'image')}>🖼️</button>
-          <button style={cell({ ...iconBtn(false), color:'#f87171' })} title="Delete" onClick={onDelete}>✕</button>
-        </div>
-        )
-      })()}
+      {/* â"€â"€ Main text menu â"€â"€ */}
+      {panel === null && (<>
+        {textRow('Color', () => setPanel('color'), { right: '›' })}
+        {textRow('Shape', () => setPanel('shape'), { right: '›' })}
+        {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›' })}
+        {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8' })}
+        {textRow('Emoji', () => setPanel('emoji'), { right: '›' })}
+        {textRow('Image', () => setPanel('image'), { right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8' })}
+        {textRow('Motion & color cycle', () => setPanel('motion'), { right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8' })}
+        {textRow('Radiate to children', () => setPanel('radiate'), { right: '›' })}
+        {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
+          if (depthExpand !== null) { onSetDepthExpand?.(null) }
+          else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
+        }, { right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8' })}
+        <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
+        {textRow('Drill in', onDrill)}
+        {textRow('Hide', onHide)}
+        {isAnchored && textRow('Release anchor', onRelease, { color: '#f6ad55' })}
+        {textRow('Delete', onDelete, { color: '#f87171' })}
+      </>)}
 
       {/* â"€â"€ Color panel â"€â"€ */}
       {panel === 'color' && (
