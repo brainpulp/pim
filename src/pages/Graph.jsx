@@ -2844,22 +2844,38 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
               <feGaussianBlur in="SourceGraphic" stdDeviation={blur} colorInterpolationFilters="sRGB" />
             </filter>
           )}
-          {edgeBlur > 0 && (<>
-            <filter id={edgeFilterId} x="-100%" y="-100%" width="300%" height="300%">
-              {/* stdDeviation is half the inset so the photo edge sits ~2σ outside the white
-                  rect → alpha ≈ 2% (invisible). With stdDeviation == inset the edge sits at
-                  1σ ≈ 16% opacity, which left a distinct hard line at the photo boundary. */}
-              <feGaussianBlur in="SourceGraphic" stdDeviation={edgeBlur * 0.5} colorInterpolationFilters="sRGB" />
-            </filter>
-            {/* White rect inset by the blur radius, then blurred → an alpha matte that is
-                opaque in the middle and feathers fully to transparent right at the photo edges. */}
-            <mask id={edgeMaskId} maskUnits="userSpaceOnUse" x={cx - edgeBlur * 2} y={cy - edgeBlur * 2}
-              width={cw + edgeBlur * 4} height={ch + edgeBlur * 4}>
-              <rect x={cx + edgeBlur} y={cy + edgeBlur}
-                width={Math.max(1, cw - edgeBlur * 2)} height={Math.max(1, ch - edgeBlur * 2)}
-                fill="#fff" filter={`url(#${edgeFilterId})`} />
-            </mask>
-          </>)}
+          {edgeBlur > 0 && (() => {
+            // Deterministic edge feather: a white interior with four black→transparent
+            // gradient strips that eat each edge to fully transparent over `edgeBlur` px.
+            // Symmetric on both axes (the old blurred-inset-rect mask under-feathered the
+            // short axis of tall/wide photos, leaving left/right looking hard). The strips
+            // composite multiplicatively, so corners fade cleanly.
+            const fx = Math.min(edgeBlur, cw / 2)   // horizontal feather width (clamped)
+            const fy = Math.min(edgeBlur, ch / 2)   // vertical feather width
+            const gL = `${edgeFilterId}-l`, gR = `${edgeFilterId}-r`
+            const gT = `${edgeFilterId}-t`, gB = `${edgeFilterId}-b`
+            return (<>
+              <linearGradient id={gL} x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stopColor="#000" stopOpacity="1" /><stop offset="1" stopColor="#000" stopOpacity="0" />
+              </linearGradient>
+              <linearGradient id={gR} x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stopColor="#000" stopOpacity="0" /><stop offset="1" stopColor="#000" stopOpacity="1" />
+              </linearGradient>
+              <linearGradient id={gT} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#000" stopOpacity="1" /><stop offset="1" stopColor="#000" stopOpacity="0" />
+              </linearGradient>
+              <linearGradient id={gB} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#000" stopOpacity="0" /><stop offset="1" stopColor="#000" stopOpacity="1" />
+              </linearGradient>
+              <mask id={edgeMaskId} maskUnits="userSpaceOnUse" x={cx} y={cy} width={cw} height={ch}>
+                <rect x={cx} y={cy} width={cw} height={ch} fill="#fff" />
+                <rect x={cx} y={cy} width={fx} height={ch} fill={`url(#${gL})`} />
+                <rect x={cx + cw - fx} y={cy} width={fx} height={ch} fill={`url(#${gR})`} />
+                <rect x={cx} y={cy} width={cw} height={fy} fill={`url(#${gT})`} />
+                <rect x={cx} y={cy + ch - fy} width={cw} height={fy} fill={`url(#${gB})`} />
+              </mask>
+            </>)
+          })()}
         </defs>
       )}
       {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2}
