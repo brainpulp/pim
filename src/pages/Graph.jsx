@@ -1447,14 +1447,29 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [scheduleRender])
 
-  // Jump to a node from search: un-hide it if hidden (undoable), select, then focus.
+  // Jump to a node from search. A node can be absent from the canvas for three reasons:
+  // it's hidden, the view is drilled into another subtree, or a collapsed ancestor folds
+  // it away. Clear all three so the node actually shows, then select and center it.
   const goToNode = useCallback((nodeId) => {
-    const vp = viewNodePropsRef.current[nodeId] || {}
-    if (vp.visible === false) { pushUndo(); setNodeViewProp(nodeId, 'visible', true) }
+    const st = useGraphStore.getState()
+    const view = st.views.find(v => v.id === st.activeViewId)
+    // 1) un-hide if hidden (undoable)
+    if (view?.nodeProps?.[nodeId]?.visible === false) { pushUndo(); setNodeViewProp(nodeId, 'visible', true) }
+    // 2) walk the ancestor chain via edges
+    const parentOf = {}
+    st.edges.forEach(e => { parentOf[e.target] = e.source })
+    const ancestors = []
+    let cur = parentOf[nodeId]; const guard = new Set()
+    while (cur && !guard.has(cur)) { ancestors.push(cur); guard.add(cur); cur = parentOf[cur] }
+    // 3) exit drill if the target isn't inside the drilled subtree
+    if (view?.drillRoot && view.drillRoot !== nodeId && !ancestors.includes(view.drillRoot)) exitDrill()
+    // 4) expand any collapsed ancestor so the node renders on the canvas
+    const collapsed = new Set(view?.collapsedNodeIds || [])
+    ancestors.forEach(a => { if (collapsed.has(a)) toggleCollapseNode(a) })
     setSelected({ id: nodeId, type: 'node' })
     setSearchOpen(false); setSearchQuery(''); setSearchIdx(0)
-    setTimeout(() => focusNode(nodeId), 60)  // let an un-hide re-render settle first
-  }, [focusNode, setNodeViewProp, pushUndo])
+    setTimeout(() => focusNode(nodeId), 140)  // let the un-hide/expand re-render + sim settle
+  }, [focusNode, setNodeViewProp, pushUndo, exitDrill, toggleCollapseNode])
 
   useEffect(() => {
     if (readOnly) return
