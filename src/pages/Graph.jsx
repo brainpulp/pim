@@ -30,6 +30,29 @@ function getAutoSizeDims(label, fontSize, widthOverride) {
   return { halfW, halfH }
 }
 
+// Largest font size (clamped to [7, maxFont]) at which `label` word-wraps to fit a box
+// of boxW × boxH. Respects explicit newlines. Used to shrink text into round/fixed shapes.
+function fitFontToBox(label, maxFont, boxW, boxH) {
+  if (boxW <= 0 || boxH <= 0) return Math.max(7, maxFont)
+  const paras = String(label ?? ' ').split('\n')
+  for (let fs = maxFont; fs >= 7; fs--) {
+    let lines = 0
+    for (const para of paras) {
+      const words = para.split(/\s+/).filter(Boolean)
+      if (!words.length) { lines += 1; continue }
+      let cur = ''
+      for (const w of words) {
+        const test = cur ? cur + ' ' + w : w
+        if (!cur || measureTextWidth(test, fs) <= boxW) cur = test
+        else { lines += 1; cur = w }
+      }
+      lines += 1
+    }
+    if (lines * fs * 1.3 <= boxH) return fs
+  }
+  return 7
+}
+
 // ── Full emoji catalog, grouped by category ─────────────────────────
 const EMOJI_CATALOG = [
   ['Smileys', ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🫢','🫣','🤫','🤔','🫡','🤐','🤨','😐','😑','😶','🫥','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','🫤','😟','🙁','😮','😯','😲','😳','🥺','🥹','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖','😺','😸','😹','😻','😼','😽','🙀','😿','😾']],
@@ -3246,14 +3269,23 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const baseFontSize = Math.max(9, Math.round(12 * scale))
   const isAutoSized = shape === 'roundrect' || shape === 'rect'
   const { halfW, halfH } = shapeDims(shape, r, node.label, baseFontSize, viewProps.labelWidth)
-  // Auto-shrink font for fixed-size shapes only (auto-sized shapes fit the text)
-  const fontSize = isAutoSized ? baseFontSize : (() => {
-    const innerW = halfW * 2, innerH = halfH * 2
-    const charsPerLine = Math.max(1, Math.floor(innerW / (baseFontSize * 0.55)))
-    const linesNeeded = Math.ceil((node.label || ' ').length / charsPerLine)
-    const heightNeeded = linesNeeded * baseFontSize * 1.3
-    return heightNeeded > innerH ? Math.max(7, Math.round(baseFontSize * innerH / heightNeeded)) : baseFontSize
-  })()
+  const isRound = shape === 'ellipse' || shape === 'circle' || shape === 'diamond'
+  // Safe inner half-extents: the largest centered rectangle that fits *inside* the curve,
+  // so text wraps/clips within the shape instead of spilling into the cut-off corners.
+  const INSET = 1.42 // ≈√2 — inscribed rect of an ellipse/circle
+  const labelHalfW = shape === 'ellipse' ? halfW / INSET : shape === 'circle' ? r / INSET : shape === 'diamond' ? halfW / 2 : halfW
+  const labelHalfH = shape === 'ellipse' ? halfH / INSET : shape === 'circle' ? r / INSET : shape === 'diamond' ? halfH / 2 : halfH
+  // Auto-shrink the font so text fits: round shapes fit the inscribed area; auto-sized
+  // rects already grow to fit, so they keep the base size.
+  const fontSize = isAutoSized ? baseFontSize
+    : isRound ? fitFontToBox(node.label, baseFontSize, (labelHalfW - 4) * 2, (labelHalfH - 4) * 2)
+    : (() => {
+        const innerW = halfW * 2, innerH = halfH * 2
+        const charsPerLine = Math.max(1, Math.floor(innerW / (baseFontSize * 0.55)))
+        const linesNeeded = Math.ceil((node.label || ' ').length / charsPerLine)
+        const heightNeeded = linesNeeded * baseFontSize * 1.3
+        return heightNeeded > innerH ? Math.max(7, Math.round(baseFontSize * innerH / heightNeeded)) : baseFontSize
+      })()
   const fill = viewProps.fillColor || DEFAULT_NODE_PROPS.fillColor
   const hasNotes = !!(node.notes && node.notes.length > 0)
   const x = node.x ?? 0, y = node.y ?? 0
@@ -3402,7 +3434,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
               <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
             </g>
           ) : (
-            <NodeLabel label={node.label} halfW={halfW} halfH={halfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
+            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
           )
         )}
         {!editing && shape === '3d' && (
@@ -3664,9 +3696,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         )
       })()}
 
-      {/* Paragraph-width handle — drag to pin the wrap width while editing text (rect/roundrect only).
-          Double-click resets to auto-fit width. */}
-      {editing && isAutoSized && (
+      {/* Paragraph-width handle (Miro-style) — drag the right edge to widen the wrap so the
+          box is the best fit for longer text, without scaling the font (rect/roundrect only).
+          Shown when selected or editing. Double-click resets to auto-fit width. */}
+      {(editing || isSelected) && isAutoSized && (
         <g transform={`translate(${halfW},0)`}
           onMouseDown={e => { e.stopPropagation(); onSetLabelWidth?.(e, node.id) }}
           onDoubleClick={e => { e.stopPropagation(); onResetLabelWidth?.(node.id) }}
