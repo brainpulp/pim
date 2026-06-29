@@ -727,6 +727,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       .on('zoom', e => {
         zoomTransformRef.current = e.transform
         scheduleRender()
+        // Persist the viewport to localStorage *instantly* so a reload restores it even if
+        // the debounced DB save (below) hasn't fired yet. The DB save is the cross-device backup.
+        if (projectId && presentingSlideIdxRef.current === null) {
+          try {
+            localStorage.setItem(`pim:pan:${projectId}:${useGraphStore.getState().activeViewId}`,
+              JSON.stringify({ x: e.transform.x, y: e.transform.y, k: e.transform.k }))
+          } catch (_) { /* quota / private mode — ignore */ }
+        }
         if (panSaveTimerRef.current) clearTimeout(panSaveTimerRef.current)
         panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
       })
@@ -795,34 +803,41 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
   }, [scheduleRender, loading])
 
-  // Restore pan/zoom when switching views
-  useEffect(() => {
-    const pan = views.find(v => v.id === activeViewId)?.pan
-    if (!pan || !svgRef.current || !zoomBehaviorRef.current) return
+  // Read a saved viewport: localStorage first (instant, survives quick reloads), then the
+  // DB-persisted pan on the view (cross-device backup).
+  const readSavedPan = useCallback((viewId) => {
+    if (projectId) {
+      try { const s = localStorage.getItem(`pim:pan:${projectId}:${viewId}`); if (s) return JSON.parse(s) } catch (_) { /* ignore */ }
+    }
+    return views.find(v => v.id === viewId)?.pan || null
+  }, [projectId, views])
+
+  const applyPan = useCallback((pan) => {
+    if (!pan || !svgRef.current || !zoomBehaviorRef.current) return false
     const t = d3.zoomIdentity.translate(pan.x, pan.y).scale(pan.k)
     d3.select(svgRef.current).call(zoomBehaviorRef.current.transform, t)
     zoomTransformRef.current = t
     scheduleRender()
+    return true
+  }, [scheduleRender])
+
+  // Restore pan/zoom when switching views
+  useEffect(() => {
+    applyPan(readSavedPan(activeViewId))
   }, [activeViewId]) // eslint-disable-line
 
   // Restore pan/zoom once on initial load. The view-switch effect above keys on
   // activeViewId, which doesn't change when the saved view is the default id, so the
-  // saved pan would never get applied after the async project load. This runs once the
+  // viewport would never get applied after the async project load. This runs once the
   // project has loaded and the zoom behavior is ready. (drillRoot + active view already
   // restore via the saved view data in loadProjectData.)
   const didRestoreViewRef = useRef(false)
   useEffect(() => {
     if (loading || didRestoreViewRef.current) return
-    if (!svgRef.current || !zoomBehaviorRef.current) return
-    const pan = views.find(v => v.id === activeViewId)?.pan
-    if (pan) {
-      const t = d3.zoomIdentity.translate(pan.x, pan.y).scale(pan.k)
-      d3.select(svgRef.current).call(zoomBehaviorRef.current.transform, t)
-      zoomTransformRef.current = t
-      scheduleRender()
+    if (applyPan(readSavedPan(activeViewId)) || (svgRef.current && zoomBehaviorRef.current)) {
+      didRestoreViewRef.current = true
     }
-    didRestoreViewRef.current = true
-  }, [loading, views, activeViewId, scheduleRender])
+  }, [loading, views, activeViewId, applyPan, readSavedPan])
 
   // Keyboard shortcuts
   useEffect(() => {
