@@ -359,6 +359,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
   const [confirmDeleteImages, setConfirmDeleteImages] = useState(null) // string[] | null
+  const [confirmDeleteNodes, setConfirmDeleteNodes] = useState(null)   // string[] | null (multi-node)
   const [searchOpen, setSearchOpen] = useState(false)   // Cmd/Ctrl+K node spotlight
   const [searchQuery, setSearchQuery] = useState('')
   const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
@@ -823,7 +824,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (fullscreen3dId) { setFullscreen3dId(null); return }
         if (selectedNodeIds.size > 0) { setSelectedNodeIds(new Set()); return }
         if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
-        setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); return
+        setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); setConfirmDeleteNodes(null); return
       }
 
       // Presentation mode arrow navigation
@@ -861,6 +862,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedImageIds.size > 0) {
         e.preventDefault()
         setConfirmDeleteImages([...selectedImageIds])
+        return
+      }
+
+      // Delete / Backspace — multiple selected nodes (rubber-band)
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeIds.size > 0) {
+        e.preventDefault()
+        setConfirmDeleteNodes([...selectedNodeIds])
         return
       }
 
@@ -2481,6 +2489,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                 <button style={confirmCancelBtn} onClick={() => setConfirmDelete(null)}>Cancel</button>
                 <button style={confirmOkBtn} onClick={() => { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete multiple selected nodes confirm */}
+        {confirmDeleteNodes && (
+          <div style={confirmStyle} onClick={() => setConfirmDeleteNodes(null)}>
+            <div style={confirmBox} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
+                Delete <strong>{confirmDeleteNodes.length}</strong> node{confirmDeleteNodes.length === 1 ? '' : 's'} from <strong>all views</strong>?
+              </div>
+              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                <button style={confirmCancelBtn} onClick={() => setConfirmDeleteNodes(null)}>Cancel</button>
+                <button style={confirmOkBtn} onClick={() => {
+                  pushUndo()
+                  confirmDeleteNodes.forEach(id => deleteNode(id))
+                  setSelectedNodeIds(new Set()); setSelected(null); setConfirmDeleteNodes(null)
+                }}>Delete</button>
               </div>
             </div>
           </div>
