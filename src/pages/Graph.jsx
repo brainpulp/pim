@@ -805,6 +805,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [activeViewId]) // eslint-disable-line
 
+  // Restore pan/zoom once on initial load. The view-switch effect above keys on
+  // activeViewId, which doesn't change when the saved view is the default id, so the
+  // saved pan would never get applied after the async project load. This runs once the
+  // project has loaded and the zoom behavior is ready. (drillRoot + active view already
+  // restore via the saved view data in loadProjectData.)
+  const didRestoreViewRef = useRef(false)
+  useEffect(() => {
+    if (loading || didRestoreViewRef.current) return
+    if (!svgRef.current || !zoomBehaviorRef.current) return
+    const pan = views.find(v => v.id === activeViewId)?.pan
+    if (pan) {
+      const t = d3.zoomIdentity.translate(pan.x, pan.y).scale(pan.k)
+      d3.select(svgRef.current).call(zoomBehaviorRef.current.transform, t)
+      zoomTransformRef.current = t
+      scheduleRender()
+    }
+    didRestoreViewRef.current = true
+  }, [loading, views, activeViewId, scheduleRender])
+
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = e => {
