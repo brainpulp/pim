@@ -336,6 +336,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
   const [confirmDeleteImages, setConfirmDeleteImages] = useState(null) // string[] | null
+  const [searchOpen, setSearchOpen] = useState(false)   // Cmd/Ctrl+K node spotlight
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
@@ -814,10 +817,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         e.preventDefault()
         const isRoot = !storeEdges.some(se => se.target === selected.id)
         if (isRoot) {
+          pushUndo()
           const newId = addNode('New node', selected.id)
           setSelected({ id: newId, type: 'node' })
           setPendingEditId(newId)
         } else {
+          pushUndo()
           handleCreateSister(selected.id)
         }
         return
@@ -870,6 +875,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         e.preventDefault()
         if (selected?.type === 'node') {
           const { parentId } = getSiblings(selected.id)
+          pushUndo()
           const newId = addNode('New node', parentId)
           setSelected({ id: newId, type: 'node' })
           setPendingEditId(newId)
@@ -881,6 +887,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
         if (selected?.type === 'node') {
+          pushUndo()
           const newId = addNode('New node', selected.id)
           setSelected({ id: newId, type: 'node' })
           setPendingEditId(newId)
@@ -1041,6 +1048,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }
           }
           if (dropTarget) {
+            pushUndo()
             reparentNode(nodeId, dropTarget)
             // Release so D3 settles near new parent
             simNode.fx = null; simNode.fy = null
@@ -1078,6 +1086,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               newContainerId = fn.id; break
             }
           }
+          // Only record undo when the container actually changes (not on every plain move)
+          const curContainer = viewNodePropsRef.current[nodeId]?.containedIn ?? null
+          if (newContainerId !== curContainer) pushUndo()
           setContainedIn(nodeId, newContainerId)
         }
       }
@@ -1422,6 +1433,39 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     zoomTransformRef.current = t
     scheduleRender()
   }, [scheduleRender])
+
+  // â"€â"€ Node search / spotlight (Cmd/Ctrl+K or "/") â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // Pan/zoom the canvas to center a node by id, keeping the current zoom (min 1.2x).
+  const focusNode = useCallback((nodeId) => {
+    const n = simNodesRef.current.find(x => x.id === nodeId)
+    if (!n || !svgRef.current || !zoomBehaviorRef.current) return
+    const svgW = svgRef.current.clientWidth, svgH = svgRef.current.clientHeight
+    const k = Math.min(Math.max(zoomTransformRef.current.k, 1.2), 3)
+    const t = d3.zoomIdentity.translate(svgW / 2 - k * (n.x || 0), svgH / 2 - k * (n.y || 0)).scale(k)
+    d3.select(svgRef.current).transition().duration(500).call(zoomBehaviorRef.current.transform, t)
+    zoomTransformRef.current = t
+    scheduleRender()
+  }, [scheduleRender])
+
+  // Jump to a node from search: un-hide it if hidden (undoable), select, then focus.
+  const goToNode = useCallback((nodeId) => {
+    const vp = viewNodePropsRef.current[nodeId] || {}
+    if (vp.visible === false) { pushUndo(); setNodeViewProp(nodeId, 'visible', true) }
+    setSelected({ id: nodeId, type: 'node' })
+    setSearchOpen(false); setSearchQuery(''); setSearchIdx(0)
+    setTimeout(() => focusNode(nodeId), 60)  // let an un-hide re-render settle first
+  }, [focusNode, setNodeViewProp, pushUndo])
+
+  useEffect(() => {
+    if (readOnly) return
+    const onKey = e => {
+      const typing = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setSearchOpen(o => !o) }
+      else if (e.key === '/' && !typing && !searchOpen) { e.preventDefault(); setSearchOpen(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [readOnly, searchOpen])
 
   // â"€â"€ Paste images â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
@@ -2403,6 +2447,52 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             </div>
           </div>
         )}
+
+        {/* Node search / spotlight (Cmd/Ctrl+K or "/") */}
+        {searchOpen && (() => {
+          const q = searchQuery.trim().toLowerCase()
+          const results = storeNodes
+            .filter(n => !q || (n.label || '').toLowerCase().includes(q))
+            .slice(0, 50)
+          const idx = Math.min(searchIdx, Math.max(0, results.length - 1))
+          return (
+            <div style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.4)', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '12vh' }}
+              onClick={() => { setSearchOpen(false); setSearchQuery('') }}>
+              <div style={{ width: 'min(520px, 92vw)', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.5)', overflow: 'hidden' }}
+                onClick={e => e.stopPropagation()}>
+                <input autoFocus value={searchQuery}
+                  onChange={e => { setSearchQuery(e.target.value); setSearchIdx(0) }}
+                  onKeyDown={e => {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setSearchIdx(i => Math.min(i + 1, results.length - 1)) }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); setSearchIdx(i => Math.max(i - 1, 0)) }
+                    else if (e.key === 'Enter') { e.preventDefault(); if (results[idx]) goToNode(results[idx].id) }
+                    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSearchOpen(false); setSearchQuery('') }
+                  }}
+                  placeholder="Search nodes…"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '14px 16px', fontSize: 16, background: 'transparent', border: 'none', borderBottom: '1px solid #2d3a6a', color: '#e6ebff', outline: 'none' }} />
+                <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+                  {results.length === 0 && <div style={{ padding: '14px 16px', color: '#7080a0' }}>No matching nodes</div>}
+                  {results.map((n, i) => {
+                    const hidden = viewNodeProps[n.id]?.visible === false
+                    return (
+                      <div key={n.id}
+                        onMouseEnter={() => setSearchIdx(i)}
+                        onClick={() => goToNode(n.id)}
+                        style={{ padding: '10px 16px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 10, background: i === idx ? '#1e2547' : 'transparent', color: '#c5d0ff' }}>
+                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.label || '(untitled)'}</span>
+                        {hidden && <span style={{ color: '#8090b8', fontSize: 12, flexShrink: 0 }}>hidden</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div style={{ padding: '8px 16px', borderTop: '1px solid #2d3a6a', color: '#7080a0', fontSize: 12, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>↑↓ navigate · ↵ go · esc close</span>
+                  <span>{results.length} result{results.length === 1 ? '' : 's'}</span>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Delete image confirm */}
         {confirmDeleteImage && (
