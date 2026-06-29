@@ -3676,17 +3676,21 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         </g>
       )}
 
-      {/* Double-click to edit â€" for 3D nodes also cover caption area below */}
-      <ellipse rx={bodyHalfW} ry={bodyHalfH} fill="transparent"
-        onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
-        style={{ cursor: 'move' }}
-      />
-      {shape === '3d' && (
-        <rect x={-halfW} y={halfH + 4} width={halfW * 2} height={22} fill="transparent"
+      {/* Double-click to edit â€" for 3D nodes also cover caption area below.
+          Hidden while editing so the overlay doesn't sit on top of the textarea and
+          steal mouse clicks (which broke click-to-place-cursor and double-click-to-select). */}
+      {!editing && (<>
+        <ellipse rx={bodyHalfW} ry={bodyHalfH} fill="transparent"
           onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
-          style={{ cursor: 'text' }}
+          style={{ cursor: 'move' }}
         />
-      )}
+        {shape === '3d' && (
+          <rect x={-halfW} y={halfH + 4} width={halfW * 2} height={22} fill="transparent"
+            onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
+            style={{ cursor: 'text' }}
+          />
+        )}
+      </>)}
 
       {/* Connector handle â€" hover only. Large transparent circle as hit target to bridge gap from node edge. */}
       {isHovered && (
