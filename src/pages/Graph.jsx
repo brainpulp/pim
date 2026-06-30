@@ -420,19 +420,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState('saved')
   const saveTimer = useRef(null)
+  const loadOkRef = useRef(false)   // true only after a successful project load — gates autosave
 
   useEffect(() => {
     setLoading(true)
+    loadOkRef.current = false   // block autosave until THIS project has loaded successfully
     // Shared read-only view: data is fetched up-front (via a public RPC) and passed in,
     // so we never hit loadProject (which is gated by RLS to the owner/members).
     if (sharedData) {
       loadProjectData({ nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views, activeViewId: sharedData.active_view_id })
+      loadOkRef.current = true
       setLoading(false)
       return
     }
     loadProject(projectId)
-      .then(d => loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id }))
-      .catch(e => console.error('Load failed:', e))
+      .then(d => { loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id }); loadOkRef.current = true })
+      .catch(e => { console.error('Load failed:', e); loadOkRef.current = false })   // do NOT autosave — would blank the project
       .finally(() => setLoading(false))
   }, [projectId]) // eslint-disable-line
 
@@ -528,7 +531,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   viewNodePropsRef.current = viewNodeProps
 
   useEffect(() => {
-    if (loading || readOnly) return   // shared viewers never write back
+    if (loading || readOnly || !loadOkRef.current) return   // never autosave unless the project loaded OK (a failed load must not blank it)
     setSaveStatus('saving')
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
