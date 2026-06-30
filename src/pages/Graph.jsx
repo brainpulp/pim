@@ -1207,6 +1207,40 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, setNodeViewProp])
 
+  // "Scale shape only" — resize the box while keeping the absolute text size; text reflows.
+  // Round/fixed shapes: change scale and compensate fontScale so 12*scale*fontScale is constant.
+  // Auto-sized rects: change the wrap width (line length) instead, since their box derives from text.
+  const handleBoxScaleMouseDown = useCallback((e, nodeId, isAutoSized) => {
+    e.stopPropagation(); e.preventDefault()
+    const simNode = simNodesRef.current.find(n => n.id === nodeId)
+    if (!simNode) return
+    if (isAutoSized) {
+      const onMove = me => {
+        const [sx] = clientToSim(me.clientX, me.clientY)
+        setNodeViewProp(nodeId, 'labelWidth', Math.max(36, Math.min(500, Math.abs(sx - (simNode.x || 0)))))
+      }
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+      return
+    }
+    const { views, activeViewId } = useGraphStore.getState()
+    const vp = { ...DEFAULT_NODE_PROPS, ...(views.find(v => v.id === activeViewId)?.nodeProps[nodeId] || {}) }
+    const curScale = vp.scale ?? 1, curFontScale = vp.fontScale ?? 1
+    const product = curScale * curFontScale            // hold constant → absolute font fixed
+    const [sx0, sy0] = clientToSim(e.clientX, e.clientY)
+    const startDist = Math.hypot(sx0 - simNode.x, sy0 - simNode.y)
+    const onMove = me => {
+      const [sx, sy] = clientToSim(me.clientX, me.clientY)
+      const d = Math.hypot(sx - simNode.x, sy - simNode.y)
+      if (startDist < 1) return
+      const newScale = Math.max(0.3, Math.min(6, Math.round(curScale * d / startDist * 10) / 10))
+      setNodeViewProp(nodeId, 'scale', newScale)
+      setNodeViewProp(nodeId, 'fontScale', product / newScale)
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+  }, [clientToSim, setNodeViewProp])
+
   const handleLabelWidthMouseDown = useCallback((e, nodeId) => {
     e.stopPropagation(); e.preventDefault()
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
@@ -2194,6 +2228,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onMouseDown={handleNodeMouseDown}
                 onConnectorMouseDown={handleConnectorMouseDown}
                 onScaleMouseDown={handleScaleMouseDown}
+                onBoxScaleMouseDown={handleBoxScaleMouseDown}
                 onSetLabelWidth={handleLabelWidthMouseDown}
                 onResetLabelWidth={id => setNodeViewProp(id, 'labelWidth', null)}
                 onDelete={id => setConfirmDelete(id)}
@@ -3279,7 +3314,7 @@ function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isAct
 
 // â"€â"€â"€ NodeShape â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [croppingImgId, setCroppingImgId] = useState(null)
@@ -3327,7 +3362,9 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const scale = viewProps.scale || 1
   const r = NODE_R * scale
   const shape = viewProps.shape || 'circle'
-  const baseFontSize = Math.max(9, Math.round(12 * scale))
+  // fontScale decouples text size from box size: "scale shape only" grows the box while
+  // holding 12*scale*fontScale constant, so the absolute font stays put and text reflows.
+  const baseFontSize = Math.max(9, Math.round(12 * scale * (viewProps.fontScale ?? 1)))
   const isAutoSized = shape === 'roundrect' || shape === 'rect'
   const { halfW, halfH } = shapeDims(shape, r, node.label, baseFontSize, viewProps.labelWidth)
   const isRound = shape === 'ellipse' || shape === 'circle' || shape === 'diamond'
@@ -3795,7 +3832,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         </g>
       )}
 
-      {/* Scale handle â€" hover only. Large transparent hit area for easier grabbing. */}
+      {/* Scale-BOTH handle (bottom-right) — diagonal arrows; resizes box + text together. */}
       {isHovered && (
         <g transform={`translate(${bodyHalfW},${bodyHalfH})`}
           onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
@@ -3805,6 +3842,18 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           <circle r={6} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
           <line x1={-3} y1={-3} x2={3} y2={3} stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
           <line x1={0} y1={-3} x2={3} y2={0} stroke="#5b6af0" strokeWidth={1} style={{ pointerEvents: 'none' }} />
+        </g>
+      )}
+
+      {/* Scale-SHAPE-ONLY handle (bottom-left) — square icon; resizes the box but keeps the
+          text size, so the label reflows to a new line length (font only shrinks if forced). */}
+      {isHovered && shape !== '3d' && shape !== 'frame' && (
+        <g transform={`translate(${-bodyHalfW},${bodyHalfH})`}
+          onMouseDown={e => { e.stopPropagation(); onBoxScaleMouseDown?.(e, node.id, isAutoSized) }}
+          onMouseEnter={onMouseEnter}
+          style={{ cursor: 'nesw-resize' }}>
+          <circle r={14} fill="transparent" />
+          <rect x={-5} y={-5} width={10} height={10} rx={2} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
         </g>
       )}
 
