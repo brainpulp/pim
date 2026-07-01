@@ -3392,6 +3392,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   // fontScale decouples text size from box size: "scale shape only" grows the box while
   // holding 12*scale*fontScale constant, so the absolute font stays put and text reflows.
   const baseFontSize = Math.max(9, Math.round(12 * scale * (viewProps.fontScale ?? 1)))
+  // Handles are drawn in canvas space, so their on-screen size = size × zoom. Counter-scale
+  // by 1/zoom to keep them ~constant on screen, clamped so they don't balloon when zoomed in
+  // or dwarf a node when zoomed way out.
+  const hz = Math.min(2.5, Math.max(0.4, 1 / (zoomK || 1)))
   const isAutoSized = shape === 'roundrect' || shape === 'rect'
   const { halfW, halfH } = shapeDims(shape, r, node.label, baseFontSize, viewProps.labelWidth)
   const isRound = shape === 'ellipse' || shape === 'circle' || shape === 'diamond'
@@ -3945,10 +3949,6 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId }) {
   const shape = viewProps.shape || 'circle'
-  // Handles are drawn in canvas space, so their on-screen size = size × zoom. Counter-scale
-  // by 1/zoom to keep them ~constant on screen, clamped so they don't balloon when zoomed in
-  // or dwarf a node when zoomed way out.
-  const hz = Math.min(2.5, Math.max(0.4, 1 / (zoomK || 1)))
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [notesDraft, setNotesDraft] = useState(notes)
   const [emojiInput, setEmojiInput] = useState('')
