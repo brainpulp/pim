@@ -3887,6 +3887,21 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         </g>
       )}
 
+      {/* Delete handle (top-left) — hover only */}
+      {isHovered && (
+        <g transform={`translate(${-bodyHalfW},${-bodyHalfH})`}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); onDelete?.(node.id) }}
+          onMouseEnter={onMouseEnter}
+          style={{ cursor: 'pointer' }}>
+          <title>Delete node</title>
+          <circle r={14} fill="transparent" />
+          <circle r={7} fill="#0c0c1a" stroke="#f87171" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
+          <line x1={-3} y1={-3} x2={3} y2={3} stroke="#f87171" strokeWidth={1.6} style={{ pointerEvents: 'none' }} />
+          <line x1={-3} y1={3} x2={3} y2={-3} stroke="#f87171" strokeWidth={1.6} style={{ pointerEvents: 'none' }} />
+        </g>
+      )}
+
     </g>
   )
 }
