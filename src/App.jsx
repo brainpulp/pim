@@ -152,7 +152,7 @@ export default function App() {
           />
           </AppErrorBoundary>
         )}
-        {view === 'table' && <Table />}
+        {view === 'table' && <Table projectId={project.id} />}
       </div>
     </div>
   )

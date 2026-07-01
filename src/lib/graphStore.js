@@ -56,6 +56,10 @@ const useGraphStore = create((set, get) => ({
   nodes: [],
   edges: [],
 
+  // â”€â”€ Notion-style DB schema (per project). propertyDefs describes the columns;
+  // each node stores values in node.props[propId]. Types: text|number|date|checkbox|select|multiSelect|url.
+  propertyDefs: [],
+
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
   activeViewId: 'view-default',
@@ -74,9 +78,10 @@ const useGraphStore = create((set, get) => ({
 
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  loadProjectData: ({ nodes, edges, views, activeViewId }) => set({
+  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs }) => set({
     nodes: nodes || [],
     edges: edges || [],
+    propertyDefs: propertyDefs || [],
     views: views?.length ? views.map(v => {
       const merged = { bgColor: '#0c0c1a', images: [], customEmojis: [], ...v }
       if (!merged.slides) {
@@ -142,6 +147,49 @@ const useGraphStore = create((set, get) => ({
         slideshows: (v.slideshows || []).map(ss => ({ ...ss, slides: ss.slides.filter(sid => sid !== id) })),
       }
     }),
+  })),
+
+  // â”€â”€ Property (Notion-DB column) ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  addPropertyDef: (type = 'text', name) => {
+    const id = uid()
+    const labels = { text:'Text', number:'Number', date:'Date', checkbox:'Checkbox', select:'Select', multiSelect:'Tags', url:'URL' }
+    const def = { id, name: name || labels[type] || 'Property', type }
+    if (type === 'select' || type === 'multiSelect') def.options = []
+    set(s => ({ propertyDefs: [...s.propertyDefs, def] }))
+    return id
+  },
+
+  updatePropertyDef: (id, patch) => set(s => ({
+    propertyDefs: s.propertyDefs.map(p => p.id === id ? { ...p, ...patch } : p),
+  })),
+
+  deletePropertyDef: (id) => set(s => ({
+    propertyDefs: s.propertyDefs.filter(p => p.id !== id),
+    // strip the value from every node so we don't leave orphans
+    nodes: s.nodes.map(n => {
+      if (!n.props || !(id in n.props)) return n
+      const { [id]: _drop, ...rest } = n.props
+      return { ...n, props: rest }
+    }),
+  })),
+
+  reorderPropertyDefs: (newDefs) => set({ propertyDefs: newDefs }),
+
+  // Add an option to a select/multiSelect property; returns the option id.
+  addSelectOption: (propId, name, color) => {
+    const optId = uid()
+    set(s => ({
+      propertyDefs: s.propertyDefs.map(p => p.id !== propId ? p : {
+        ...p, options: [...(p.options || []), { id: optId, name, color: color || '#6366f1' }],
+      }),
+    }))
+    return optId
+  },
+
+  // Set a node's value for a property. value shape depends on type
+  // (string | number | boolean | ISO date string | optionId | optionId[]).
+  setNodeProp: (nodeId, propId, value) => set(s => ({
+    nodes: s.nodes.map(n => n.id === nodeId ? { ...n, props: { ...(n.props || {}), [propId]: value } } : n),
   })),
 
   // â”€â”€ Edge ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

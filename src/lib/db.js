@@ -41,16 +41,16 @@ export async function loadProject(id) {
   return data
 }
 
-export async function saveProject(id, { nodes, edges, views, activeViewId }) {
-  const { error } = await tb()
-    .update({
-      nodes: sanitizeNodes(nodes),
-      edges,
-      views,
-      active_view_id: activeViewId,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', id)
+export async function saveProject(id, { nodes, edges, views, activeViewId, propertyDefs }) {
+  const patch = {
+    nodes: sanitizeNodes(nodes),
+    edges,
+    views,
+    active_view_id: activeViewId,
+    updated_at: new Date().toISOString(),
+  }
+  if (propertyDefs !== undefined) patch.property_defs = propertyDefs
+  const { error } = await tb().update(patch).eq('id', id)
   if (error) throw error
 }
 

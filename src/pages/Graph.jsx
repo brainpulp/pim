@@ -428,19 +428,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Shared read-only view: data is fetched up-front (via a public RPC) and passed in,
     // so we never hit loadProject (which is gated by RLS to the owner/members).
     if (sharedData) {
-      loadProjectData({ nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views, activeViewId: sharedData.active_view_id })
+      loadProjectData({ nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views, activeViewId: sharedData.active_view_id, propertyDefs: sharedData.property_defs })
       loadOkRef.current = true
       setLoading(false)
       return
     }
     loadProject(projectId)
-      .then(d => { loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id }); loadOkRef.current = true })
+      .then(d => { loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs }); loadOkRef.current = true })
       .catch(e => { console.error('Load failed:', e); loadOkRef.current = false })   // do NOT autosave — would blank the project
       .finally(() => setLoading(false))
   }, [projectId]) // eslint-disable-line
 
   const storeNodes      = useGraphStore(s => s.nodes)
   const storeEdges      = useGraphStore(s => s.edges)
+  const storePropertyDefs = useGraphStore(s => s.propertyDefs)
   const activeViewId    = useGraphStore(s => s.activeViewId)
   const views           = useGraphStore(s => s.views)
   const addNode         = useGraphStore(s => s.addNode)
@@ -536,12 +537,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       try {
-        await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId })
+        await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId, propertyDefs: storePropertyDefs })
         setSaveStatus('saved')
       } catch (e) { console.error('Save:', e); setSaveStatus('error') }
     }, 1500)
     return () => clearTimeout(saveTimer.current)
-  }, [storeNodes, storeEdges, views, activeViewId, projectId, loading]) // eslint-disable-line
+  }, [storeNodes, storeEdges, storePropertyDefs, views, activeViewId, projectId, loading]) // eslint-disable-line
 
   const getVP = useCallback((nodeId) => ({
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
