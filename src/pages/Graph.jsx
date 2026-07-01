@@ -2814,6 +2814,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
   const containerRef = useRef()
+  const [slideMenu, setSlideMenu] = useState(null)   // { frameId, label, x, y } — right-click options
 
   // Whole-card drag with click threshold â€" click zooms, drag reorders
   const handleCardMouseDown = (e, idx) => {
@@ -2933,6 +2934,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
           showLineBefore && <div key={`line-${i}`} style={{ height:2, background:'#5b6af0', borderRadius:1, margin:'2px 0 6px' }} />,
           <div key={fn.id} data-slide-idx={i}
             onMouseDown={e => handleCardMouseDown(e, i)}
+            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSlideMenu({ frameId: fn.id, label: fn.label || 'Frame', x: e.clientX, y: e.clientY }) }}
             style={{ marginBottom: 8, position: 'relative', cursor: 'grab', userSelect: 'none',
               opacity: dragIdx === i ? 0.4 : 1,
               borderRadius: 6 }}>
@@ -2983,20 +2985,6 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                   onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
                   style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:13, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
               </div>
-              {/* Per-slide background color */}
-              <div onMouseDown={e => e.stopPropagation()} style={{ display:'flex', alignItems:'center', gap:3, padding:'3px 8px 5px', flexWrap:'wrap' }}>
-                <span style={{ fontSize:'0.58rem', color:'#7080a0', letterSpacing:'0.05em', marginRight:2 }}>BG</span>
-                <div title="Default" onClick={e => { e.stopPropagation(); setSlideBgColor(activeSlideshowId, fn.id, null) }}
-                  style={{ width:13, height:13, borderRadius:2, cursor:'pointer',
-                    backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
-                    backgroundSize: '5px 5px', backgroundPosition: '0 0, 2.5px 2.5px',
-                    border: !activeSlideBgColors[fn.id] ? '1.5px solid #fff' : '1px solid #334' }} />
-                {BG_COLORS.map(c => (
-                  <div key={c} onClick={e => { e.stopPropagation(); setSlideBgColor(activeSlideshowId, fn.id, c) }}
-                    style={{ width:13, height:13, borderRadius:2, background:c, cursor:'pointer',
-                      border: activeSlideBgColors[fn.id]===c ? '1.5px solid #fff' : '1px solid rgba(255,255,255,0.15)' }} />
-                ))}
-              </div>
             </div>
           </div>
         ]
@@ -3018,6 +3006,40 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
             </div>
           ))}
         </div>
+      )}
+
+      {/* Right-click slide options (background color, present, remove) */}
+      {slideMenu && (
+        <>
+          <div onMouseDown={() => setSlideMenu(null)} onContextMenu={e => { e.preventDefault(); setSlideMenu(null) }}
+            style={{ position:'fixed', inset:0, zIndex:9998 }} />
+          <div onMouseDown={e => e.stopPropagation()}
+            style={{ position:'fixed', left: Math.min(slideMenu.x, window.innerWidth - 224), top: Math.min(slideMenu.y, window.innerHeight - 190),
+              zIndex:9999, background:'#12122a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', minWidth:206,
+              boxShadow:'0 12px 34px rgba(0,0,0,0.55)' }}>
+            <div style={{ padding:'2px 12px 8px', fontSize:'0.72rem', color:'#8090b8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{slideMenu.label}</div>
+            <div style={{ padding:'2px 12px 8px', display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
+              <span style={{ fontSize:'0.62rem', color:'#7080a0', width:'100%', marginBottom:3 }}>Background</span>
+              <div title="Default" onClick={() => setSlideBgColor(activeSlideshowId, slideMenu.frameId, null)}
+                style={{ width:16, height:16, borderRadius:3, cursor:'pointer',
+                  backgroundImage:'linear-gradient(45deg,#444 25%,transparent 25%,transparent 75%,#444 75%),linear-gradient(45deg,#444 25%,transparent 25%,transparent 75%,#444 75%)',
+                  backgroundSize:'6px 6px', backgroundPosition:'0 0,3px 3px',
+                  border: !activeSlideBgColors[slideMenu.frameId] ? '2px solid #fff' : '1px solid #3a4a6a' }} />
+              {BG_COLORS.map(c => (
+                <div key={c} onClick={() => setSlideBgColor(activeSlideshowId, slideMenu.frameId, c)}
+                  style={{ width:16, height:16, borderRadius:3, background:c, cursor:'pointer',
+                    border: activeSlideBgColors[slideMenu.frameId]===c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)' }} />
+              ))}
+            </div>
+            <div style={{ borderTop:'1px solid #1e2a3a', margin:'4px 0' }} />
+            <div onClick={() => { const idx = slideSimNodes.findIndex(s => s.id === slideMenu.frameId); if (idx >= 0) { setPresentingSlideIdx(idx); zoomToFrame(slideSimNodes[idx]) } setSlideMenu(null) }}
+              onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Present from here</div>
+            <div onClick={() => { removeSlide(slideMenu.frameId); setSlideMenu(null) }}
+              onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              style={{ padding:'8px 12px', cursor:'pointer', color:'#f87171', fontSize:'0.8rem' }}>Remove from slideshow</div>
+          </div>
+        </>
       )}
     </div>
   )
@@ -3765,6 +3787,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); onToggleCollapse?.() }}
           style={{ cursor: 'pointer' }}>
+          <title>{isCollapsed ? 'Expand children' : 'Collapse children'}</title>
           <circle r={10} fill="#16162a" stroke={isCollapsed ? '#f6ad55' : 'rgba(255,255,255,0.18)'} strokeWidth={1.2} />
           <text textAnchor="middle" dominantBaseline="central" fontSize={11}
             fill={isCollapsed ? '#f6ad55' : '#9aa8d8'}
@@ -3805,6 +3828,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           onMouseDown={e => { e.stopPropagation(); onSetLabelWidth?.(e, node.id) }}
           onDoubleClick={e => { e.stopPropagation(); onResetLabelWidth?.(node.id) }}
           style={{ cursor: 'ew-resize' }}>
+          <title>Drag to set text width · double-click to auto-fit</title>
           <rect x={-4} y={-14} width={8} height={28} rx={3} fill="#5b6af0" stroke="#fff" strokeWidth={1} />
           <line x1={0} y1={-6} x2={0} y2={6} stroke="#fff" strokeWidth={1} opacity={0.6} />
         </g>
@@ -3830,6 +3854,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       {isHovered && (
         <g onMouseDown={e => { e.stopPropagation(); onConnectorMouseDown(e, node.id) }}
           onMouseEnter={onMouseEnter} style={{ cursor: 'crosshair' }}>
+          <title>Drag to another node to connect · drag to empty space for a new child</title>
           <circle cx={bodyHalfW + 7} cy={0} r={14} fill="transparent" />
           <circle cx={bodyHalfW + 7} cy={0} r={5} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
         </g>
@@ -3841,6 +3866,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
           onMouseEnter={onMouseEnter}
           style={{ cursor: 'nwse-resize' }}>
+          <title>Resize node + text together</title>
           <circle r={14} fill="transparent" />
           <circle r={6} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
           <line x1={-3} y1={-3} x2={3} y2={3} stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
@@ -3855,6 +3881,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           onMouseDown={e => { e.stopPropagation(); onBoxScaleMouseDown?.(e, node.id, isAutoSized) }}
           onMouseEnter={onMouseEnter}
           style={{ cursor: 'nesw-resize' }}>
+          <title>Resize shape only — text keeps its size and reflows</title>
           <circle r={14} fill="transparent" />
           <rect x={-5} y={-5} width={10} height={10} rx={2} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
         </g>
