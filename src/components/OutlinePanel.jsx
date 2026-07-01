@@ -153,7 +153,6 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
     <div ref={containerRef} style={styles.panel}>
       <div style={styles.header}>
         <span style={styles.headerLabel}>OUTLINE</span>
-        <button style={styles.addRootBtn} onClick={() => addNode('New node')}>+ Root</button>
       </div>
 
       {/* Make-root drop zone */}
@@ -172,7 +171,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
 
       <div style={styles.tree}>
         {regularTree.length === 0 && frameTree.length === 0 && (
-          <div style={styles.empty}>No nodes yet.<br />Click + Root to start.</div>
+          <div style={styles.empty}>No nodes yet.<br />Use the <strong style={{ color: '#a0b4f0' }}>+</strong> button (bottom of the toolbar) → Root node.</div>
         )}
         {regularTree.map((root, i) => (
           <OutlineItem

@@ -89,36 +89,38 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
       <nav style={navStyle}>
         <button style={backBtnStyle} onClick={closeProject} title="All projects">← Projects</button>
-        {renamingProject ? (
-          <input
-            ref={renameInputRef}
-            value={projectDraft}
-            onChange={e => setProjectDraft(e.target.value)}
-            onBlur={async () => {
-              const name = projectDraft.trim() || project.name
-              if (name !== project.name) {
-                await renameProject(project.id, name)
-                const updated = { ...project, name }
-                localStorage.setItem('pim_last_project', JSON.stringify(updated))
-                setProject(updated)
-              }
-              setRenamingProject(false)
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-              if (e.key === 'Escape') { setRenamingProject(false) }
-              e.stopPropagation()
-            }}
-            style={projectRenameInputStyle}
-            autoFocus
-          />
-        ) : (
-          <span
-            style={projectNameStyle}
-            title="Rename project"
-            onClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
-          >{project.name}<span style={{ marginLeft: 6, opacity: 0.6, fontSize: '0.8em' }}>✎</span></span>
-        )}
+        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', pointerEvents: 'none', maxWidth: '40%' }}>
+          {renamingProject ? (
+            <input
+              ref={renameInputRef}
+              value={projectDraft}
+              onChange={e => setProjectDraft(e.target.value)}
+              onBlur={async () => {
+                const name = projectDraft.trim() || project.name
+                if (name !== project.name) {
+                  await renameProject(project.id, name)
+                  const updated = { ...project, name }
+                  localStorage.setItem('pim_last_project', JSON.stringify(updated))
+                  setProject(updated)
+                }
+                setRenamingProject(false)
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                if (e.key === 'Escape') { setRenamingProject(false) }
+                e.stopPropagation()
+              }}
+              style={{ ...projectRenameInputStyle, pointerEvents: 'auto' }}
+              autoFocus
+            />
+          ) : (
+            <span
+              style={{ ...projectNameStyle, pointerEvents: 'auto' }}
+              title="Rename project"
+              onClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
+            >{project.name}<span style={{ marginLeft: 6, opacity: 0.6, fontSize: '0.8em' }}>✎</span></span>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {['graph', 'table'].map(v => (
             <button
@@ -160,14 +162,15 @@ const navStyle = {
   display: 'flex', alignItems: 'center', gap: '0.75rem',
   padding: '0 1rem', height: 44, background: '#111118',
   borderBottom: '1px solid #1e1e2e', flexShrink: 0, zIndex: 100,
+  position: 'relative',   // anchor for the centered project title
 }
 const backBtnStyle = {
   padding: '0.25rem 0.7rem', borderRadius: 6, border: '1px solid #2a2a3e',
   background: 'transparent', color: '#5b6af0', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
 }
 const projectNameStyle = {
-  fontSize: '0.85rem', color: '#888', fontWeight: 500,
-  maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  fontSize: '0.92rem', color: '#c5d0ff', fontWeight: 600,
+  maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
 const projectRenameInputStyle = {
