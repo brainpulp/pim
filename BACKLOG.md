@@ -16,7 +16,7 @@ Legend: �片 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ do
 | 3 | Pin Fracasos + turn off its orbit | 💤 | So it stops drifting off-screen. One-off data tweak. |
 | 4 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs current pure shrink-to-fit, so small circles with lots of text aren't tiny. |
 | 5 | Delete backup project "Hot ideas — backup 2026-06-29" | ⏳ | Safety copy. Now doubly important — it's what restored Hot ideas after the wipe. Keep for now. |
-| 6 | NodeToolbar: sub-panels → fly-out **submenus** | 🟢 | Today the toolbar box swaps its contents to a panel. Change so the top menu stays and the sub-content (color/shape/note/motion/emoji/image) flies out beside the hovered item. |
+| 6 | NodeToolbar: sub-panels → fly-out **submenus** | ✅ | Done — top menu stays; sections fly out beside it on hover. |
 | 7 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs pure shrink-to-fit. |
 
 ## Won't do (for now)
