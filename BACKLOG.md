@@ -17,6 +17,8 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 | 4 | Pin Fracasos + turn off its orbit | 💤 | So it stops drifting off-screen. One-off data tweak. |
 | 5 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs current pure shrink-to-fit, so small circles with lots of text aren't tiny. |
 | 6 | Delete backup project "Hot ideas — backup 2026-06-29" | ⏳ | Safety copy. Now doubly important — it's what restored Hot ideas after the wipe. Keep for now. |
+| 7 | Notion-style DB — Phase 2 (per-node property editor on canvas) | 🟢 | Fly-out "Properties" section in NodeToolbar to edit one node's fields. Schema + Table grid (P0/P1) shipped. |
+| 8 | Notion-style DB — Phase 3 (on-canvas chips + filter/sort) | 💤 | Render tags/status as badges under node labels; filter/hide graph nodes by property. |
 
 ## Won't do (for now)
 
@@ -45,6 +47,8 @@ work — a latent load/save bug, likely triggered by the flaky Supabase connecti
 - ✅ Delete handle (red ×) on node hover, top-left.
 - ✅ Node handles counter-scale to zoom (clamped 0.4–2.5×) — no longer huge/tiny at extremes.
 - ✅ Legibility sweep: replaced banned near-black text greys app-wide; codified the rule in CLAUDE.md.
+- ✅ Notion-style DB Phase 0 (per-project property schema: `property_defs` column + store actions + node.props).
+- ✅ Notion-style DB Phase 1 (Table view = live grid: typed columns, add/rename/retype/delete, rows, inline options).
 
 ## Shipped earlier this session (2026-06-29)
 
