@@ -3,7 +3,7 @@
 Source of truth for open work, parked decisions, and a log of what shipped.
 Maintained by Claude across sessions; updated after each change. Mirror to Notion on request.
 
-Legend: �片 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done · ❌ won't do
+Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done · ❌ won't do
 
 ---
 
@@ -11,19 +11,18 @@ Legend: �片 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ do
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 1 | Instagram reels import (link + thumbnail + folders) | ⏳ | Waiting on a sample of the JSON export (2–3 entries) to confirm fields → then ~1–3 days. Folders = frame nodes, thumbnails = image nodes, dbl-click = inline embed. |
-| 2 | Persist **undo** across reloads | 💤 | Undo history is in-memory today (clears on refresh). Could persist per-project. |
-| 3 | Pin Fracasos + turn off its orbit | 💤 | So it stops drifting off-screen. One-off data tweak. |
-| 4 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs current pure shrink-to-fit, so small circles with lots of text aren't tiny. |
-| 5 | Delete backup project "Hot ideas — backup 2026-06-29" | ⏳ | Safety copy. Now doubly important — it's what restored Hot ideas after the wipe. Keep for now. |
-| 6 | NodeToolbar: sub-panels → fly-out **submenus** | ✅ | Done — top menu stays; sections fly out beside it on hover. |
-| 7 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs pure shrink-to-fit. |
+| 1 | In-node image handles don't work | 🟢 | Bug — resize/crop handles on images placed inside a node don't respond. **Next up.** |
+| 2 | Instagram reels import (link + thumbnail + folders) | ⏳ | Waiting on a sample of the JSON export (2–3 entries) to confirm fields → then ~1–3 days. Folders = frame nodes, thumbnails = image nodes, dbl-click = inline embed. |
+| 3 | Persist **undo** across reloads | 💤 | Undo history is in-memory today (clears on refresh). Could persist per-project. |
+| 4 | Pin Fracasos + turn off its orbit | 💤 | So it stops drifting off-screen. One-off data tweak. |
+| 5 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs current pure shrink-to-fit, so small circles with lots of text aren't tiny. |
+| 6 | Delete backup project "Hot ideas — backup 2026-06-29" | ⏳ | Safety copy. Now doubly important — it's what restored Hot ideas after the wipe. Keep for now. |
 
 ## Won't do (for now)
 
-| # | Item | Why |
-|---|------|-----|
-| 6 | Ownership-hijack RLS trigger | Declined — editor-members can rewrite a project's `user_id` (confirmed by testing). Re-open if sharing goes wider. |
+| Item | Why |
+|------|-----|
+| Ownership-hijack RLS trigger | Declined — editor-members can rewrite a project's `user_id` (confirmed by testing). Re-open if sharing goes wider. |
 
 ---
 
@@ -42,6 +41,10 @@ work — a latent load/save bug, likely triggered by the flaky Supabase connecti
 - ✅ Nav: project title centered; removed redundant outline "+ Root".
 - ✅ Reload restores zoom (instant localStorage viewport persistence).
 - ✅ Autosave guard so a failed load can't blank a project (see incident).
+- ✅ NodeToolbar sub-sections are fly-out submenus (top menu stays; open on hover).
+- ✅ Delete handle (red ×) on node hover, top-left.
+- ✅ Node handles counter-scale to zoom (clamped 0.4–2.5×) — no longer huge/tiny at extremes.
+- ✅ Legibility sweep: replaced banned near-black text greys app-wide; codified the rule in CLAUDE.md.
 
 ## Shipped earlier this session (2026-06-29)
 
