@@ -192,7 +192,9 @@ Repo: https://github.com/brainpulp/pim
 - Icons can return later — the request was text-first.
 
 ## UI color rule — NEVER REGRESS
-**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
+**Only use proven legibility contrast for all type, always.** No dark-grey-on-dark, ever — if text sits on a dark surface it must be clearly readable at a glance. This has regressed repeatedly; treat it as a hard rule, not a nicety.
+
+**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Concretely: `#333`, `#334`, `#444`, `#445`, `#556`, `#667`, `#778` (and similar near-black greys) are BANNED as a text/label `color` anywhere in the app — they're fine only for borders/dividers. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
 
 ## Past gotchas / never regress
 - `"Invalid schema: pim"` → never use `.schema('pim')` in db.js

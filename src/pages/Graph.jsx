@@ -1891,7 +1891,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
   const selectedStoreNode = selectedNode ? storeNodes.find(n => n.id === selectedNode.id) : null
 
-  if (loading) return <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#444', background:'#0c0c1a' }}>Loading project…</div>
+  if (loading) return <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#8090b8', background:'#0c0c1a' }}>Loading project…</div>
 
   // Pre-compute edge geometry for two-pass rendering (lines behind nodes, arrowheads on top)
   const edgeData = simEdgesRef.current.map(e => {
@@ -2232,6 +2232,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onConnectorMouseDown={handleConnectorMouseDown}
                 onScaleMouseDown={handleScaleMouseDown}
                 onBoxScaleMouseDown={handleBoxScaleMouseDown}
+                zoomK={T.k}
                 onSetLabelWidth={handleLabelWidthMouseDown}
                 onResetLabelWidth={id => setNodeViewProp(id, 'labelWidth', null)}
                 onDelete={id => setConfirmDelete(id)}
@@ -2684,7 +2685,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         )}
 
         {/* Build timestamp â€" bottom right */}
-        {!isPresenting && <div style={{ position:'absolute', bottom:'0.5rem', right:'0.75rem', zIndex:20, fontSize:'0.62rem', color:'#333', fontFamily:'monospace', userSelect:'none' }}>
+        {!isPresenting && <div style={{ position:'absolute', bottom:'0.5rem', right:'0.75rem', zIndex:20, fontSize:'0.62rem', color:'#7080a0', fontFamily:'monospace', userSelect:'none' }}>
           {new Date(__BUILD_TIME__).toISOString().slice(0,16).replace('T',' ')}
         </div>}
 
@@ -3267,8 +3268,8 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
           onClick={e => { e.stopPropagation(); onToggleSlide(node.id) }}
           style={{ cursor: 'pointer' }}
           title={inSlides ? 'Remove from slideshow' : 'Add to slideshow'}>
-          <circle r={9} fill="#1a1a2e" stroke={inSlides ? '#5b6af0' : '#445'} strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill={inSlides ? '#5b6af0' : '#667'} style={{ userSelect: 'none' }}>
+          <circle r={9} fill="#1a1a2e" stroke={inSlides ? '#5b6af0' : '#7080a0'} strokeWidth={1.5} />
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill={inSlides ? '#5b6af0' : '#9aa8d8'} style={{ userSelect: 'none' }}>
             {inSlides ? '⊟' : '⊞'}
           </text>
         </g>
@@ -3339,7 +3340,7 @@ function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isAct
 
 // â"€â"€â"€ NodeShape â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, zoomK, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [croppingImgId, setCroppingImgId] = useState(null)
@@ -3783,7 +3784,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
 
       {/* Collapse/expand chevron — only on nodes that have children, sits centered on the bottom edge */}
       {hasChildren && (isSelected || isHovered) && (
-        <g transform={`translate(0,${bodyHalfH + 11})`}
+        <g transform={`translate(0,${bodyHalfH + 11 * hz}) scale(${hz})`}
           onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); onToggleCollapse?.() }}
           style={{ cursor: 'pointer' }}>
@@ -3824,7 +3825,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           box is the best fit for longer text, without scaling the font (rect/roundrect only).
           Shown when selected or editing. Double-click resets to auto-fit width. */}
       {(editing || isSelected) && isAutoSized && (
-        <g transform={`translate(${halfW},0)`}
+        <g transform={`translate(${halfW},0) scale(${hz})`}
           onMouseDown={e => { e.stopPropagation(); onSetLabelWidth?.(e, node.id) }}
           onDoubleClick={e => { e.stopPropagation(); onResetLabelWidth?.(node.id) }}
           style={{ cursor: 'ew-resize' }}>
@@ -3852,17 +3853,18 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
 
       {/* Connector handle â€" hover only. Large transparent circle as hit target to bridge gap from node edge. */}
       {isHovered && (
-        <g onMouseDown={e => { e.stopPropagation(); onConnectorMouseDown(e, node.id) }}
+        <g transform={`translate(${bodyHalfW},0) scale(${hz})`}
+          onMouseDown={e => { e.stopPropagation(); onConnectorMouseDown(e, node.id) }}
           onMouseEnter={onMouseEnter} style={{ cursor: 'crosshair' }}>
           <title>Drag to another node to connect · drag to empty space for a new child</title>
-          <circle cx={bodyHalfW + 7} cy={0} r={14} fill="transparent" />
-          <circle cx={bodyHalfW + 7} cy={0} r={5} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
+          <circle cx={7} cy={0} r={14} fill="transparent" />
+          <circle cx={7} cy={0} r={5} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
         </g>
       )}
 
       {/* Scale-BOTH handle (bottom-right) — diagonal arrows; resizes box + text together. */}
       {isHovered && (
-        <g transform={`translate(${bodyHalfW},${bodyHalfH})`}
+        <g transform={`translate(${bodyHalfW},${bodyHalfH}) scale(${hz})`}
           onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
           onMouseEnter={onMouseEnter}
           style={{ cursor: 'nwse-resize' }}>
@@ -3877,7 +3879,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       {/* Scale-SHAPE-ONLY handle (bottom-left) — square icon; resizes the box but keeps the
           text size, so the label reflows to a new line length (font only shrinks if forced). */}
       {isHovered && shape !== '3d' && shape !== 'frame' && (
-        <g transform={`translate(${-bodyHalfW},${bodyHalfH})`}
+        <g transform={`translate(${-bodyHalfW},${bodyHalfH}) scale(${hz})`}
           onMouseDown={e => { e.stopPropagation(); onBoxScaleMouseDown?.(e, node.id, isAutoSized) }}
           onMouseEnter={onMouseEnter}
           style={{ cursor: 'nesw-resize' }}>
@@ -3889,7 +3891,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
 
       {/* Delete handle (top-left) — hover only */}
       {isHovered && (
-        <g transform={`translate(${-bodyHalfW},${-bodyHalfH})`}
+        <g transform={`translate(${-bodyHalfW},${-bodyHalfH}) scale(${hz})`}
           onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); onDelete?.(node.id) }}
           onMouseEnter={onMouseEnter}
@@ -3942,6 +3944,10 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId }) {
   const shape = viewProps.shape || 'circle'
+  // Handles are drawn in canvas space, so their on-screen size = size × zoom. Counter-scale
+  // by 1/zoom to keep them ~constant on screen, clamped so they don't balloon when zoomed in
+  // or dwarf a node when zoomed way out.
+  const hz = Math.min(2.5, Math.max(0.4, 1 / (zoomK || 1)))
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [notesDraft, setNotesDraft] = useState(notes)
   const [emojiInput, setEmojiInput] = useState('')
@@ -4112,7 +4118,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               ))}
             </div>
             <div style={{ display:'flex', gap:5, alignItems:'center', marginTop:5 }}>
-              <span style={{ fontSize:'0.6rem', color:'#778', letterSpacing:'0.05em' }}>WIDTH</span>
+              <span style={{ fontSize:'0.6rem', color:'#7080a0', letterSpacing:'0.05em' }}>WIDTH</span>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetStrokeWidth(Math.max(0, ((viewProps.strokeWidth||0)-0.5)))}>-</button>
               <span style={{ fontSize:'0.7rem', color:'#88b4e8', width:22, textAlign:'center' }}>{(viewProps.strokeWidth||0).toFixed(1)}</span>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetStrokeWidth(Math.min(8, ((viewProps.strokeWidth||0)+0.5)))}>+</button>
@@ -4123,7 +4129,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>GLOW</div>
             <div style={{ display:'flex', gap:5, alignItems:'center' }}>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.max(0, ((viewProps.borderBlur||0)-1)))}>-</button>
-              <span style={{ fontSize:'0.7rem', color: (viewProps.borderBlur||0) > 0 ? '#88b4e8' : '#445', width:18, textAlign:'center' }}>{(viewProps.borderBlur||0)}</span>
+              <span style={{ fontSize:'0.7rem', color: (viewProps.borderBlur||0) > 0 ? '#88b4e8' : '#7080a0', width:18, textAlign:'center' }}>{(viewProps.borderBlur||0)}</span>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetBorderBlur(Math.min(30, ((viewProps.borderBlur||0)+1)))}>+</button>
               {(viewProps.borderBlur||0) > 0 && <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:10 }} onClick={() => onSetBorderBlur(0)}>x</button>}
             </div>
@@ -4163,12 +4169,12 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               <button key={s} onClick={() => { onSetShape(s); setPanel(null) }} title={s} style={{
                 background: shape===s ? '#2d3a6a' : 'transparent',
                 border: `1px solid ${shape===s ? '#5b6af0' : '#2a3358'}`,
-                color: shape===s ? '#fff' : '#778',
+                color: shape===s ? '#fff' : '#c5d0ff',
                 borderRadius:5, cursor:'pointer', fontSize:'1.1rem', padding:'5px 4px', lineHeight:1,
                 display:'flex', flexDirection:'column', alignItems:'center', gap:2,
               }}>
                 <span>{shapeIcons[s]}</span>
-                <span style={{ fontSize:'0.58rem', color: shape===s ? '#aac' : '#445' }}>{s}</span>
+                <span style={{ fontSize:'0.58rem', color: shape===s ? '#fff' : '#aab6e6' }}>{s}</span>
               </button>
             ))}
           </div>
@@ -4225,7 +4231,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                     style={{
                       background: emojiCategory === i ? '#2d3a6a' : 'transparent',
                       border: `1px solid ${emojiCategory === i ? '#5b6af0' : '#2a3358'}`,
-                      color: emojiCategory === i ? '#c5d0ff' : '#667',
+                      color: emojiCategory === i ? '#c5d0ff' : '#8090b8',
                       borderRadius:4, cursor:'pointer', fontSize:'0.6rem', padding:'2px 5px', lineHeight:1.4,
                     }}>{cat}</button>
                 ))}
@@ -4332,7 +4338,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                           style={{
                             background: (im.position || 'above') === val ? '#2d3a6a' : 'transparent',
                             border: `1px solid ${(im.position || 'above') === val ? '#5b6af0' : '#2a3358'}`,
-                            color: (im.position || 'above') === val ? '#c5d0ff' : '#667',
+                            color: (im.position || 'above') === val ? '#c5d0ff' : '#8090b8',
                             borderRadius:3, cursor:'pointer', fontSize:'0.6rem', padding:'2px 5px',
                           }}>{label[0]}</button>
                       ))}
@@ -4385,10 +4391,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                 const active = (motion?.type ?? null) === type
                 return (
                   <button key={label} title={label}
-                    style={{ background: active?'#2d3a6a':'transparent', border:`1px solid ${active?'#5b6af0':'#2a3358'}`, color: active?'#c5d0ff':'#556', borderRadius:4, cursor:'pointer', padding:'3px 5px', lineHeight:1, display:'flex', flexDirection:'column', alignItems:'center', gap:1 }}
+                    style={{ background: active?'#2d3a6a':'transparent', border:`1px solid ${active?'#5b6af0':'#2a3358'}`, color: active?'#c5d0ff':'#8090b8', borderRadius:4, cursor:'pointer', padding:'3px 5px', lineHeight:1, display:'flex', flexDirection:'column', alignItems:'center', gap:1 }}
                     onClick={() => onSetMotion(type === null ? null : { type, speed: motion?.speed ?? 1, intensity: motion?.intensity ?? 10 })}>
                     <span style={{ fontSize:'1rem' }}>{icon}</span>
-                    <span style={{ fontSize:'0.5rem', color: active?'#aac':'#445' }}>{label}</span>
+                    <span style={{ fontSize:'0.5rem', color: active?'#fff':'#aab6e6' }}>{label}</span>
                   </button>
                 )
               })}

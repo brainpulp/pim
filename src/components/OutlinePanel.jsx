@@ -159,10 +159,10 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
       <div
         data-outline-id="__root__"
         style={{
-          height: 22, fontSize: '0.68rem', color: '#444', textAlign: 'center', lineHeight: '22px',
+          height: 22, fontSize: '0.68rem', textAlign: 'center', lineHeight: '22px',
           borderBottom: '1px solid #1e1e2e',
           background: dropTarget?.id === '__root__' ? '#1a2a1a' : 'transparent',
-          color: dropTarget?.id === '__root__' ? '#4ade80' : '#333',
+          color: dropTarget?.id === '__root__' ? '#4ade80' : '#7080a0',
           transition: 'all 0.1s', userSelect: 'none',
         }}
       >
@@ -380,7 +380,7 @@ const styles = {
     position: 'absolute', left: 0, right: 0, zIndex: 10,
   },
   tree: { flex: 1, overflowY: 'auto', padding: '0.25rem 0' },
-  empty: { color: '#444', fontSize: '0.78rem', textAlign: 'center', padding: '2rem 1rem', lineHeight: 1.6 },
+  empty: { color: '#8090b8', fontSize: '0.78rem', textAlign: 'center', padding: '2rem 1rem', lineHeight: 1.6 },
   chevron: {
     fontSize: 15, color: '#aaa',
     width: 20, height: 22, flexShrink: 0, userSelect: 'none',
