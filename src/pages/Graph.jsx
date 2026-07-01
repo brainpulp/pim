@@ -3981,19 +3981,35 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const wrap = {
     position:'absolute', left: x, top: y, transform:'translateX(-50%)',
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
-    padding: panel ? '6px 8px' : 4, minWidth: panel ? 230 : 184,
+    padding: 4, minWidth: 184,
     boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:20, pointerEvents:'all',
   }
+  // Sub-sections fly out beside the toolbar (flip to the left near the right screen edge).
+  const flipLeft = typeof window !== 'undefined' && x > window.innerWidth * 0.6
+  const flyout = {
+    position:'absolute', top:-1,
+    [flipLeft ? 'right' : 'left']: '100%',
+    [flipLeft ? 'marginRight' : 'marginLeft']: 6,
+    background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
+    padding:'8px 10px', minWidth:210, maxWidth:284, maxHeight:'72vh', overflowY:'auto',
+    boxShadow:'0 6px 24px rgba(0,0,0,0.6)', zIndex:21,
+  }
   // Text menu row — matches the canvas right-click menu styling.
-  const textRow = (label, onClick, opts = {}) => (
-    <div onClick={onClick}
-      onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
-      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-      style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
-        whiteSpace:'nowrap', borderRadius:4, display:'flex', justifyContent:'space-between', gap:16 }}>
-      <span>{label}</span>{opts.right && <span style={{ color: opts.rightColor || '#8090b8' }}>{opts.right}</span>}
-    </div>
-  )
+  // opts.opens: panel id to open on hover (submenu row), or null to close any open flyout
+  // (leaf/action row). Undefined = don't touch the flyout on hover.
+  const textRow = (label, onClick, opts = {}) => {
+    const isOpen = opts.opens != null && panel === opts.opens
+    return (
+      <div onClick={onClick}
+        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens !== undefined) setPanel(opts.opens) }}
+        onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#23234a' : 'transparent' }}
+        style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
+          background: isOpen ? '#23234a' : 'transparent',
+          whiteSpace:'nowrap', borderRadius:4, display:'flex', justifyContent:'space-between', gap:16 }}>
+        <span>{label}</span>{opts.right && <span style={{ color: opts.rightColor || '#8090b8' }}>{opts.right}</span>}
+      </div>
+    )
+  }
 
   const iconBtn = (active) => ({
     background: active ? '#2d3a6a' : 'transparent',
@@ -4016,27 +4032,29 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
-      {/* â"€â"€ Main text menu â"€â"€ */}
-      {panel === null && (<>
-        {textRow('Color', () => setPanel('color'), { right: '›' })}
-        {textRow('Shape', () => setPanel('shape'), { right: '›' })}
-        {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›' })}
-        {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8' })}
-        {textRow('Emoji', () => setPanel('emoji'), { right: '›' })}
-        {textRow('Image', () => setPanel('image'), { right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8' })}
-        {textRow('Motion & color cycle', () => setPanel('motion'), { right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8' })}
-        {textRow('Radiate to children', () => setPanel('radiate'), { right: '›' })}
+      {/* â"€â"€ Main text menu (always visible; sub-sections fly out beside it) â"€â"€ */}
+      <>
+        {textRow('Color', () => setPanel('color'), { right: '›', opens: 'color' })}
+        {textRow('Shape', () => setPanel('shape'), { right: '›', opens: 'shape' })}
+        {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›', opens: 'imageUrl' })}
+        {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
+        {textRow('Emoji', () => setPanel('emoji'), { right: '›', opens: 'emoji' })}
+        {textRow('Image', () => setPanel('image'), { right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
+        {textRow('Motion & color cycle', () => setPanel('motion'), { right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8', opens: 'motion' })}
+        {textRow('Radiate to children', () => setPanel('radiate'), { right: '›', opens: 'radiate' })}
         {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
           if (depthExpand !== null) { onSetDepthExpand?.(null) }
           else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
-        }, { right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8' })}
+        }, { right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
-        {textRow('Drill in', onDrill)}
-        {textRow('Hide', onHide)}
-        {isAnchored && textRow('Release anchor', onRelease, { color: '#f6ad55' })}
-        {textRow('Delete', onDelete, { color: '#f87171' })}
-      </>)}
+        {textRow('Drill in', onDrill, { opens: null })}
+        {textRow('Hide', onHide, { opens: null })}
+        {isAnchored && textRow('Release anchor', onRelease, { color: '#f6ad55', opens: null })}
+        {textRow('Delete', onDelete, { color: '#f87171', opens: null })}
+      </>
 
+      {/* â"€â"€ Fly-out sub-menu (holds whichever section is active) â"€â"€ */}
+      {panel && (<div style={flyout} onMouseDown={e => e.stopPropagation()}>
       {/* â"€â"€ Color panel â"€â"€ */}
       {panel === 'color' && (
         <div style={{ display:'flex', flexDirection:'column', gap:7, minWidth:190 }}>
@@ -4439,6 +4457,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           </button>
         </div>
       )}
+      </div>)}
     </div>
   )
 }
