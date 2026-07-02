@@ -5,6 +5,13 @@ import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
 import Table from './pages/Table'
+import SharedView from './pages/SharedView'
+import ShareDialog from './components/ShareDialog'
+
+const parseShareToken = () => {
+  const m = window.location.hash.match(/^#\/share\/([A-Za-z0-9]+)/)
+  return m ? m[1] : null
+}
 
 class AppErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { err: null } }
@@ -33,7 +40,15 @@ export default function App() {
   const [view, setView] = useState('graph')
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
+  const [shareToken, setShareToken] = useState(() => parseShareToken())
+  const [showShare, setShowShare] = useState(false)
   const renameInputRef = useRef()
+
+  useEffect(() => {
+    const onHash = () => setShareToken(parseShareToken())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
 
   const openProject = (id, name) => {
     localStorage.setItem('pim_last_project', JSON.stringify({ id, name }))
@@ -53,6 +68,14 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [])
 
+  // A `#/share/<token>` link is handled before the auth gate so view-only links
+  // work with no sign-in. Wait for the session to resolve first (editor links redeem).
+  if (shareToken) {
+    if (session === undefined) return <div style={loadingStyle}>Loading…</div>
+    return <SharedView token={shareToken} session={session}
+      onOpenOwned={(id, name) => { window.location.hash = ''; setShareToken(null); openProject(id, name) }} />
+  }
+
   if (session === undefined) return <div style={loadingStyle}>Loading…</div>
   if (!session) return <Auth />
   if (!project) return (
@@ -66,36 +89,38 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
       <nav style={navStyle}>
         <button style={backBtnStyle} onClick={closeProject} title="All projects">← Projects</button>
-        {renamingProject ? (
-          <input
-            ref={renameInputRef}
-            value={projectDraft}
-            onChange={e => setProjectDraft(e.target.value)}
-            onBlur={async () => {
-              const name = projectDraft.trim() || project.name
-              if (name !== project.name) {
-                await renameProject(project.id, name)
-                const updated = { ...project, name }
-                localStorage.setItem('pim_last_project', JSON.stringify(updated))
-                setProject(updated)
-              }
-              setRenamingProject(false)
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-              if (e.key === 'Escape') { setRenamingProject(false) }
-              e.stopPropagation()
-            }}
-            style={projectRenameInputStyle}
-            autoFocus
-          />
-        ) : (
-          <span
-            style={projectNameStyle}
-            title="Click to rename"
-            onClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
-          >{project.name}</span>
-        )}
+        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', pointerEvents: 'none', maxWidth: '40%' }}>
+          {renamingProject ? (
+            <input
+              ref={renameInputRef}
+              value={projectDraft}
+              onChange={e => setProjectDraft(e.target.value)}
+              onBlur={async () => {
+                const name = projectDraft.trim() || project.name
+                if (name !== project.name) {
+                  await renameProject(project.id, name)
+                  const updated = { ...project, name }
+                  localStorage.setItem('pim_last_project', JSON.stringify(updated))
+                  setProject(updated)
+                }
+                setRenamingProject(false)
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                if (e.key === 'Escape') { setRenamingProject(false) }
+                e.stopPropagation()
+              }}
+              style={{ ...projectRenameInputStyle, pointerEvents: 'auto' }}
+              autoFocus
+            />
+          ) : (
+            <span
+              style={{ ...projectNameStyle, pointerEvents: 'auto' }}
+              title="Rename project"
+              onClick={() => { setProjectDraft(project.name); setRenamingProject(true) }}
+            >{project.name}<span style={{ marginLeft: 6, opacity: 0.6, fontSize: '0.8em' }}>✎</span></span>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {['graph', 'table'].map(v => (
             <button
@@ -107,10 +132,16 @@ export default function App() {
             </button>
           ))}
         </div>
+        <button style={shareBtnStyle} onClick={() => setShowShare(true)} title="Share this project">
+          Share
+        </button>
         <button style={signOutStyle} onClick={() => supabase.auth.signOut()}>
           Sign out
         </button>
       </nav>
+      {showShare && (
+        <ShareDialog projectId={project.id} projectName={project.name} onClose={() => setShowShare(false)} />
+      )}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {view === 'graph' && (
           <AppErrorBoundary>
@@ -121,7 +152,7 @@ export default function App() {
           />
           </AppErrorBoundary>
         )}
-        {view === 'table' && <Table />}
+        {view === 'table' && <Table projectId={project.id} />}
       </div>
     </div>
   )
@@ -131,14 +162,15 @@ const navStyle = {
   display: 'flex', alignItems: 'center', gap: '0.75rem',
   padding: '0 1rem', height: 44, background: '#111118',
   borderBottom: '1px solid #1e1e2e', flexShrink: 0, zIndex: 100,
+  position: 'relative',   // anchor for the centered project title
 }
 const backBtnStyle = {
   padding: '0.25rem 0.7rem', borderRadius: 6, border: '1px solid #2a2a3e',
   background: 'transparent', color: '#5b6af0', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
 }
 const projectNameStyle = {
-  fontSize: '0.85rem', color: '#888', fontWeight: 500,
-  maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  fontSize: '0.92rem', color: '#c5d0ff', fontWeight: 600,
+  maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
 const projectRenameInputStyle = {
@@ -151,8 +183,13 @@ const navBtnStyle = {
   background: 'transparent', color: '#666', cursor: 'pointer', fontSize: '0.82rem', textTransform: 'capitalize',
 }
 const navBtnActiveStyle = { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' }
+const shareBtnStyle = {
+  marginLeft: 'auto', padding: '0.25rem 0.85rem', borderRadius: 6,
+  border: '1px solid #3a4a8a', background: '#1a1f4a', color: '#c5d0ff',
+  cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+}
 const signOutStyle = {
-  marginLeft: 'auto', padding: '0.25rem 0.75rem', borderRadius: 6,
+  padding: '0.25rem 0.75rem', borderRadius: 6,
   border: '1px solid #2a2a3e', background: 'transparent', color: '#555',
   cursor: 'pointer', fontSize: '0.78rem',
 }

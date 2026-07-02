@@ -38,6 +38,15 @@ export const BG_COLORS = [
   '#111827', '#1e1b2e', '#162032', '#0d1f12',
 ]
 
+// Slide backgrounds want a full, normal palette (lights, pastels, vivids, darks) —
+// not the near-black canvas palette above.
+export const SLIDE_BG_COLORS = [
+  '#ffffff', '#f1f5f9', '#e2e8f0', '#cbd5e1', '#94a3b8',
+  '#fee2e2', '#ffedd5', '#fef9c3', '#dcfce7', '#cffafe', '#dbeafe', '#ede9fe', '#fce7f3',
+  '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+  '#334155', '#1e293b', '#0f172a', '#0c0c1a',
+]
+
 // Helper: update nodeProps for a specific node in the active view
 const patchViewNode = (views, activeViewId, nodeId, patch) =>
   views.map(v => v.id !== activeViewId ? v : {
@@ -55,6 +64,10 @@ const useGraphStore = create((set, get) => ({
   // â”€â”€ View-independent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   nodes: [],
   edges: [],
+
+  // â”€â”€ Notion-style DB schema (per project). propertyDefs describes the columns;
+  // each node stores values in node.props[propId]. Types: text|number|date|checkbox|select|multiSelect|url.
+  propertyDefs: [],
 
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
@@ -74,9 +87,10 @@ const useGraphStore = create((set, get) => ({
 
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  loadProjectData: ({ nodes, edges, views, activeViewId }) => set({
+  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs }) => set({
     nodes: nodes || [],
     edges: edges || [],
+    propertyDefs: propertyDefs || [],
     views: views?.length ? views.map(v => {
       const merged = { bgColor: '#0c0c1a', images: [], customEmojis: [], ...v }
       if (!merged.slides) {
@@ -142,6 +156,49 @@ const useGraphStore = create((set, get) => ({
         slideshows: (v.slideshows || []).map(ss => ({ ...ss, slides: ss.slides.filter(sid => sid !== id) })),
       }
     }),
+  })),
+
+  // â”€â”€ Property (Notion-DB column) ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  addPropertyDef: (type = 'text', name) => {
+    const id = uid()
+    const labels = { text:'Text', number:'Number', date:'Date', checkbox:'Checkbox', select:'Select', multiSelect:'Tags', url:'URL' }
+    const def = { id, name: name || labels[type] || 'Property', type }
+    if (type === 'select' || type === 'multiSelect') def.options = []
+    set(s => ({ propertyDefs: [...s.propertyDefs, def] }))
+    return id
+  },
+
+  updatePropertyDef: (id, patch) => set(s => ({
+    propertyDefs: s.propertyDefs.map(p => p.id === id ? { ...p, ...patch } : p),
+  })),
+
+  deletePropertyDef: (id) => set(s => ({
+    propertyDefs: s.propertyDefs.filter(p => p.id !== id),
+    // strip the value from every node so we don't leave orphans
+    nodes: s.nodes.map(n => {
+      if (!n.props || !(id in n.props)) return n
+      const { [id]: _drop, ...rest } = n.props
+      return { ...n, props: rest }
+    }),
+  })),
+
+  reorderPropertyDefs: (newDefs) => set({ propertyDefs: newDefs }),
+
+  // Add an option to a select/multiSelect property; returns the option id.
+  addSelectOption: (propId, name, color) => {
+    const optId = uid()
+    set(s => ({
+      propertyDefs: s.propertyDefs.map(p => p.id !== propId ? p : {
+        ...p, options: [...(p.options || []), { id: optId, name, color: color || '#6366f1' }],
+      }),
+    }))
+    return optId
+  },
+
+  // Set a node's value for a property. value shape depends on type
+  // (string | number | boolean | ISO date string | optionId | optionId[]).
+  setNodeProp: (nodeId, propId, value) => set(s => ({
+    nodes: s.nodes.map(n => n.id === nodeId ? { ...n, props: { ...(n.props || {}), [propId]: value } } : n),
   })),
 
   // â”€â”€ Edge ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

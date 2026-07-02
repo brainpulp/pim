@@ -154,8 +154,47 @@ Repo: https://github.com/brainpulp/pim
 
 **CRITICAL: The user tests on the live GitHub Pages URL, NOT localhost. Always run `npm run deploy` after every set of changes.**
 
+## Last session (2026-06-21) — Sharing + edge blur + text menus
+
+### Project sharing (share-link based, public view + sign-in edit)
+- **Backend** (Supabase `ikztpvxfgmhmrcwolwgx`, migration `pim_sharing`):
+  - `pim_share_links` (token, project_id, role `viewer|editor`, expires_at, revoked) — owner-only RLS.
+  - `pim_project_members` (project_id, user_id, role) — populated when a signed-in user redeems a link.
+  - `pim_is_member(project_id, role?)` SECURITY DEFINER helper (avoids RLS recursion). `pim_projects` RLS
+    re-granted: owner **or** member can SELECT; owner **or** editor-member can UPDATE; owner-only insert/delete.
+  - `pim_get_shared_project(token)` SECURITY DEFINER — anon-callable, returns project JSON + role for a valid
+    (non-revoked, non-expired) token. This is the public view path (no RLS hit).
+  - `pim_redeem_share_link(token)` SECURITY DEFINER (authenticated only) — inserts a membership row so the
+    project then opens through normal RLS.
+  - Grants tightened: `pim_is_member` / `pim_redeem_share_link` revoked from anon; `pim_get_shared_project`
+    stays anon-callable **by design** (advisor WARN there is expected).
+- **Frontend**:
+  - `db.js`: `createShareLink / listShareLinks / revokeShareLink / getSharedProject / redeemShareLink`.
+  - `components/ShareDialog.jsx` — owner UI (nav **Share** button). Generate view/edit links, copy, revoke.
+    Link format: `${origin}${BASE_URL}#/share/<token>` (hash route → no Pages server config needed).
+  - `pages/SharedView.jsx` — public landing for `#/share/<token>`. Viewer link (or not signed in) → read-only
+    Graph via the public RPC; editor link + signed in → redeems and hands off to the normal editing flow.
+  - `App.jsx` — `parseShareToken()` + `hashchange` listener; share token is intercepted **before** the auth
+    gate so view-only links work with no login.
+  - **Graph read-only mode**: `Graph` gains `readOnly` + `sharedData` props. `sharedData` loads straight into
+    the store (skips `loadProject`/RLS). readOnly: autosave off, keyboard/contextmenu/canvas handlers gated,
+    sidebar hidden, and the content `<g>` gets `pointerEvents:'none'` (D3 pan/zoom still works via the svg).
+- **Gotcha**: read-only is enforced by `pointerEvents:'none'` on the main content group — pan/zoom stays live
+  because d3-zoom is bound to the `<svg>`, and events pass through the disabled group to it.
+
+### Photo edge blur (`ImageNode`)
+- Images gain `edgeBlur` (separate from full `blur`). Implemented as a blurred white-rect **alpha mask** inset
+  by the blur radius → feathers only the photo's outer edges, interior stays sharp. Combines with full `blur`.
+
+### Text-based context menus (was icon panels)
+- `NodeToolbar` top level and `ImageToolbar` are now vertical **text** menus (matching the canvas right-click
+  menu). Sub-panels (color/shape/emoji/motion/align…) unchanged. Photo menu adds the Edge-blur stepper.
+- Icons can return later — the request was text-first.
+
 ## UI color rule — NEVER REGRESS
-**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
+**Only use proven legibility contrast for all type, always.** No dark-grey-on-dark, ever — if text sits on a dark surface it must be clearly readable at a glance. This has regressed repeatedly; treat it as a hard rule, not a nicety.
+
+**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Concretely: `#333`, `#334`, `#444`, `#445`, `#556`, `#667`, `#778` (and similar near-black greys) are BANNED as a text/label `color` anywhere in the app — they're fine only for borders/dividers. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
 
 ## Past gotchas / never regress
 - `"Invalid schema: pim"` → never use `.schema('pim')` in db.js

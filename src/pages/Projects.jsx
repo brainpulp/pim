@@ -5,6 +5,10 @@ export default function Projects({ onOpen, onSignOut }) {
   const [projects, setProjects] = useState(null) // null = loading
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState(null) // null = not naming; string = typing a name
+  const newInputRef = useRef()
+
+  useEffect(() => { if (newName !== null) newInputRef.current?.focus() }, [newName])
 
   const load = async () => {
     try {
@@ -16,10 +20,10 @@ export default function Projects({ onOpen, onSignOut }) {
 
   useEffect(() => { load() }, [])
 
-  const handleCreate = async () => {
+  const handleCreate = async (name) => {
     setCreating(true)
     try {
-      const p = await createProject('Untitled')
+      const p = await createProject((name || '').trim() || 'Untitled')
       onOpen(p.id, p.name)
     } catch (e) {
       setError(e.message)
@@ -77,9 +81,29 @@ export default function Projects({ onOpen, onSignOut }) {
           </div>
         )}
 
-        <button style={styles.createBtn} onClick={handleCreate} disabled={creating}>
-          {creating ? 'Creating…' : '+ New project'}
-        </button>
+        {newName === null ? (
+          <button style={styles.createBtn} onClick={() => setNewName('')} disabled={creating}>
+            + New project
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              ref={newInputRef}
+              value={newName}
+              placeholder="Project name…"
+              style={{ ...styles.rowInput, flex: 1 }}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleCreate(newName)
+                if (e.key === 'Escape') setNewName(null)
+              }}
+            />
+            <button style={{ ...styles.createBtn, flex: 'none', padding: '0.6rem 1rem' }}
+              onClick={() => handleCreate(newName)} disabled={creating}>
+              {creating ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -165,8 +189,8 @@ const styles = {
   },
   title: { fontSize: '1.1rem', fontWeight: 600, color: '#c7d0f8', margin: 0 },
   error: { background: '#2a1a1a', border: '1px solid #f87171', borderRadius: 6, padding: '0.6rem 0.85rem', color: '#f87171', fontSize: '0.82rem' },
-  loading: { color: '#444', textAlign: 'center', padding: '1.5rem 0', fontSize: '0.85rem' },
-  empty: { color: '#444', textAlign: 'center', padding: '1.5rem 0', fontSize: '0.85rem' },
+  loading: { color: '#8090b8', textAlign: 'center', padding: '1.5rem 0', fontSize: '0.85rem' },
+  empty: { color: '#8090b8', textAlign: 'center', padding: '1.5rem 0', fontSize: '0.85rem' },
   list: { display: 'flex', flexDirection: 'column', gap: 4 },
   row: {
     display: 'flex', alignItems: 'center', gap: 10,
@@ -178,7 +202,7 @@ const styles = {
   rowIcon: { fontSize: '1.1rem', color: '#5b6af0', flexShrink: 0 },
   rowBody: { flex: 1, display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
   rowName: { fontSize: '0.9rem', color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  rowAge: { fontSize: '0.72rem', color: '#444' },
+  rowAge: { fontSize: '0.72rem', color: '#7080a0' },
   rowInput: {
     background: '#1a1a2e', border: '1px solid #5b6af0', color: '#fff',
     borderRadius: 4, padding: '2px 6px', fontSize: '0.88rem', outline: 'none', width: '100%',
