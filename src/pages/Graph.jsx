@@ -5,6 +5,7 @@ import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, 
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject, uploadModel, uploadThumbnail } from '../lib/db'
+import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 
 // â"€â"€ Text measurement â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 let _measureCanvas = null
@@ -442,6 +443,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const storeNodes      = useGraphStore(s => s.nodes)
   const storeEdges      = useGraphStore(s => s.edges)
   const storePropertyDefs = useGraphStore(s => s.propertyDefs)
+  const setNodeProp     = useGraphStore(s => s.setNodeProp)
+  const addPropertyDef  = useGraphStore(s => s.addPropertyDef)
+  const addSelectOption = useGraphStore(s => s.addSelectOption)
   const activeViewId    = useGraphStore(s => s.activeViewId)
   const views           = useGraphStore(s => s.views)
   const addNode         = useGraphStore(s => s.addNode)
@@ -2516,6 +2520,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onRemoveNodeImageById={imId => handleRemoveNodeImage(hn.id, imId)}
               onWheel={e => svgRef.current?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode, clientX: e.clientX, clientY: e.clientY, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }))}
               nodeId={hn.id}
+              propertyDefs={storePropertyDefs}
+              nodeProps={hs.props || {}}
+              onSetNodeProp={(propId, value) => setNodeProp(hn.id, propId, value)}
+              onAddPropertyDef={type => addPropertyDef(type)}
+              onAddSelectOption={(propId, name, color) => addSelectOption(propId, name, color)}
               depthExpand={depthExpand?.nodeId === hn.id ? depthExpand : null}
               onSetDepthExpand={setDepthExpand}
               maxExpandRadius={maxExpandRadius}
@@ -3947,7 +3956,8 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId }) {
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+  propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [notesDraft, setNotesDraft] = useState(notes)
@@ -4060,6 +4070,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {textRow('Shape', () => setPanel('shape'), { right: '›', opens: 'shape' })}
         {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›', opens: 'imageUrl' })}
         {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
+        {textRow('Properties', () => setPanel('props'), (() => {
+          const set = Object.values(nodeProps).filter(v => v != null && v !== '' && !(Array.isArray(v) && v.length === 0)).length
+          return { right: set > 0 ? String(set) : '›', rightColor: set > 0 ? '#88b4e8' : '#8090b8', opens: 'props' }
+        })())}
         {textRow('Emoji', () => setPanel('emoji'), { right: '›', opens: 'emoji' })}
         {textRow('Image', () => setPanel('image'), { right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
         {textRow('Motion & color cycle', () => setPanel('motion'), { right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8', opens: 'motion' })}
@@ -4077,6 +4091,38 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
       {/* â"€â"€ Fly-out sub-menu (holds whichever section is active) â"€â"€ */}
       {panel && (<div style={flyout} onMouseDown={e => e.stopPropagation()}>
+      {/* â"€â"€ Properties panel (Notion-style DB fields for this node) â"€â"€ */}
+      {panel === 'props' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:220 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>PROPERTIES</span>
+          </div>
+          {propertyDefs.length === 0 && (
+            <div style={{ fontSize:'0.75rem', color:'#8090b8', lineHeight:1.4 }}>No properties yet. Add one below — they're shared across the whole project (visible in the Table view too).</div>
+          )}
+          {propertyDefs.map(def => (
+            <div key={def.id} style={{ display:'flex', flexDirection:'column', gap:2 }}>
+              <span style={{ fontSize:'0.62rem', color:'#8090b8', letterSpacing:'0.04em' }}>{def.name}</span>
+              <div style={{ border:'1px solid #2a3358', borderRadius:5, padding:'3px 7px', minHeight:24, display:'flex', alignItems:'center' }}>
+                <PropertyField def={def} value={nodeProps[def.id]}
+                  onChange={v => onSetNodeProp?.(def.id, v)}
+                  onAddOption={(name, color) => onAddSelectOption?.(def.id, name, color)} />
+              </div>
+            </div>
+          ))}
+          <div style={{ borderTop:'1px solid #2a3358', margin:'2px 0' }} />
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4, alignItems:'center' }}>
+            <span style={{ fontSize:'0.62rem', color:'#7080a0' }}>Add:</span>
+            {PROP_TYPES.map(t => (
+              <button key={t.type} title={t.label} onClick={() => onAddPropertyDef?.(t.type)}
+                style={{ background:'transparent', border:'1px solid #2a3358', borderRadius:4, color:'#c5d0ff', cursor:'pointer', fontSize:'0.66rem', padding:'2px 6px' }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {/* â"€â"€ Color panel â"€â"€ */}
       {panel === 'color' && (
         <div style={{ display:'flex', flexDirection:'column', gap:7, minWidth:190 }}>
