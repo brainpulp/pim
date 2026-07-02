@@ -28,6 +28,47 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 ---
 
+## SPEC — Layout Modes (pack / kanban / tag-tree) over the DB
+
+**Core principle — two independent axes; a mode only edits its own axis:**
+- **Axis A = topology** (`edges[]`, the mind-map tree). Edited *only* by mind-map interactions.
+- **Axis B = data** (`node.props`). Edited by the Table and by structured modes.
+- Structured layouts (pack/kanban/tag-tree) are **projections of Axis B**. Their groups/columns/mother-tags
+  are **property values**, not nodes/edges. Dragging a node into a group **writes `node.props[groupBy]`** —
+  never an edge. So the hierarchy is safe by construction.
+
+**Positions rule (prevents modes clobbering each other):**
+- Mind map → positions **persisted** per node per view (`fx/fy`).
+- Pack/kanban/tag-tree → positions **computed, never persisted**. Drag edits the *data*, layout recomputes.
+- ⇒ flipping to a structured layout and back leaves the mind map exactly as arranged. Non-destructive.
+
+**A view gains (all optional, default off → no migration):**
+```
+view.layout    = 'mindmap' | 'pack' | 'kanban' | 'tagtree'   (default mindmap)
+view.groupBy   = propId | null      // pack cells / kanban columns / tag parents
+view.encodings = { color, size, outline, animation }   // channel → propId | null
+view.autoFit   = bool
+view.showEdges = bool               // default false in structured layouts
+```
+Switch mode = flip `view.layout` in place; duplicate the view (existing) to keep mindmap + pack side by side.
+
+**Visual resolver** `resolve(node, view) → {fill,size,outline,anim}`: an encoded channel **overrides** the
+manual value; manual value **preserved underneath** (turning the encoding off restores it). Used by all layouts.
+
+**Decisions (locked 2026-07-02):**
+- Multi-group membership → **clone/mirror** the node into each group (ghosted duplicates; edits sync — one node).
+- Blob/Venn overlap (node once, in the intersection) = **opt-in later, only when ≤3 groups** (Euler diagrams are
+  geometrically impossible past ~4 sets). Not the foundation.
+- Uncategorized → explicit "(empty)" group. Number/date grouping → binned ranges.
+- Kanban intra-column order = a Number property (deferred).
+- "Organize" quick-toggle on the current view (animated): Group by / Layout / Filter / Fit; **Done** reverts,
+  **Save as view** freezes. Nodes tween from mindmap positions to group cells.
+
+**Build order:** A) Pack + drag-to-reassign (single-select groupBy, computed positions, autoFit) · B) visual
+encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (then optional blobs).
+
+---
+
 ## Incident (2026-06-30) — "Hot ideas" blanked, restored
 
 A **failed project load** left the store empty and the autosave wrote that empty doc over the
