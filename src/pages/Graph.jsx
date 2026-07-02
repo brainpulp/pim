@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
-import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS } from '../lib/graphStore'
+import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject, uploadModel, uploadThumbnail } from '../lib/db'
@@ -3068,10 +3068,10 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                   backgroundImage:'linear-gradient(45deg,#444 25%,transparent 25%,transparent 75%,#444 75%),linear-gradient(45deg,#444 25%,transparent 25%,transparent 75%,#444 75%)',
                   backgroundSize:'6px 6px', backgroundPosition:'0 0,3px 3px',
                   border: !activeSlideBgColors[slideMenu.frameId] ? '2px solid #fff' : '1px solid #3a4a6a' }} />
-              {BG_COLORS.map(c => (
+              {SLIDE_BG_COLORS.map(c => (
                 <div key={c} onClick={() => setSlideBgColor(activeSlideshowId, slideMenu.frameId, c)}
                   style={{ width:16, height:16, borderRadius:3, background:c, cursor:'pointer',
-                    border: activeSlideBgColors[slideMenu.frameId]===c ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)' }} />
+                    border: activeSlideBgColors[slideMenu.frameId]===c ? '2px solid #5b6af0' : '1px solid rgba(255,255,255,0.2)' }} />
               ))}
             </div>
             <div style={{ borderTop:'1px solid #1e2a3a', margin:'4px 0' }} />

@@ -38,6 +38,15 @@ export const BG_COLORS = [
   '#111827', '#1e1b2e', '#162032', '#0d1f12',
 ]
 
+// Slide backgrounds want a full, normal palette (lights, pastels, vivids, darks) —
+// not the near-black canvas palette above.
+export const SLIDE_BG_COLORS = [
+  '#ffffff', '#f1f5f9', '#e2e8f0', '#cbd5e1', '#94a3b8',
+  '#fee2e2', '#ffedd5', '#fef9c3', '#dcfce7', '#cffafe', '#dbeafe', '#ede9fe', '#fce7f3',
+  '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+  '#334155', '#1e293b', '#0f172a', '#0c0c1a',
+]
+
 // Helper: update nodeProps for a specific node in the active view
 const patchViewNode = (views, activeViewId, nodeId, patch) =>
   views.map(v => v.id !== activeViewId ? v : {
