@@ -18,7 +18,7 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 | 5 | Round shapes: "grow to a cap, then shrink" | 💤 | Middle ground vs current pure shrink-to-fit, so small circles with lots of text aren't tiny. |
 | 6 | Delete backup project "Hot ideas — backup 2026-06-29" | ⏳ | Safety copy. Now doubly important — it's what restored Hot ideas after the wipe. Keep for now. |
 | 7 | Notion-style DB — Phase 2 (per-node property editor on canvas) | ✅ | Done — "Properties" fly-out in NodeToolbar; shared PropertyField component with the Table. |
-| 8 | Notion-style DB — Phase 3 (on-canvas chips + filter/sort) | 💤 | Render tags/status as badges under node labels; filter/hide graph nodes by property. |
+| 8 | Notion-style DB — Phase 3 (on-canvas chips + filter) | ✅ | Done — chips under nodes (opt-in per property) + non-destructive property filter on the graph. (Sort + persisted filter = future.) |
 
 ## Won't do (for now)
 
