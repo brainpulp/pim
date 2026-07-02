@@ -3533,10 +3533,16 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       data-node="true"
       onMouseDown={e => onMouseDown(e, node.id)}
       onClick={e => e.stopPropagation()}
+      onDoubleClick={e => { if (!editing) { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) } }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       style={{ cursor: 'move', pointerEvents: shape === '3d' && isSelected ? 'none' : undefined }}
     >
+      {/* Transparent body hit-area at the BOTTOM of the stack — gives shape:'none' /
+          transparent nodes a drag/select target without covering the in-node image
+          handles that render above it (double-click-to-edit is handled on the <g>). */}
+      {!editing && <ellipse rx={bodyHalfW} ry={bodyHalfH} fill="transparent" style={{ cursor: 'move' }} />}
+
       {/* Selection / hover rings — outside animation so they don't wiggle */}
       {isSelected && (shape === 'none'
         ? <rect x={-(bodyHalfW+4)} y={-(bodyHalfH+4)} width={(bodyHalfW+4)*2} height={(bodyHalfH+4)*2} rx={4} fill="none" stroke="#5b6af0" strokeWidth={2} strokeDasharray="5,3" />
@@ -3908,21 +3914,14 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         </g>
       )}
 
-      {/* Double-click to edit â€" for 3D nodes also cover caption area below.
-          Hidden while editing so the overlay doesn't sit on top of the textarea and
-          steal mouse clicks (which broke click-to-place-cursor and double-click-to-select). */}
-      {!editing && (<>
-        <ellipse rx={bodyHalfW} ry={bodyHalfH} fill="transparent"
+      {/* 3D-node caption double-click hit area (below the box). The main body hit-area
+          ellipse now lives at the bottom of the stack; double-click is on the <g>. */}
+      {!editing && shape === '3d' && (
+        <rect x={-halfW} y={halfH + 4} width={halfW * 2} height={22} fill="transparent"
           onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
-          style={{ cursor: 'move' }}
+          style={{ cursor: 'text' }}
         />
-        {shape === '3d' && (
-          <rect x={-halfW} y={halfH + 4} width={halfW * 2} height={22} fill="transparent"
-            onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
-            style={{ cursor: 'text' }}
-          />
-        )}
-      </>)}
+      )}
 
       {/* Connector handle â€" hover only. Large transparent circle as hit target to bridge gap from node edge. */}
       {isHovered && (
