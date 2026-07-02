@@ -11,7 +11,7 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 1 | In-node image handles don't work | 🟢 | Bug — resize/crop handles on images placed inside a node don't respond. **Next up.** |
+| 1 | In-node image handles don't work | ✅ | Fixed — the transparent double-click overlay sat on top and stole their mousedown; moved it to the bottom of the stack. |
 | 2 | Instagram reels import (link + thumbnail + folders) | ⏳ | Waiting on a sample of the JSON export (2–3 entries) to confirm fields → then ~1–3 days. Folders = frame nodes, thumbnails = image nodes, dbl-click = inline embed. |
 | 3 | Persist **undo** across reloads | 💤 | Undo history is in-memory today (clears on refresh). Could persist per-project. |
 | 4 | Pin Fracasos + turn off its orbit | 💤 | So it stops drifting off-screen. One-off data tweak. |
@@ -66,6 +66,13 @@ manual value; manual value **preserved underneath** (turning the encoding off re
 
 **Build order:** A) Pack + drag-to-reassign (single-select groupBy, computed positions, autoFit) · B) visual
 encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (then optional blobs).
+
+**Progress:** A (Slice 1 + 2) **shipped, needs hands-on tuning** — top-right **▦ Organize** control groups by any
+Select/Tags/Checkbox property. Force-clusters visible nodes into a grid of dashed "bubble" cells (labelled + count),
+non-destructive (never writes `fx/fy`; **Done** ✕ restores the mind map exactly). Dragging a node into a cell writes
+that group's property value (the "(empty)" cell clears it) and re-clusters. Grid rect anchored per session so edits
+don't drift it. **Still to do:** autoFit (frame the packed groups), tune force strengths / cell padding by hand, and
+multi-select drop semantics. Slices remaining: B (encodings) · C (kanban) · D (tag-tree + mirrors).
 
 ---
 

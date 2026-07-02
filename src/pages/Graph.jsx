@@ -363,6 +363,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [confirmDeleteImages, setConfirmDeleteImages] = useState(null) // string[] | null
   const [confirmDeleteNodes, setConfirmDeleteNodes] = useState(null)   // string[] | null (multi-node)
   const [propFilter, setPropFilter] = useState(null)    // { propId, value } — non-destructive graph filter
+  const [organize, setOrganize] = useState(null)        // { groupBy } — force-cluster ("pack") by a property
+  const [organizeGroups, setOrganizeGroups] = useState([]) // computed group bubbles for rendering
+  const organizeTargetsRef = useRef({})                 // { nodeId: {x,y} } target centroid per node
+  const organizeActiveRef = useRef(false)
+  const organizeRef = useRef(null)                      // mirrors `organize` for drag handler (no stale closure)
+  organizeRef.current = organize
+  const organizeGroupsRef = useRef([])                  // mirrors `organizeGroups` for drop-to-reassign
+  organizeGroupsRef.current = organizeGroups
+  const organizeSessionRef = useRef(null)               // anchored world rect for the grid, per session
   const [searchOpen, setSearchOpen] = useState(false)   // Cmd/Ctrl+K node spotlight
   const [searchQuery, setSearchQuery] = useState('')
   const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
@@ -445,6 +454,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const storeNodes      = useGraphStore(s => s.nodes)
   const storeEdges      = useGraphStore(s => s.edges)
   const storePropertyDefs = useGraphStore(s => s.propertyDefs)
+  const storePropertyDefsRef = useRef(storePropertyDefs)
+  storePropertyDefsRef.current = storePropertyDefs
   const setNodeProp     = useGraphStore(s => s.setNodeProp)
   const addPropertyDef  = useGraphStore(s => s.addPropertyDef)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
@@ -712,6 +723,87 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     })
     if (simRef.current) simRef.current.alpha(0.2).restart()
   }, [activeViewId])
+
+  // ── Organize (force-cluster "pack" by a property) ─────────────────────────
+  // Non-destructive: groups nodes by a property value into computed cells; targets live in
+  // a ref that forceX/forceY read. NEVER writes fx/fy to the store — exiting restores the
+  // mind-map exactly. Live sim nodes have their fx/fy cleared while organizing so forces can
+  // move them; restored from viewNodeProps on exit.
+  useEffect(() => {
+    if (!simRef.current || !svgRef.current) return
+    const sim = simRef.current
+
+    if (organize) {
+      const groupBy = organize.groupBy
+      const def = storePropertyDefs.find(d => d.id === groupBy)
+      const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight
+      // Determine group keys (option ids for select, plus an "(empty)" bucket)
+      const keyOf = (n) => {
+        const v = n.props?.[groupBy]
+        if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) return '__empty__'
+        return String(Array.isArray(v) ? v[0] : v)  // slice-1: single-select; multi handled later
+      }
+      const nodeById = Object.fromEntries(storeNodes.map(n => [n.id, n]))
+      const visible = simNodesRef.current.filter(sn => visibleNodeIdsRef.current.has(sn.id))
+      const keys = []
+      const byKey = {}
+      visible.forEach(sn => {
+        const k = keyOf(nodeById[sn.id] || {})
+        if (!byKey[k]) { byKey[k] = []; keys.push(k) }
+        byKey[k].push(sn.id)
+      })
+      // Lay group cells out on a grid. Anchor the grid's world rect ONCE per session (first
+      // activation or when groupBy changes) so later property edits don't drift the cells if the
+      // user has panned. Re-runs on node edits reuse the stored rect.
+      const cols = Math.max(1, Math.ceil(Math.sqrt(keys.length)))
+      const rows = Math.max(1, Math.ceil(keys.length / cols))
+      const fresh = !organizeActiveRef.current || organizeSessionRef.current?.groupBy !== groupBy
+      if (fresh) {
+        const T = zoomTransformRef.current
+        organizeSessionRef.current = {
+          groupBy,
+          worldW: W / T.k, worldH: H / T.k,
+          originX: -T.x / T.k, originY: -T.y / T.k,
+        }
+      }
+      const { worldW, worldH, originX, originY } = organizeSessionRef.current
+      const cellW = worldW / cols, cellH = worldH / rows
+      const labelFor = (k) => k === '__empty__' ? '(empty)'
+        : def?.options?.find(o => o.id === k)?.name
+          ?? (def?.type === 'checkbox' ? (k === 'true' ? '✓' : '—') : k)
+      const colorFor = (k) => k === '__empty__' ? '#3a4358' : (def?.options?.find(o => o.id === k)?.color || '#5b6af0')
+      const groups = keys.map((k, i) => {
+        const cx = originX + (i % cols) * cellW + cellW / 2
+        const cy = originY + Math.floor(i / cols) * cellH + cellH / 2
+        return { key: k, cx, cy, label: labelFor(k), color: colorFor(k), count: byKey[k].length,
+          rx: Math.max(60, cellW * 0.42), ry: Math.max(50, cellH * 0.42) }
+      })
+      const targets = {}
+      groups.forEach(g => byKey[g.key].forEach(id => { targets[id] = { x: g.cx, y: g.cy } }))
+      organizeTargetsRef.current = targets
+      organizeActiveRef.current = true
+      setOrganizeGroups(groups)
+      // Free live positions so nodes can migrate; pull toward group centroids.
+      simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
+      sim.force('link', null)
+      sim.force('charge', d3.forceManyBody().strength(-40))
+      sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(0.14))
+      sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(0.14))
+      sim.alpha(0.7).restart()
+    } else if (organizeActiveRef.current) {
+      // Exit: drop grouping forces, restore mind-map forces + anchors from the store.
+      organizeActiveRef.current = false
+      organizeSessionRef.current = null
+      setOrganizeGroups([])
+      sim.force('cluster-x', null)
+      sim.force('cluster-y', null)
+      sim.force('charge', d3.forceManyBody().strength(-300))
+      sim.force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
+      const vp = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.nodeProps || {}
+      simNodesRef.current.forEach(n => { const p = vp[n.id] || {}; n.fx = p.fx ?? null; n.fy = p.fy ?? null })
+      sim.alpha(0.5).restart()
+    }
+  }, [organize, storeNodes, storePropertyDefs]) // eslint-disable-line
 
   const getSiblings = useCallback((nodeId) => {
     const parentEdge = storeEdges.find(e => e.target === nodeId)
@@ -1125,6 +1217,38 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
         const ddx = sx - startSx, ddy = sy - startSy
 
+        // Organize mode: drops reassign the group property, never touch fx/fy or topology.
+        // The nearest group cell → that property value; the "(empty)" cell clears it.
+        if (organizeActiveRef.current && organizeRef.current) {
+          const groupBy = organizeRef.current.groupBy
+          const def = storePropertyDefsRef.current.find(d => d.id === groupBy)
+          const groups = organizeGroupsRef.current
+          const dragged = multiDrag ? [...selectedNodeIdsRef.current] : [nodeId]
+          dragged.forEach(id => {
+            const sp = startPositions.find(p => p.node.id === id)
+            const dx = sp ? sp.ox + ddx : sx, dy = sp ? sp.oy + ddy : sy
+            let best = null, bestD = Infinity
+            groups.forEach(g => {
+              const d = ((dx - g.cx) ** 2) + ((dy - g.cy) ** 2)
+              if (d < bestD) { bestD = d; best = g }
+            })
+            if (!best) return
+            const k = best.key
+            let value
+            if (k === '__empty__') value = def?.type === 'multiSelect' ? [] : null
+            else if (def?.type === 'multiSelect') value = [k]
+            else if (def?.type === 'checkbox') value = k === 'true'
+            else value = k
+            setNodeProp(id, groupBy, value)
+          })
+          // Let the cluster forces re-settle around the (recomputed) targets.
+          dragGroup.forEach(n => { n.fx = null; n.fy = null })
+          simRef.current.alpha(0.6).restart()
+          document.removeEventListener('mousemove', onMove)
+          document.removeEventListener('mouseup', onUp)
+          return
+        }
+
         // Reparent: if dropped on another regular node, make it a child
         if (!isFrame && !multiDrag && dragHoverNodeIdRef.current === null) {
           // re-check at drop position since ref was just cleared
@@ -1191,7 +1315,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges])
+  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -2112,6 +2236,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}
             style={readOnly ? { pointerEvents: 'none' } : undefined}>
+            {/* 0. Organize group bubbles (behind everything; non-interactive) */}
+            {organize && organizeGroups.map(g => (
+              <g key={g.key} style={{ pointerEvents: 'none' }}>
+                <ellipse cx={g.cx} cy={g.cy} rx={g.rx} ry={g.ry}
+                  fill={g.color + '14'} stroke={g.color + '66'} strokeWidth={1.5} strokeDasharray="6 5" />
+                <text x={g.cx} y={g.cy - g.ry - 8} textAnchor="middle"
+                  fontSize={14} fontWeight={600} fill={g.color}
+                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 3 }}>
+                  {g.label} · {g.count}
+                </text>
+              </g>
+            ))}
             {/* 1. Frame containers */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
@@ -2719,9 +2855,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           </button>
         )}
 
-        {/* Property filter (non-destructive) — top-right */}
-        {!isPresenting && (storePropertyDefs.length > 0 || propFilter) && (
-          <div style={{ position:'absolute', top:'0.75rem', right:'0.75rem', zIndex:20 }}>
+        {/* Property filter + organize (non-destructive) — top-right */}
+        {!isPresenting && (storePropertyDefs.length > 0 || propFilter || organize) && (
+          <div style={{ position:'absolute', top:'0.75rem', right:'0.75rem', zIndex:20, display:'flex', gap:8 }}>
+            <OrganizeControl defs={storePropertyDefs} organize={organize} onSet={setOrganize} onClear={() => setOrganize(null)} />
             <FilterControl defs={storePropertyDefs} filter={propFilter} onSet={setPropFilter} onClear={() => setPropFilter(null)} />
           </div>
         )}
@@ -4055,6 +4192,36 @@ const fc = {
   item: { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
   back: { padding: '5px 12px', fontSize: '0.72rem', color: '#8090b8', cursor: 'pointer' },
   dot: { width: 10, height: 10, borderRadius: '50%', flexShrink: 0 },
+}
+
+// Organize = force-cluster ("pack") nodes into cells by a select/tag/checkbox property.
+// Non-destructive: computes positions live, never writes fx/fy. "Done" restores the mind map.
+function OrganizeControl({ defs, organize, onSet, onClear }) {
+  const [open, setOpen] = useState(false)
+  const groupable = defs.filter(d => d.type === 'select' || d.type === 'multiSelect' || d.type === 'checkbox')
+  const activeDef = defs.find(d => d.id === organize?.groupBy)
+  if (organize) {
+    return (
+      <div style={{ ...fc.pill, background: '#173a2a', border: '1px solid #2f7a55' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>▦ Grouped by {activeDef?.name || '—'}</span>
+        <span style={fc.x} onClick={onClear} title="Back to mind map">✕</span>
+      </div>
+    )
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <button style={fc.btn} onClick={() => setOpen(o => !o)} title="Cluster nodes into groups by a property (non-destructive)">▦ Organize</button>
+      {open && (<>
+        <div style={fc.backdrop} onClick={() => setOpen(false)} />
+        <div style={fc.menu} onClick={e => e.stopPropagation()}>
+          <div style={{ padding: '4px 12px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' }}>Group by</div>
+          {groupable.length
+            ? groupable.map(d => <div key={d.id} style={fc.item} onClick={() => { onSet({ groupBy: d.id }); setOpen(false) }}>{d.name}</div>)
+            : <div style={{ ...fc.item, color: '#8090b8' }}>Add a Select, Tags, or Checkbox property first</div>}
+        </div>
+      </>)}
+    </div>
+  )
 }
 
 function EyeIcon() {
