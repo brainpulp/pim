@@ -297,6 +297,7 @@ function ImageToolbar({ images, selectedImageIds, anchor,
 
   return (
     <div
+      ref={el => clampMenuEl(el, anchor.px, anchor.py, false)}
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
       style={{
@@ -2346,6 +2347,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
                 style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div onMouseDown={e => e.stopPropagation()}
+                ref={el => clampMenuEl(el, contextMenu.px, contextMenu.py, false)}
                 style={{
                   position: 'absolute', left: contextMenu.px, top: contextMenu.py, zIndex: 35,
                   background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4,
@@ -3979,6 +3981,23 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   )
 }
 
+// Keep a popup/menu inside the viewport. Attach via a ref callback:
+//   ref={el => clampMenuEl(el, x, y, center)}
+// Measures the element and sets left/top so it never spills off the right/bottom edges.
+function clampMenuEl(el, x, y, center) {
+  if (!el) return
+  const m = 8
+  const r = el.getBoundingClientRect()
+  let left = center ? x - r.width / 2 : x
+  let top = y
+  if (left + r.width > window.innerWidth - m) left = window.innerWidth - m - r.width
+  if (left < m) left = m
+  if (top + r.height > window.innerHeight - m) top = window.innerHeight - m - r.height
+  if (top < m) top = m
+  el.style.left = left + 'px'
+  el.style.top = top + 'px'
+}
+
 // Non-destructive graph filter control (property → value); clears back to full view.
 function FilterControl({ defs, filter, onSet, onClear }) {
   const [open, setOpen] = useState(false)
@@ -4128,7 +4147,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
 
   const wrap = {
-    position:'absolute', left: x, top: y, transform:'translateX(-50%)',
+    position:'absolute', left: x, top: y,
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
     padding: 4, minWidth: 184,
     boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:20, pointerEvents:'all',
@@ -4174,6 +4193,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
   return (
     <div style={wrap}
+      ref={el => clampMenuEl(el, x, y, true)}
       data-nodetoolbar="1"
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
