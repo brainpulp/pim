@@ -361,6 +361,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [confirmDeleteImage, setConfirmDeleteImage] = useState(null) // imageId or null
   const [confirmDeleteImages, setConfirmDeleteImages] = useState(null) // string[] | null
   const [confirmDeleteNodes, setConfirmDeleteNodes] = useState(null)   // string[] | null (multi-node)
+  const [propFilter, setPropFilter] = useState(null)    // { propId, value } — non-destructive graph filter
   const [searchOpen, setSearchOpen] = useState(false)   // Cmd/Ctrl+K node spotlight
   const [searchQuery, setSearchQuery] = useState('')
   const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
@@ -613,8 +614,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (expandHops !== null) {
       ;[...base].forEach(id => { if (expandHops[id] === undefined) base.delete(id) })
     }
+    // Non-destructive property filter — removes non-matching nodes from the visible set
+    // (no data mutation; clearing the filter restores everything).
+    if (propFilter) {
+      const def = storePropertyDefs.find(d => d.id === propFilter.propId)
+      if (def) {
+        const pmap = Object.fromEntries(storeNodes.map(n => [n.id, n.props]))
+        const matches = id => {
+          const val = pmap[id]?.[propFilter.propId]
+          if (propFilter.value === '__any__') return val != null && val !== '' && !(Array.isArray(val) && val.length === 0)
+          if (def.type === 'multiSelect') return Array.isArray(val) && val.includes(propFilter.value)
+          if (def.type === 'checkbox') return !!val === !!propFilter.value
+          return val === propFilter.value
+        }
+        ;[...base].forEach(id => { if (!matches(id)) base.delete(id) })
+      }
+    }
     return base
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds])
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, propFilter, storePropertyDefs])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
 
@@ -2700,6 +2717,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           </button>
         )}
 
+        {/* Property filter (non-destructive) — top-right */}
+        {!isPresenting && (storePropertyDefs.length > 0 || propFilter) && (
+          <div style={{ position:'absolute', top:'0.75rem', right:'0.75rem', zIndex:20 }}>
+            <FilterControl defs={storePropertyDefs} filter={propFilter} onSet={setPropFilter} onClear={() => setPropFilter(null)} />
+          </div>
+        )}
+
         {/* Build timestamp â€" bottom right */}
         {!isPresenting && <div style={{ position:'absolute', bottom:'0.5rem', right:'0.75rem', zIndex:20, fontSize:'0.62rem', color:'#7080a0', fontFamily:'monospace', userSelect:'none' }}>
           {new Date(__BUILD_TIME__).toISOString().slice(0,16).replace('T',' ')}
@@ -3953,6 +3977,66 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
 
     </g>
   )
+}
+
+// Non-destructive graph filter control (property → value); clears back to full view.
+function FilterControl({ defs, filter, onSet, onClear }) {
+  const [open, setOpen] = useState(false)
+  const [propId, setPropId] = useState(null)
+  const activeDef = defs.find(d => d.id === filter?.propId)
+  const valLabel = (def, value) => {
+    if (value === '__any__') return 'any value'
+    if (!def) return String(value)
+    if (def.type === 'checkbox') return 'checked'
+    if (def.type === 'select' || def.type === 'multiSelect') return (def.options || []).find(o => o.id === value)?.name || String(value)
+    return String(value)
+  }
+  if (filter) {
+    return (
+      <div style={fc.pill}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>🔍 {activeDef?.name}: {valLabel(activeDef, filter.value)}</span>
+        <span style={fc.x} onClick={onClear} title="Clear filter">✕</span>
+      </div>
+    )
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <button style={fc.btn} onClick={() => { setOpen(o => !o); setPropId(null) }}>🔍 Filter</button>
+      {open && (<>
+        <div style={fc.backdrop} onClick={() => setOpen(false)} />
+        <div style={fc.menu} onClick={e => e.stopPropagation()}>
+          {!propId ? (
+            defs.length ? defs.map(d => <div key={d.id} style={fc.item} onClick={() => setPropId(d.id)}>{d.name} <span style={{ marginLeft: 'auto', color: '#7080a0' }}>›</span></div>)
+              : <div style={{ ...fc.item, color: '#8090b8' }}>No properties yet</div>
+          ) : (() => {
+            const d = defs.find(x => x.id === propId); if (!d) return null
+            const vals = []
+            if (d.type === 'select' || d.type === 'multiSelect') (d.options || []).forEach(o => vals.push({ label: o.name, value: o.id, color: o.color }))
+            else if (d.type === 'checkbox') vals.push({ label: 'Checked', value: true })
+            vals.push({ label: 'Has any value', value: '__any__' })
+            return (<>
+              <div style={fc.back} onClick={() => setPropId(null)}>‹ {d.name}</div>
+              {vals.map((v, i) => (
+                <div key={i} style={fc.item} onClick={() => { onSet({ propId: d.id, value: v.value }); setOpen(false) }}>
+                  {v.color && <span style={{ ...fc.dot, background: v.color }} />}{v.label}
+                </div>
+              ))}
+            </>)
+          })()}
+        </div>
+      </>)}
+    </div>
+  )
+}
+const fc = {
+  btn: { background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, cursor: 'pointer', fontSize: '0.76rem', padding: '4px 10px' },
+  pill: { display: 'flex', alignItems: 'center', gap: 8, background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 6, fontSize: '0.76rem', padding: '4px 10px' },
+  x: { cursor: 'pointer', color: '#f87171', fontWeight: 700 },
+  backdrop: { position: 'fixed', inset: 0, zIndex: 40 },
+  menu: { position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 41, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 190, maxHeight: '50vh', overflowY: 'auto', boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
+  item: { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
+  back: { padding: '5px 12px', fontSize: '0.72rem', color: '#8090b8', cursor: 'pointer' },
+  dot: { width: 10, height: 10, borderRadius: '50%', flexShrink: 0 },
 }
 
 function EyeIcon() {
