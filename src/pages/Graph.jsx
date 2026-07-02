@@ -446,6 +446,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setNodeProp     = useGraphStore(s => s.setNodeProp)
   const addPropertyDef  = useGraphStore(s => s.addPropertyDef)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
+  const updatePropertyDef = useGraphStore(s => s.updatePropertyDef)
   const activeViewId    = useGraphStore(s => s.activeViewId)
   const views           = useGraphStore(s => s.views)
   const addNode         = useGraphStore(s => s.addNode)
@@ -618,6 +619,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   visibleNodeIdsRef.current = visibleNodeIds
 
   const nodesWithChildren = useMemo(() => new Set(storeEdges.map(e => e.source)), [storeEdges])
+  // node.props by id — sim nodes don't carry props, so look them up for on-canvas chips
+  const propsById = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.props || null])), [storeNodes])
   const collapsedSet = useMemo(() => new Set(collapsedNodeIds), [collapsedNodeIds])
 
   const scheduleRender = useCallback(() => {
@@ -2238,6 +2241,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onScaleMouseDown={handleScaleMouseDown}
                 onBoxScaleMouseDown={handleBoxScaleMouseDown}
                 zoomK={T.k}
+                propertyDefs={storePropertyDefs}
+                nodeProps={propsById[n.id]}
                 onSetLabelWidth={handleLabelWidthMouseDown}
                 onResetLabelWidth={id => setNodeViewProp(id, 'labelWidth', null)}
                 onDelete={id => setConfirmDelete(id)}
@@ -2525,6 +2530,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetNodeProp={(propId, value) => setNodeProp(hn.id, propId, value)}
               onAddPropertyDef={type => addPropertyDef(type)}
               onAddSelectOption={(propId, name, color) => addSelectOption(propId, name, color)}
+              onTogglePropChip={propId => { const d = storePropertyDefs.find(p => p.id === propId); updatePropertyDef(propId, { showChip: !d?.showChip }) }}
               depthExpand={depthExpand?.nodeId === hn.id ? depthExpand : null}
               onSetDepthExpand={setDepthExpand}
               maxExpandRadius={maxExpandRadius}
@@ -3350,7 +3356,7 @@ function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isAct
 
 // â"€â"€â"€ NodeShape â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, zoomK, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, zoomK, propertyDefs, nodeProps, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [croppingImgId, setCroppingImgId] = useState(null)
@@ -3405,6 +3411,19 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   // by 1/zoom to keep them ~constant on screen, clamped so they don't balloon when zoomed in
   // or dwarf a node when zoomed way out.
   const hz = Math.min(2.5, Math.max(0.4, 1 / (zoomK || 1)))
+  // On-canvas property chips — only properties flagged showChip that have a value here.
+  const chips = []
+  if (nodeProps && propertyDefs) {
+    for (const def of propertyDefs) {
+      if (!def.showChip) continue
+      const v = nodeProps[def.id]
+      if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) continue
+      if (def.type === 'select') { const o = (def.options || []).find(o => o.id === v); if (o) chips.push({ text: o.name, color: o.color || '#6366f1' }) }
+      else if (def.type === 'multiSelect') { (Array.isArray(v) ? v : []).forEach(id => { const o = (def.options || []).find(o => o.id === id); if (o) chips.push({ text: o.name, color: o.color || '#6366f1' }) }) }
+      else if (def.type === 'checkbox') { if (v) chips.push({ text: def.name, color: '#22c55e' }) }
+      else chips.push({ text: def.type === 'url' ? '🔗 link' : String(v), color: '#5b6af0' })
+    }
+  }
   const isAutoSized = shape === 'roundrect' || shape === 'rect'
   const { halfW, halfH } = shapeDims(shape, r, node.label, baseFontSize, viewProps.labelWidth)
   const isRound = shape === 'ellipse' || shape === 'circle' || shape === 'diamond'
@@ -3811,6 +3830,20 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
       )}
       </AnimatedG>
 
+      {/* On-canvas property chips (properties flagged "Show on canvas") */}
+      {chips.length > 0 && (
+        <foreignObject x={-Math.max(bodyHalfW, 80)} y={bodyHalfH + 4} width={Math.max(bodyHalfW * 2, 160)} height={72}
+          style={{ pointerEvents: 'none', overflow: 'visible' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, justifyContent: 'center' }}>
+            {chips.map((c, i) => (
+              <span key={i} style={{ fontSize: 9, lineHeight: 1.35, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+                background: c.color + '33', border: `1px solid ${c.color}`, color: '#e6ebff',
+                fontFamily: '-apple-system, sans-serif', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.text}</span>
+            ))}
+          </div>
+        </foreignObject>
+      )}
+
       {/* Edit input — for 3D nodes render at caption position below box (inside box is covered by 3D div) */}
       {editing && (() => {
         const foX = -halfW
@@ -3957,7 +3990,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption }) {
+  propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [notesDraft, setNotesDraft] = useState(notes)
@@ -4103,7 +4136,13 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           )}
           {propertyDefs.map(def => (
             <div key={def.id} style={{ display:'flex', flexDirection:'column', gap:2 }}>
-              <span style={{ fontSize:'0.62rem', color:'#8090b8', letterSpacing:'0.04em' }}>{def.name}</span>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
+                <span style={{ fontSize:'0.62rem', color:'#8090b8', letterSpacing:'0.04em' }}>{def.name}</span>
+                <button title="Show as a chip on the node" onClick={() => onTogglePropChip?.(def.id)}
+                  style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'0.6rem', color: def.showChip ? '#88b4e8' : '#7080a0' }}>
+                  {def.showChip ? '◉ on canvas' : '○ on canvas'}
+                </button>
+              </div>
               <div style={{ border:'1px solid #2a3358', borderRadius:5, padding:'3px 7px', minHeight:24, display:'flex', alignItems:'center' }}>
                 <PropertyField def={def} value={nodeProps[def.id]}
                   onChange={v => onSetNodeProp?.(def.id, v)}

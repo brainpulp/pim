@@ -55,6 +55,7 @@ export default function Table({ projectId }) {
                   <ColumnHeader def={def}
                     onRename={name => updatePropertyDef(def.id, { name })}
                     onRetype={type => updatePropertyDef(def.id, { type, ...(type === 'select' || type === 'multiSelect' ? { options: def.options || [] } : {}) })}
+                    onToggleChip={() => updatePropertyDef(def.id, { showChip: !def.showChip })}
                     onDelete={() => deletePropertyDef(def.id)}
                     open={menuCol === def.id}
                     setOpen={o => setMenuCol(o ? def.id : null)}
@@ -103,7 +104,7 @@ export default function Table({ projectId }) {
   )
 }
 
-function ColumnHeader({ def, onRename, onRetype, onDelete, open, setOpen }) {
+function ColumnHeader({ def, onRename, onRetype, onToggleChip, onDelete, open, setOpen }) {
   const [editing, setEditing] = useState(false)
   const typeIcon = PROP_TYPES.find(t => t.type === def.type)?.icon || 'T'
   return (
@@ -131,6 +132,9 @@ function ColumnHeader({ def, onRename, onRetype, onDelete, open, setOpen }) {
               </div>
             ))}
             <div style={styles.menuDivider} />
+            <div style={styles.menuItem} onClick={() => { onToggleChip(); setOpen(false) }}>
+              <span style={{ width: 16, display: 'inline-block', color: '#88b4e8' }}>{def.showChip ? '✓' : ''}</span> Show on canvas
+            </div>
             <div style={{ ...styles.menuItem, color: '#f87171' }} onClick={() => { onDelete(); setOpen(false) }}>Delete property</div>
           </div>
         </>
