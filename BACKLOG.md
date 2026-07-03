@@ -81,7 +81,13 @@ encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (the
   labels for the focus's children, node fill from the active view's colors. Read-only explorer. **TODO:** wire the
   size-by (Number) picker into the tab UI (the prop exists, `sizeBy`, but there's no control yet) and hand-check on a
   real project. · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
-  hierarchy). NEXT — reuses `hierarchy.js`.
+  hierarchy). **SHIPPED** as a new top-level **radial** tab. `src/pages/RadialView.jsx`: d3.cluster + d3.linkRadial,
+  scroll-zoom / drag-pan (d3.zoom), a source selector (Hierarchy edges **or** group-by-tag → the tag→nodes tree with
+  multi-tag mirrors), node fill from active-view colors. Read-only. **TODO:** hand-check label crowding on big trees.
+
+**All three requested views (2026-07-03) shipped.** Remaining polish across the set: force/label tuning, a size-by
+control in the pack tab, kanban (Phase C), and letting these views participate in per-view layout (`view.layout`)
+rather than being global tabs, if that's wanted.
 
 **Progress:** A (Slice 1 + 2) **shipped, needs hands-on tuning** — top-right **▦ Organize** control groups by any
 Select/Tags/Checkbox property. Force-clusters visible nodes into a grid of dashed "bubble" cells (labelled + count),
