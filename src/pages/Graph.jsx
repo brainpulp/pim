@@ -226,6 +226,26 @@ function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
   )
 }
 
+// ─── Encoding resolvers (shared by render + sim) ──────────────────────────────
+// Map a node's property value to a visual channel. Pure; encoded value overrides the
+// manual one at the render boundary only (never persisted).
+function encodedScaleFor(props, sizeBy, domain) {
+  if (!sizeBy || !domain || !props) return null
+  const v = Number(props[sizeBy])
+  if (!Number.isFinite(v)) return null
+  const [mn, mx] = domain
+  const t = mx > mn ? (v - mn) / (mx - mn) : 0.5
+  return 0.6 + t * 1.8   // scale 0.6 → 2.4
+}
+function encodedColorFor(props, colorBy, defs) {
+  if (!colorBy || !props) return null
+  const def = defs.find(d => d.id === colorBy)
+  if (!def) return null
+  const raw = props[colorBy]
+  const optId = Array.isArray(raw) ? raw[0] : raw
+  return def.options?.find(o => o.id === optId)?.color || null
+}
+
 function alignImages(images, selectedIds, anchor) {
   const sel = images.filter(i => selectedIds.has(i.id))
   if (sel.length === 0) return []
@@ -652,6 +672,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const propsById = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.props || null])), [storeNodes])
   const collapsedSet = useMemo(() => new Set(collapsedNodeIds), [collapsedNodeIds])
 
+  // Domain [min,max] of the size-encoding Number property across all nodes.
+  const sizeDomain = useMemo(() => {
+    if (!organize?.sizeBy) return null
+    let mn = Infinity, mx = -Infinity
+    storeNodes.forEach(n => {
+      const v = Number(n.props?.[organize.sizeBy])
+      if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v }
+    })
+    return mn <= mx ? [mn, mx] : null
+  }, [organize?.sizeBy, storeNodes])
+  const sizeDomainRef = useRef(sizeDomain)
+  sizeDomainRef.current = sizeDomain
+
+  // View props with encodings applied (color/size from properties) while organizing.
+  // Purely visual — the manual fillColor/scale stay underneath and return when Done.
+  const resolveVP = useCallback((nodeId) => {
+    const base = getVP(nodeId)
+    if (!organize) return base
+    const props = propsById[nodeId]
+    if (!props) return base
+    let out = base
+    const col = encodedColorFor(props, organize.colorBy, storePropertyDefs)
+    if (col) out = { ...out, fillColor: col }
+    const sc = encodedScaleFor(props, organize.sizeBy, sizeDomain)
+    if (sc != null) out = { ...out, scale: sc }
+    return out
+  }, [getVP, organize, propsById, storePropertyDefs, sizeDomain])
+
   const scheduleRender = useCallback(() => {
     if (frameRef.current) return
     frameRef.current = requestAnimationFrame(() => { frameRef.current = null; setTick(t => t + 1) })
@@ -752,16 +800,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!byKey[k]) { byKey[k] = []; keys.push(k) }
         byKey[k].push(sn.id)
       })
-      // Lay group cells out on a grid. Anchor the grid's world rect ONCE per session (first
-      // activation or when groupBy changes) so later property edits don't drift the cells if the
-      // user has panned. Re-runs on node edits reuse the stored rect.
-      const cols = Math.max(1, Math.ceil(Math.sqrt(keys.length)))
-      const rows = Math.max(1, Math.ceil(keys.length / cols))
-      const fresh = !organizeActiveRef.current || organizeSessionRef.current?.groupBy !== groupBy
+      // Lay groups out. Pack = grid of cells; Lanes = one vertical band per group.
+      // Anchor the world rect ONCE per session (first activation, or when groupBy/layout changes)
+      // so later property edits don't drift it if the user has panned.
+      const isLanes = organize.layout === 'lanes'
+      const cols = isLanes ? Math.max(1, keys.length) : Math.max(1, Math.ceil(Math.sqrt(keys.length)))
+      const rows = isLanes ? 1 : Math.max(1, Math.ceil(keys.length / cols))
+      const fresh = !organizeActiveRef.current
+        || organizeSessionRef.current?.groupBy !== groupBy
+        || organizeSessionRef.current?.layout !== organize.layout
       if (fresh) {
         const T = zoomTransformRef.current
         organizeSessionRef.current = {
-          groupBy,
+          groupBy, layout: organize.layout,
           worldW: W / T.k, worldH: H / T.k,
           originX: -T.x / T.k, originY: -T.y / T.k,
         }
@@ -774,21 +825,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const colorFor = (k) => k === '__empty__' ? '#3a4358' : (def?.options?.find(o => o.id === k)?.color || '#5b6af0')
       const groups = keys.map((k, i) => {
         const cx = originX + (i % cols) * cellW + cellW / 2
-        const cy = originY + Math.floor(i / cols) * cellH + cellH / 2
-        return { key: k, cx, cy, label: labelFor(k), color: colorFor(k), count: byKey[k].length,
-          rx: Math.max(60, cellW * 0.42), ry: Math.max(50, cellH * 0.42) }
+        const cy = isLanes ? originY + worldH / 2 : originY + Math.floor(i / cols) * cellH + cellH / 2
+        const g = { key: k, cx, cy, label: labelFor(k), color: colorFor(k), count: byKey[k].length, layout: organize.layout }
+        if (isLanes) {
+          const pad = Math.min(22, cellW * 0.06)
+          g.laneRect = { x: originX + i * cellW + pad, y: originY + 6, w: cellW - 2 * pad, h: worldH - 12 }
+          g.rx = Math.max(40, cellW * 0.42); g.ry = worldH * 0.46
+        } else {
+          g.rx = Math.max(60, cellW * 0.42); g.ry = Math.max(50, cellH * 0.42)
+        }
+        return g
       })
       const targets = {}
       groups.forEach(g => byKey[g.key].forEach(id => { targets[id] = { x: g.cx, y: g.cy } }))
       organizeTargetsRef.current = targets
       organizeActiveRef.current = true
       setOrganizeGroups(groups)
-      // Free live positions so nodes can migrate; pull toward group centroids.
+      // Free live positions so nodes can migrate; pull toward group centroids / lane bands.
       simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
       sim.force('link', null)
-      sim.force('charge', d3.forceManyBody().strength(-40))
-      sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(0.14))
-      sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(0.14))
+      sim.force('charge', d3.forceManyBody().strength(isLanes ? -18 : -40))
+      sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(isLanes ? 0.5 : 0.14))
+      sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(isLanes ? 0.04 : 0.14))
+      // Collide by encoded (or manual) radius so size-encoded nodes don't overlap.
+      sim.force('collide', d3.forceCollide(n => {
+        const p = nodeById[n.id]?.props
+        const enc = encodedScaleFor(p, organize.sizeBy, sizeDomainRef.current)
+        const scale = enc ?? (viewNodePropsRef.current[n.id]?.scale || 1)
+        return NODE_R * scale + 5
+      }).strength(0.9))
       sim.alpha(0.7).restart()
     } else if (organizeActiveRef.current) {
       // Exit: drop grouping forces, restore mind-map forces + anchors from the store.
@@ -798,6 +863,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       sim.force('cluster-x', null)
       sim.force('cluster-y', null)
       sim.force('charge', d3.forceManyBody().strength(-300))
+      sim.force('collide', d3.forceCollide(NODE_R + 8))
       sim.force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
       const vp = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.nodeProps || {}
       simNodesRef.current.forEach(n => { const p = vp[n.id] || {}; n.fx = p.fx ?? null; n.fy = p.fy ?? null })
@@ -2236,16 +2302,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}
             style={readOnly ? { pointerEvents: 'none' } : undefined}>
-            {/* 0. Organize group bubbles (behind everything; non-interactive) */}
+            {/* 0. Organize group bubbles / lanes (behind everything; non-interactive) */}
             {organize && organizeGroups.map(g => (
               <g key={g.key} style={{ pointerEvents: 'none' }}>
-                <ellipse cx={g.cx} cy={g.cy} rx={g.rx} ry={g.ry}
-                  fill={g.color + '14'} stroke={g.color + '66'} strokeWidth={1.5} strokeDasharray="6 5" />
-                <text x={g.cx} y={g.cy - g.ry - 8} textAnchor="middle"
-                  fontSize={14} fontWeight={600} fill={g.color}
-                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 3 }}>
-                  {g.label} · {g.count}
-                </text>
+                {g.laneRect ? (
+                  <>
+                    <rect x={g.laneRect.x} y={g.laneRect.y} width={g.laneRect.w} height={g.laneRect.h} rx={14}
+                      fill={g.color + '10'} stroke={g.color + '55'} strokeWidth={1.5} strokeDasharray="6 5" />
+                    <text x={g.cx} y={g.laneRect.y + 20} textAnchor="middle"
+                      fontSize={14} fontWeight={600} fill={g.color}
+                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 3 }}>
+                      {g.label} · {g.count}
+                    </text>
+                  </>
+                ) : (
+                  <>
+                    <ellipse cx={g.cx} cy={g.cy} rx={g.rx} ry={g.ry}
+                      fill={g.color + '14'} stroke={g.color + '66'} strokeWidth={1.5} strokeDasharray="6 5" />
+                    <text x={g.cx} y={g.cy - g.ry - 8} textAnchor="middle"
+                      fontSize={14} fontWeight={600} fill={g.color}
+                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 3 }}>
+                      {g.label} · {g.count}
+                    </text>
+                  </>
+                )}
               </g>
             ))}
             {/* 1. Frame containers */}
@@ -2382,7 +2462,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <NodeShape key={n.id} node={n}
                 modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
-                viewProps={getVP(n.id)}
+                viewProps={resolveVP(n.id)}
                 isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
                 isHovered={hoveredNodeId === n.id}
                 isDropTarget={dragHoverNodeId === n.id}
@@ -4194,17 +4274,44 @@ const fc = {
   dot: { width: 10, height: 10, borderRadius: '50%', flexShrink: 0 },
 }
 
-// Organize = force-cluster ("pack") nodes into cells by a select/tag/checkbox property.
-// Non-destructive: computes positions live, never writes fx/fy. "Done" restores the mind map.
+// Organize = force-cluster nodes into groups by a select/tag/checkbox property. Two layouts:
+// Pack (grid of cells) and Lanes (one vertical band per group). Optional Size (←Number) and
+// Color (←Select) encodings. Non-destructive: computes positions live, never writes fx/fy;
+// encodings are visual-only. "Done" restores the mind map.
 function OrganizeControl({ defs, organize, onSet, onClear }) {
   const [open, setOpen] = useState(false)
   const groupable = defs.filter(d => d.type === 'select' || d.type === 'multiSelect' || d.type === 'checkbox')
+  const numberDefs = defs.filter(d => d.type === 'number')
+  const colorDefs = defs.filter(d => d.type === 'select' || d.type === 'multiSelect')
   const activeDef = defs.find(d => d.id === organize?.groupBy)
+
   if (organize) {
+    const set = patch => onSet({ ...organize, ...patch })
+    const tab = (val, cur, label) => (
+      <div onClick={() => set({ layout: val })}
+        style={{ ...oc.tab, ...(cur === val ? oc.tabOn : null) }}>{label}</div>
+    )
     return (
-      <div style={{ ...fc.pill, background: '#173a2a', border: '1px solid #2f7a55' }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>▦ Grouped by {activeDef?.name || '—'}</span>
-        <span style={fc.x} onClick={onClear} title="Back to mind map">✕</span>
+      <div style={{ position: 'relative' }}>
+        <div style={{ ...fc.pill, background: '#173a2a', border: '1px solid #2f7a55', cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+            {organize.layout === 'lanes' ? '☰' : '▦'} {activeDef?.name || '—'}
+          </span>
+          <span style={{ color: '#7fd8a8' }}>⚙</span>
+          <span style={fc.x} onClick={e => { e.stopPropagation(); onClear() }} title="Back to mind map">✕</span>
+        </div>
+        {open && (<>
+          <div style={fc.backdrop} onClick={() => setOpen(false)} />
+          <div style={{ ...fc.menu, minWidth: 210 }} onClick={e => e.stopPropagation()}>
+            <div style={oc.label}>Layout</div>
+            <div style={oc.tabRow}>{tab('pack', organize.layout, '▦ Pack')}{tab('lanes', organize.layout, '☰ Lanes')}</div>
+            <PickRow label="Group by" defs={groupable} value={organize.groupBy} onPick={id => set({ groupBy: id })} />
+            <PickRow label="Size by" defs={numberDefs} value={organize.sizeBy} clearable onPick={id => set({ sizeBy: id })} empty="No Number property" />
+            <PickRow label="Color by" defs={colorDefs} value={organize.colorBy} clearable onPick={id => set({ colorBy: id })} empty="No Select property" />
+            <div style={{ borderTop: '1px solid #2a3358', margin: '5px 0' }} />
+            <div style={{ ...fc.item, color: '#7fd8a8', fontWeight: 600 }} onClick={() => { onClear(); setOpen(false) }}>✓ Done (back to mind map)</div>
+          </div>
+        </>)}
       </div>
     )
   }
@@ -4214,14 +4321,38 @@ function OrganizeControl({ defs, organize, onSet, onClear }) {
       {open && (<>
         <div style={fc.backdrop} onClick={() => setOpen(false)} />
         <div style={fc.menu} onClick={e => e.stopPropagation()}>
-          <div style={{ padding: '4px 12px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' }}>Group by</div>
+          <div style={oc.label}>Group by</div>
           {groupable.length
-            ? groupable.map(d => <div key={d.id} style={fc.item} onClick={() => { onSet({ groupBy: d.id }); setOpen(false) }}>{d.name}</div>)
+            ? groupable.map(d => <div key={d.id} style={fc.item} onClick={() => { onSet({ groupBy: d.id, layout: 'pack', sizeBy: null, colorBy: null }); setOpen(false) }}>{d.name}</div>)
             : <div style={{ ...fc.item, color: '#8090b8' }}>Add a Select, Tags, or Checkbox property first</div>}
         </div>
       </>)}
     </div>
   )
+}
+// A labelled radio-style picker row used inside the Organize settings popover.
+function PickRow({ label, defs, value, onPick, clearable, empty }) {
+  return (
+    <>
+      <div style={oc.label}>{label}</div>
+      {defs.length ? (
+        <>
+          {clearable && <div style={{ ...fc.item, color: value ? '#8090b8' : '#c5d0ff' }} onClick={() => onPick(null)}>{!value && '✓ '}None</div>}
+          {defs.map(d => (
+            <div key={d.id} style={{ ...fc.item, color: value === d.id ? '#fff' : '#c5d0ff' }} onClick={() => onPick(d.id)}>
+              {value === d.id && '✓ '}{d.name}
+            </div>
+          ))}
+        </>
+      ) : <div style={{ ...fc.item, color: '#8090b8', fontSize: '0.74rem' }}>{empty || 'None available'}</div>}
+    </>
+  )
+}
+const oc = {
+  label: { padding: '5px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
+  tabRow: { display: 'flex', gap: 4, padding: '2px 10px 6px' },
+  tab: { flex: 1, textAlign: 'center', padding: '4px 6px', fontSize: '0.76rem', color: '#c5d0ff', border: '1px solid #2d3a6a', borderRadius: 5, cursor: 'pointer' },
+  tabOn: { background: '#1f4a35', borderColor: '#2f7a55', color: '#fff' },
 }
 
 function EyeIcon() {

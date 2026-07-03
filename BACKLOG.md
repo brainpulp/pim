@@ -67,6 +67,20 @@ manual value; manual value **preserved underneath** (turning the encoding off re
 **Build order:** A) Pack + drag-to-reassign (single-select groupBy, computed positions, autoFit) · B) visual
 encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (then optional blobs).
 
+**More views requested (2026-07-03) — two families:**
+- **Projection layouts** (ride the force sim + pan/zoom + NodeShape): mindmap · pack/organize (done) · kanban ·
+  **lanes/bubble** (ref: armollica `2dcfd66a`) = dots in lanes by a category, radius←Number, fill←Select.
+  **SHIPPED** — the ▦ Organize control now has a ⚙ settings popover: Layout **Pack | Lanes**, Group by, **Size by**
+  (Number → radius), **Color by** (Select → fill). Encodings are the shared resolver (`encodedScaleFor` /
+  `encodedColorFor`), visual-only (manual scale/color restored on Done), and drive the collide radius so sized
+  nodes don't overlap. Still needs hands-on force tuning + a real dataset check.
+- **Computed hierarchy layouts** (bypass the force sim; `d3.hierarchy` → static positions inside the same zoom `<g>`):
+  **zoomable circle packing** (ref: mbostock/1747543 — click a circle to zoom in, background to zoom out; needs its
+  own zoom-to-node transition separate from d3 pan) · **radial dendrogram** (ref: mbostock/4339607 — tree drawn
+  radially; can also be fed a *tag→nodes* synthetic hierarchy for "structured tag views"). Build circle-packing first
+  to establish the non-force render path; the dendrogram then reuses it. Leaf size / circle radius can map to a Number
+  property or descendant count via the shared resolver.
+
 **Progress:** A (Slice 1 + 2) **shipped, needs hands-on tuning** — top-right **▦ Organize** control groups by any
 Select/Tags/Checkbox property. Force-clusters visible nodes into a grid of dashed "bubble" cells (labelled + count),
 non-destructive (never writes `fx/fy`; **Done** ✕ restores the mind map exactly). Dragging a node into a cell writes
