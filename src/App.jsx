@@ -5,6 +5,7 @@ import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
 import Table from './pages/Table'
+import PackView from './pages/PackView'
 import SharedView from './pages/SharedView'
 import ShareDialog from './components/ShareDialog'
 
@@ -122,7 +123,7 @@ export default function App() {
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {['graph', 'table'].map(v => (
+          {['graph', 'table', 'pack'].map(v => (
             <button
               key={v}
               style={{ ...navBtnStyle, ...(view === v ? navBtnActiveStyle : {}) }}
@@ -153,6 +154,7 @@ export default function App() {
           </AppErrorBoundary>
         )}
         {view === 'table' && <Table projectId={project.id} />}
+        {view === 'pack' && <AppErrorBoundary><PackView /></AppErrorBoundary>}
       </div>
     </div>
   )

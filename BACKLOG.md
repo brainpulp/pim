@@ -74,12 +74,14 @@ encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (the
   (Number → radius), **Color by** (Select → fill). Encodings are the shared resolver (`encodedScaleFor` /
   `encodedColorFor`), visual-only (manual scale/color restored on Done), and drive the collide radius so sized
   nodes don't overlap. Still needs hands-on force tuning + a real dataset check.
-- **Computed hierarchy layouts** (bypass the force sim; `d3.hierarchy` → static positions inside the same zoom `<g>`):
-  **zoomable circle packing** (ref: mbostock/1747543 — click a circle to zoom in, background to zoom out; needs its
-  own zoom-to-node transition separate from d3 pan) · **radial dendrogram** (ref: mbostock/4339607 — tree drawn
-  radially; can also be fed a *tag→nodes* synthetic hierarchy for "structured tag views"). Build circle-packing first
-  to establish the non-force render path; the dendrogram then reuses it. Leaf size / circle radius can map to a Number
-  property or descendant count via the shared resolver.
+- **Computed hierarchy layouts** (bypass the force sim; own full-page view, `d3.hierarchy`):
+  **zoomable circle packing** (ref: mbostock/1747543) — **SHIPPED** as a new top-level **pack** tab. `src/pages/PackView.jsx`
+  + shared `src/lib/hierarchy.js` (`buildTree` projects the edge DAG to a strict tree: first-parent-wins, cycles broken,
+  orphans re-attached; `buildTagTree` for the radial tag view). d3.pack, CSS-transform click-to-zoom (Esc / ← to go up),
+  labels for the focus's children, node fill from the active view's colors. Read-only explorer. **TODO:** wire the
+  size-by (Number) picker into the tab UI (the prop exists, `sizeBy`, but there's no control yet) and hand-check on a
+  real project. · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
+  hierarchy). NEXT — reuses `hierarchy.js`.
 
 **Progress:** A (Slice 1 + 2) **shipped, needs hands-on tuning** — top-right **▦ Organize** control groups by any
 Select/Tags/Checkbox property. Force-clusters visible nodes into a grid of dashed "bubble" cells (labelled + count),
