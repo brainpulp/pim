@@ -78,9 +78,8 @@ encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (the
   **zoomable circle packing** (ref: mbostock/1747543) — **SHIPPED** as a new top-level **pack** tab. `src/pages/PackView.jsx`
   + shared `src/lib/hierarchy.js` (`buildTree` projects the edge DAG to a strict tree: first-parent-wins, cycles broken,
   orphans re-attached; `buildTagTree` for the radial tag view). d3.pack, CSS-transform click-to-zoom (Esc / ← to go up),
-  labels for the focus's children, node fill from the active view's colors. Read-only explorer. **TODO:** wire the
-  size-by (Number) picker into the tab UI (the prop exists, `sizeBy`, but there's no control yet) and hand-check on a
-  real project. · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
+  labels for the focus's children, node fill from the active view's colors. Read-only explorer. Now has a **size-by**
+  control (Item count, or any Number property → circle area). Hand-check still pending on a real project. · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
   hierarchy). **SHIPPED** as a new top-level **radial** tab. `src/pages/RadialView.jsx`: d3.cluster + d3.linkRadial,
   scroll-zoom / drag-pan (d3.zoom), a source selector (Hierarchy edges **or** group-by-tag → the tag→nodes tree with
   multi-tag mirrors), node fill from active-view colors. Read-only. **TODO:** hand-check label crowding on big trees.

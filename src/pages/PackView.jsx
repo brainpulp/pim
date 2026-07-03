@@ -11,11 +11,17 @@ import { buildTree } from '../lib/hierarchy'
 const D = 932                      // world size of the pack square (SVG viewBox)
 const DEPTH_FILL = ['#12122a', '#1b2452', '#26346f', '#33459a', '#4557c0', '#6f7fe0']
 
-export default function PackView({ sizeBy = null }) {
+export default function PackView() {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
   const views = useGraphStore(s => s.views)
   const activeViewId = useGraphStore(s => s.activeViewId)
+  const propertyDefs = useGraphStore(s => s.propertyDefs)
+  const numberDefs = propertyDefs.filter(d => d.type === 'number')
+
+  const [sizeBy, setSizeBy] = useState(null)   // null = size by item count, else a Number propId
+  const [menuOpen, setMenuOpen] = useState(false)
+  const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
 
   const fillColorOf = useMemo(() => {
     const np = views.find(v => v.id === activeViewId)?.nodeProps || {}
@@ -54,7 +60,20 @@ export default function PackView({ sizeBy = null }) {
       {f !== root && (
         <button style={styles.back} onClick={zoomOut}>← {f.parent && f.parent !== root ? trim(f.parent.data.label, 24) : 'Up'}</button>
       )}
-      <div style={styles.hint}>{sizeBy ? 'size = property' : 'size = items'} · click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
+      <div style={{ position: 'absolute', top: 12, left: f !== root ? 150 : 12, zIndex: 5 }}>
+        <button style={styles.btn} onClick={() => setMenuOpen(o => !o)}>⬡ size: {trim(sizeLabel, 16)} ▾</button>
+        {menuOpen && (<>
+          <div style={styles.backdrop} onClick={() => setMenuOpen(false)} />
+          <div style={styles.menu} onClick={e => e.stopPropagation()}>
+            <div style={{ ...styles.item, color: !sizeBy ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(null); setMenuOpen(false) }}>{!sizeBy && '✓ '}Item count</div>
+            <div style={styles.mlabel}>By Number property</div>
+            {numberDefs.length ? numberDefs.map(d => (
+              <div key={d.id} style={{ ...styles.item, color: sizeBy === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(d.id); setMenuOpen(false) }}>{sizeBy === d.id && '✓ '}{d.name}</div>
+            )) : <div style={{ ...styles.item, color: '#8090b8', fontSize: '0.74rem' }}>No Number property</div>}
+          </div>
+        </>)}
+      </div>
+      <div style={styles.hint}>click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
       <svg viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}
         onClick={zoomOut}>
         <g style={{ transform, transformBox: 'view-box', transformOrigin: '0 0', transition: 'transform 680ms cubic-bezier(0.22,0.61,0.36,1)' }}>
@@ -97,4 +116,9 @@ const styles = {
   back: { position: 'absolute', top: 12, left: 12, zIndex: 5, background: 'rgba(18,18,42,0.9)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.85rem' },
   hint: { position: 'absolute', top: 14, right: 16, zIndex: 5, color: '#8090b8', fontSize: '0.72rem', userSelect: 'none' },
   empty: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: '0.9rem', pointerEvents: 'none' },
+  btn: { background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem' },
+  backdrop: { position: 'fixed', inset: 0, zIndex: 6 },
+  menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 190, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
+  item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
+  mlabel: { padding: '5px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
 }
