@@ -6,7 +6,10 @@ import { buildTree, buildTagTree } from '../lib/hierarchy'
 // Radial cluster dendrogram (ref: mbostock/4339607). Two sources:
 //  • Tree   — the mind-map hierarchy (edges), first-parent-wins.
 //  • by <tag> — a synthetic root → option → member-nodes hierarchy (structured tag view).
-// Read-only explorer. Scroll to zoom, drag to pan. Reads the store, writes nothing.
+// Read-only explorer. Scroll to zoom, drag to pan; CLICK a node to spin it to the top and
+// zoom in on it. Node fill/stroke mirror the active view. Reads the store, writes nothing.
+
+const mod2pi = a => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
 
 const SIZE = 1000
 const R = SIZE / 2 - 120   // leave room for outer labels
@@ -22,18 +25,21 @@ export default function RadialView() {
   const [groupProp, setGroupProp] = useState(null)   // null = edge tree, else a propId
   const [menuOpen, setMenuOpen] = useState(false)
 
-  const fillColorOf = useMemo(() => {
+  const decorOf = useMemo(() => {
     const np = views.find(v => v.id === activeViewId)?.nodeProps || {}
-    return id => np[id]?.fillColor || null
+    return id => {
+      const p = np[id] || {}
+      return { color: p.fillColor && p.fillColor !== 'none' ? p.fillColor : null, stroke: p.strokeColor || null }
+    }
   }, [views, activeViewId])
 
   const laid = useMemo(() => {
     const def = groupProp ? propertyDefs.find(d => d.id === groupProp) : null
-    const tree = def ? buildTagTree(nodes, def, { fillColorOf }) : buildTree(nodes, edges, { fillColorOf })
+    const tree = def ? buildTagTree(nodes, def, { decorOf }) : buildTree(nodes, edges, { decorOf })
     const h = d3.hierarchy(tree)
     d3.cluster().size([2 * Math.PI, R])(h)
     return h
-  }, [nodes, edges, groupProp, propertyDefs, fillColorOf])
+  }, [nodes, edges, groupProp, propertyDefs, decorOf])
 
   const links = laid.links()
   const descendants = laid.descendants()
@@ -42,13 +48,47 @@ export default function RadialView() {
 
   // Scroll-zoom / drag-pan via d3.zoom on the svg → transform state.
   const svgRef = useRef(null)
+  const zoomRef = useRef(null)
   const [t, setT] = useState(d3.zoomIdentity)
+  const [rot, setRot] = useState(0)   // whole-tree rotation (radians), animated via rAF
   useEffect(() => {
     const sel = d3.select(svgRef.current)
     const zoom = d3.zoom().scaleExtent([0.3, 6]).on('zoom', e => setT(e.transform))
+    zoomRef.current = zoom
     sel.call(zoom)
     return () => sel.on('.zoom', null)
   }, [])
+
+  // rAF tween of the rotation (SVG-attr transform → robust inside the zoom group).
+  const rafRef = useRef(0)
+  const rotRef = useRef(0)
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
+  const animateRot = (target) => {
+    cancelAnimationFrame(rafRef.current)
+    const from = rotRef.current
+    const delta = ((target - from + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI  // shortest spin
+    const to = from + delta
+    const start = performance.now(), dur = 680
+    const tick = now => {
+      const p = Math.min(1, (now - start) / dur)
+      const e = 1 - Math.pow(1 - p, 3)   // easeOutCubic
+      const val = from + (to - from) * e
+      rotRef.current = val; setRot(val)
+      if (p < 1) rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }
+
+  // Click a node → spin it to the top (rotate the tree) and zoom in centered on it.
+  const focusNode = d => {
+    if (d.depth === 0) { animateRot(0); d3.select(svgRef.current).transition().duration(600).call(zoomRef.current.transform, d3.zoomIdentity); return }
+    animateRot(-d.x)                               // node's angle → 0 (top)
+    const kk = 1.9
+    const gx = SIZE / 2, gy = SIZE / 2 - d.y       // post-rotation position (top), in SVG coords
+    const T = d3.zoomIdentity.translate(SIZE / 2 - kk * gx, SIZE / 2 - kk * gy).scale(kk)
+    d3.select(svgRef.current).transition().duration(680).call(zoomRef.current.transform, T)
+  }
+  const resetView = () => { animateRot(0); d3.select(svgRef.current).transition().duration(500).call(zoomRef.current.transform, d3.zoomIdentity) }
 
   const activeLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Tree'
 
@@ -67,21 +107,25 @@ export default function RadialView() {
           </div>
         </>)}
       </div>
-      <div style={styles.hint}>scroll = zoom · drag = pan</div>
+      <div style={styles.hint}>scroll = zoom · drag = pan · click a node to spin + focus</div>
+      {(rot !== 0 || t.k !== 1) && <button style={styles.reset} onClick={resetView}>⟳ Reset</button>}
 
       <svg ref={svgRef} viewBox={`0 0 ${SIZE} ${SIZE}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
         <g transform={`translate(${t.x},${t.y}) scale(${t.k})`}>
-          <g transform={`translate(${SIZE / 2},${SIZE / 2})`}>
+          <g transform={`translate(${SIZE / 2},${SIZE / 2}) rotate(${rot * 180 / Math.PI})`}>
             <g fill="none" stroke="#2c3566" strokeOpacity={0.7} strokeWidth={1}>
               {links.map((l, i) => <path key={i} d={linkGen(l)} />)}
             </g>
             {descendants.map(d => {
               const deg = d.x * 180 / Math.PI - 90
-              const onLeft = d.x >= Math.PI
+              const onLeft = mod2pi(d.x + rot) >= Math.PI   // flip based on where it ends up after rotation
               const showLabel = !d.children || d.depth <= 1
               return (
                 <g key={d.data.id} transform={`rotate(${deg}) translate(${d.y},0)`}>
-                  <circle r={d.children ? 4 : 3.2} fill={colorFor(d)} stroke="#0c0c1a" strokeWidth={0.8} />
+                  <circle r={d.children ? 4.2 : 3.4} fill={colorFor(d)}
+                    stroke={d.data.stroke || '#0c0c1a'} strokeWidth={d.data.stroke ? 1.4 : 0.8}
+                    style={{ cursor: 'pointer' }}
+                    onClick={e => { e.stopPropagation(); focusNode(d) }} />
                   {showLabel && d.data.label && (
                     <text
                       transform={onLeft ? 'rotate(180)' : undefined}
@@ -115,5 +159,6 @@ const styles = {
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
   label: { padding: '5px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
   hint: { position: 'absolute', top: 14, right: 16, zIndex: 5, color: '#8090b8', fontSize: '0.72rem', userSelect: 'none' },
+  reset: { position: 'absolute', bottom: 14, right: 16, zIndex: 5, background: 'rgba(18,18,42,0.9)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '5px 11px', cursor: 'pointer', fontSize: '0.78rem' },
   empty: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: '0.9rem', pointerEvents: 'none' },
 }

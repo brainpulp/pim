@@ -4,7 +4,9 @@
 // Cycles are broken (a node is placed once); anything unreachable from a root is
 // re-attached to the synthetic root so no node is silently dropped.
 
-export function buildTree(nodes, edges, { fillColorOf, sizeBy } = {}) {
+// `decorOf(id) → { color, stroke, strokeWidth, emojis }` supplies each node's visual
+// decorations (from the active view) so hierarchy views can mirror the mind map's look.
+export function buildTree(nodes, edges, { decorOf, sizeBy } = {}) {
   const byId = new Map(nodes.map(n => [n.id, n]))
   const parentOf = new Map()
   edges.forEach(e => {
@@ -23,7 +25,7 @@ export function buildTree(nodes, edges, { fillColorOf, sizeBy } = {}) {
     seen.add(id)
     const n = byId.get(id)
     const kids = (childrenOf.get(id) || []).map(make).filter(Boolean)
-    const base = { id, label: n?.label || '(untitled)', color: fillColorOf?.(id) || null }
+    const base = { id, label: n?.label || '(untitled)', ...(decorOf?.(id) || {}) }
     return kids.length ? { ...base, children: kids } : { ...base, value: valueOf(n) }
   }
   const rootIds = nodes.filter(n => !parentOf.has(n.id)).map(n => n.id)
@@ -35,20 +37,20 @@ export function buildTree(nodes, edges, { fillColorOf, sizeBy } = {}) {
 // A synthetic hierarchy grouped by a Select/Tags property: root → option → member nodes.
 // Nodes with no value for the property fall under an "(untagged)" bucket. Multi-tag nodes
 // appear under each of their tags (mirrors).
-export function buildTagTree(nodes, def, { fillColorOf, sizeBy } = {}) {
+export function buildTagTree(nodes, def, { decorOf, sizeBy } = {}) {
   if (!def) return { id: '__root__', label: '', children: [] }
   const valueOf = (n) => {
     if (sizeBy) { const v = Number(n?.props?.[sizeBy]); if (Number.isFinite(v) && v > 0) return v }
     return 1
   }
-  const leaf = (n) => ({ id: n.id, label: n.label || '(untitled)', color: fillColorOf?.(n.id) || null, value: valueOf(n) })
+  const leaf = (n, suffix) => ({ id: suffix ? n.id + '@' + suffix : n.id, label: n.label || '(untitled)', ...(decorOf?.(n.id) || {}), value: valueOf(n) })
   const buckets = new Map((def.options || []).map(o => [o.id, { id: 'opt:' + o.id, label: o.name, color: o.color || null, children: [] }]))
   const untagged = { id: 'opt:__untagged__', label: '(untagged)', color: '#3a4358', children: [] }
   nodes.forEach(n => {
     const raw = n.props?.[def.id]
     const ids = Array.isArray(raw) ? raw : (raw != null && raw !== '' ? [raw] : [])
     if (!ids.length) { untagged.children.push(leaf(n)); return }
-    ids.forEach(id => { const b = buckets.get(id); if (b) b.children.push(leaf({ ...n, id: n.id + '@' + id })) })
+    ids.forEach(id => { const b = buckets.get(id); if (b) b.children.push(leaf(n, id)) })
   })
   const children = [...buckets.values()].filter(b => b.children.length)
   if (untagged.children.length) children.push(untagged)

@@ -78,11 +78,13 @@ encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (the
   **zoomable circle packing** (ref: mbostock/1747543) — **SHIPPED** as a new top-level **pack** tab. `src/pages/PackView.jsx`
   + shared `src/lib/hierarchy.js` (`buildTree` projects the edge DAG to a strict tree: first-parent-wins, cycles broken,
   orphans re-attached; `buildTagTree` for the radial tag view). d3.pack, CSS-transform click-to-zoom (Esc / ← to go up),
-  labels for the focus's children, node fill from the active view's colors. Read-only explorer. Now has a **size-by**
-  control (Item count, or any Number property → circle area). Hand-check still pending on a real project. · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
+  labels for **every node at every level** (complete text, fit-to-circle; parent titles hug the top edge), a **size-by**
+  control (Item count / any Number property), and node **decorations mirrored from the active view** — fill, stroke,
+  and the node's first emoji badge (`decorOf` in `hierarchy.js`). · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
   hierarchy). **SHIPPED** as a new top-level **radial** tab. `src/pages/RadialView.jsx`: d3.cluster + d3.linkRadial,
-  scroll-zoom / drag-pan (d3.zoom), a source selector (Hierarchy edges **or** group-by-tag → the tag→nodes tree with
-  multi-tag mirrors), node fill from active-view colors. Read-only. **TODO:** hand-check label crowding on big trees.
+  scroll-zoom / drag-pan (d3.zoom), **click a node to spin it to the top + zoom in** (rAF rotation tween + d3.zoom
+  transition; ⟳ Reset), a source selector (Hierarchy edges **or** group-by-tag → the tag→nodes tree with multi-tag
+  mirrors), node fill+stroke from active-view colors. Read-only. **TODO:** hand-check label crowding on big trees.
 
 **All three requested views (2026-07-03) shipped.** Remaining polish across the set: force/label tuning, a size-by
 control in the pack tab, kanban (Phase C), and letting these views participate in per-view layout (`view.layout`)

@@ -23,16 +23,21 @@ export default function PackView() {
   const [menuOpen, setMenuOpen] = useState(false)
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
 
-  const fillColorOf = useMemo(() => {
+  const decorOf = useMemo(() => {
     const np = views.find(v => v.id === activeViewId)?.nodeProps || {}
-    return id => np[id]?.fillColor || null
+    return id => {
+      const p = np[id] || {}
+      const em = (p.nodeEmojis || [])[0] || null
+      return { color: p.fillColor && p.fillColor !== 'none' ? p.fillColor : null,
+        stroke: p.strokeColor || null, strokeWidth: p.strokeWidth || null, emoji: em }
+    }
   }, [views, activeViewId])
 
   const root = useMemo(() => {
-    const tree = buildTree(nodes, edges, { fillColorOf, sizeBy })
+    const tree = buildTree(nodes, edges, { decorOf, sizeBy })
     const h = d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => (b.value || 0) - (a.value || 0))
     return d3.pack().size([D, D]).padding(3)(h)
-  }, [nodes, edges, fillColorOf, sizeBy])
+  }, [nodes, edges, decorOf, sizeBy])
 
   const [focus, setFocus] = useState(root)
   // Re-seat focus on data change: keep the same node id if it still exists, else root.
@@ -79,27 +84,49 @@ export default function PackView() {
         <g style={{ transform, transformBox: 'view-box', transformOrigin: '0 0', transition: 'transform 680ms cubic-bezier(0.22,0.61,0.36,1)' }}>
           {descendants.map(d => {
             const isLeaf = !d.children
+            const dStroke = d.data.stroke
             return (
               <circle key={d.data.id} cx={d.x} cy={d.y} r={d.r}
                 fill={colorFor(d)}
-                fillOpacity={isLeaf ? 0.92 : 0.5}
-                stroke={d === f ? '#8fa0ff' : '#0c0c1a'}
-                strokeWidth={d === f ? 2 / k : 1 / k}
+                fillOpacity={isLeaf ? 0.92 : 0.45}
+                stroke={d === f ? '#8fa0ff' : (dStroke || '#0c0c1a')}
+                strokeWidth={d === f ? 2.5 / k : (dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / k : 1 / k)}
                 style={{ cursor: d.children ? 'pointer' : 'default' }}
                 onClick={e => { e.stopPropagation(); if (d.children && d !== f) setFocus(d); else zoomOut() }}
               />
             )
           })}
-          {descendants.filter(d => d.parent === f || (d === f && !d.children)).map(d => {
-            const fontSize = Math.min(d.r * 0.42, 26 / k)
-            if (d.r * k < 12) return null
+          {/* Labels: every node, every level, complete text (fit to circle; may be tiny). */}
+          {descendants.filter(d => d.depth > 0 && d.data.label).map(d => {
+            const isLeaf = !d.children
+            const len = Math.max(3, d.data.label.length)
+            if (isLeaf) {
+              const fontSize = Math.min(d.r * 0.5, (1.8 * d.r) / (len * 0.6))
+              return (
+                <text key={'t' + d.data.id} x={d.x} y={d.y} textAnchor="middle" dominantBaseline="middle"
+                  fontSize={fontSize} fill="#eef2ff" pointerEvents="none"
+                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.18, fontWeight: 600 }}>
+                  {d.data.label}
+                </text>
+              )
+            }
+            // Parent: a small title hugging the top edge so it doesn't cover children.
+            const fontSize = Math.min(d.r * 0.16, (1.9 * d.r) / (len * 0.6))
             return (
-              <text key={'t' + d.data.id} x={d.x} y={d.y} textAnchor="middle" dominantBaseline="middle"
-                fontSize={fontSize} fill="#eef2ff" pointerEvents="none"
-                style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.16, fontWeight: 600 }}>
-                {trim(d.data.label, Math.max(6, d.r / (fontSize * 0.34)))}
+              <text key={'t' + d.data.id} x={d.x} y={d.y - d.r + fontSize * 1.1} textAnchor="middle" dominantBaseline="hanging"
+                fontSize={fontSize} fill="#cdd6f5" pointerEvents="none"
+                style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.2, fontWeight: 600 }}>
+                {d.data.label}
               </text>
             )
+          })}
+          {/* Emoji decoration, mounted top-right like on the graph nodes. */}
+          {descendants.filter(d => d.data.emoji && d.r > 7).map(d => {
+            const em = d.data.emoji, sz = d.r * 0.5
+            const ex = d.x + d.r * 0.42, ey = d.y - d.r * 0.42
+            return em.type === 'image'
+              ? <image key={'e' + d.data.id} href={em.emoji} x={ex - sz / 2} y={ey - sz / 2} width={sz} height={sz} style={{ pointerEvents: 'none' }} />
+              : <text key={'e' + d.data.id} x={ex} y={ey} fontSize={sz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>
           })}
         </g>
       </svg>
