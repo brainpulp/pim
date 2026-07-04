@@ -849,13 +849,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       organizeActiveRef.current = true
       setOrganizeGroups(groups)
       if (fresh) {
-        // Configure the gentle clustering forces ONCE. Unpin everyone so they can float.
+        // Configure the clustering forces ONCE. Unpin everyone so they can float. The pull to each
+        // group's centre must be STRONG (with no repulsion fighting it) so the groups actually
+        // separate into distinct, non-overlapping balls instead of merging into one central mass;
+        // collision alone gives them their internal spacing.
         simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
         sim.force('link', null)
-        sim.force('charge', d3.forceManyBody().strength(-22))
-        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.gx ?? n.x).strength(0.1))
-        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.gy ?? n.y).strength(0.1))
-        sim.force('collide', d3.forceCollide(n => nodeRadius(n.id) + 3).strength(0.85))
+        sim.force('charge', null)
+        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.gx ?? n.x).strength(0.7))
+        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.gy ?? n.y).strength(0.7))
+        sim.force('collide', d3.forceCollide(n => nodeRadius(n.id) + 2).strength(1))
         sim.alpha(0.9).restart()
       } else {
         // Retag / data change: targets already updated in the ref. Gently reheat (don't reset) so the
