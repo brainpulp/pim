@@ -1,17 +1,18 @@
 import { useMemo, useState, useRef, useEffect } from 'react'
 import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
+import { saveProject } from '../lib/db'
 import { buildTree, buildTagTree } from '../lib/hierarchy'
 
-// Zoomable circle packing (ref: mbostock/1747543). A structural view of the node tree:
-// nested circles sized by leaf count (or a Number property). Click a circle to zoom in,
-// click the background (or ← / Esc) to zoom out one level. Read-only explorer — editing
-// stays in the mind map / table. Non-destructive: reads the store, writes nothing.
+// Zoomable circle packing (ref: mbostock/1747543). Click a circle to zoom in, background
+// (or ← / Esc) to zoom out. In group-by-tag mode, DRAG a leaf item from one tag-pack onto
+// another to retag it (writes node.props[tagProp] and persists). Hierarchy mode is read-only.
 
 const D = 932                      // world size of the pack square (SVG viewBox)
 const DEPTH_FILL = ['#12122a', '#1b2452', '#26346f', '#33459a', '#4557c0', '#6f7fe0']
+const parseBucket = (id) => id ? String(id).replace(/^opt:/, '') : null   // 'opt:o1' → 'o1'
 
-export default function PackView() {
+export default function PackView({ projectId }) {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
   const views = useGraphStore(s => s.views)
@@ -20,10 +21,14 @@ export default function PackView() {
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
   const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
 
+  const setNodeProp = useGraphStore(s => s.setNodeProp)
   const [sizeBy, setSizeBy] = useState(null)   // null = size by item count, else a Number propId
   const [groupProp, setGroupProp] = useState(null)   // null = edge hierarchy, else group-by-tag propId
   const [menuOpen, setMenuOpen] = useState(false)
   const [srcMenu, setSrcMenu] = useState(false)
+  const [drag, setDrag] = useState(null)         // { nodeId, sourceOpt, label, x, y }
+  const [hoverBucket, setHoverBucket] = useState(null)
+  const dragRef = useRef(null)
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
   const srcLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Hierarchy'
 
@@ -65,6 +70,61 @@ export default function PackView() {
   const descendants = root.descendants()
   const colorFor = (d) => d.data.color || DEPTH_FILL[Math.min(d.depth, DEPTH_FILL.length - 1)]
 
+  // Retag a node by moving it from one tag-pack to another (targets/source are option ids,
+  // or '__untagged__'). Multi-select moves that one membership; single-select replaces.
+  const retag = (nodeId, sourceOpt, targetOpt) => {
+    const def = propertyDefs.find(d => d.id === groupProp); if (!def) return
+    const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+    const raw = node?.props?.[groupProp]
+    let value
+    if (def.type === 'multiSelect') {
+      let tags = Array.isArray(raw) ? [...raw] : (raw ? [raw] : [])
+      if (sourceOpt && sourceOpt !== '__untagged__') tags = tags.filter(t => t !== sourceOpt)
+      if (targetOpt !== '__untagged__' && !tags.includes(targetOpt)) tags.push(targetOpt)
+      value = tags
+    } else {
+      value = targetOpt === '__untagged__' ? null : targetOpt
+    }
+    setNodeProp(nodeId, groupProp, value)
+    if (projectId) {
+      const s = useGraphStore.getState()
+      saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs })
+        .catch(e => console.error('Save:', e))
+    }
+  }
+
+  const bucketUnder = (clientX, clientY) => {
+    const el = document.elementFromPoint(clientX, clientY)
+    return el?.getAttribute?.('data-bucket') || el?.closest?.('[data-bucket]')?.getAttribute('data-bucket') || null
+  }
+  // Drag a leaf item between tag-packs. Only active in group-by-tag mode.
+  const startLeafDrag = (e, d) => {
+    if (!groupProp || d.children) return
+    e.stopPropagation(); e.preventDefault()
+    const nodeId = String(d.data.id).split('@')[0]
+    const sourceOpt = parseBucket(d.parent?.data?.id)
+    const info = { nodeId, sourceOpt, label: d.data.label, x: e.clientX, y: e.clientY, moved: false }
+    dragRef.current = info; setDrag({ ...info })
+    const onMove = ev => {
+      const cur = dragRef.current; if (!cur) return
+      cur.x = ev.clientX; cur.y = ev.clientY
+      if (!cur.moved && (Math.abs(ev.movementX) || Math.abs(ev.movementY))) cur.moved = true
+      setDrag({ ...cur })
+      setHoverBucket(bucketUnder(ev.clientX, ev.clientY))
+    }
+    const onUp = ev => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      const cur = dragRef.current; dragRef.current = null
+      const target = bucketUnder(ev.clientX, ev.clientY)
+      setDrag(null); setHoverBucket(null)
+      if (cur && cur.moved && target && target !== cur.sourceOpt) retag(cur.nodeId, cur.sourceOpt, target)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+  const dragging = !!drag
+
   return (
     <div style={styles.wrap}>
       <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -96,21 +156,28 @@ export default function PackView() {
           </>)}
         </div>
       </div>
-      <div style={styles.hint}>click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
+      <div style={styles.hint}>{groupProp ? 'drag an item between packs to retag · ' : ''}click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
       <svg viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}
         onClick={zoomOut}>
-        <g style={{ transform, transformBox: 'view-box', transformOrigin: '0 0', transition: 'transform 680ms cubic-bezier(0.22,0.61,0.36,1)' }}>
+        <g style={{ transform, transformBox: 'view-box', transformOrigin: '0 0', transition: dragging ? 'none' : 'transform 680ms cubic-bezier(0.22,0.61,0.36,1)' }}>
           {descendants.map(d => {
             const isLeaf = !d.children
             const dStroke = d.data.stroke
+            const isBucket = groupProp && d.depth === 1
+            const isTagLeaf = groupProp && isLeaf && d.depth >= 2
+            const isDropTarget = isBucket && hoverBucket === parseBucket(d.data.id)
+            // While dragging, let non-bucket circles fall through so elementFromPoint hits buckets.
+            const pe = dragging ? (isBucket ? 'auto' : 'none') : 'auto'
             return (
               <circle key={d.data.id} cx={d.x} cy={d.y} r={d.r}
+                data-bucket={isBucket ? parseBucket(d.data.id) : undefined}
                 fill={colorFor(d)}
-                fillOpacity={isLeaf ? 0.92 : 0.45}
-                stroke={d === f ? '#8fa0ff' : (dStroke || '#0c0c1a')}
-                strokeWidth={d === f ? 2.5 / k : (dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / k : 1 / k)}
-                style={{ cursor: d.children ? 'pointer' : 'default' }}
-                onClick={e => { e.stopPropagation(); if (d.children && d !== f) setFocus(d); else zoomOut() }}
+                fillOpacity={isDropTarget ? 0.75 : (isLeaf ? 0.92 : 0.45)}
+                stroke={isDropTarget ? '#7fd8a8' : (d === f ? '#8fa0ff' : (dStroke || '#0c0c1a'))}
+                strokeWidth={isDropTarget ? 3 / k : (d === f ? 2.5 / k : (dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / k : 1 / k))}
+                style={{ cursor: isTagLeaf ? 'grab' : (d.children ? 'pointer' : 'default'), pointerEvents: pe }}
+                onMouseDown={isTagLeaf ? e => startLeafDrag(e, d) : undefined}
+                onClick={e => { e.stopPropagation(); if (d.children && d !== f) setFocus(d) }}
               />
             )
           })}
@@ -151,6 +218,11 @@ export default function PackView() {
           })}
         </g>
       </svg>
+      {drag && (
+        <div style={{ position: 'fixed', left: drag.x + 12, top: drag.y + 6, zIndex: 50, pointerEvents: 'none', background: '#1a1f4a', border: '1px solid #5b6af0', color: '#e6ebff', borderRadius: 6, padding: '3px 9px', fontSize: '0.8rem', boxShadow: '0 4px 16px rgba(0,0,0,0.6)', whiteSpace: 'nowrap' }}>
+          {trim(drag.label || 'item', 28)} →{hoverBucket && hoverBucket !== drag.sourceOpt ? ' drop to retag' : '…'}
+        </div>
+      )}
       {descendants.length <= 1 && <div style={styles.empty}>Nothing to pack yet — add some nodes in the graph.</div>}
     </div>
   )

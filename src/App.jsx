@@ -155,7 +155,7 @@ export default function App() {
           </AppErrorBoundary>
         )}
         {view === 'table' && <Table projectId={project.id} />}
-        {view === 'pack' && <AppErrorBoundary><PackView /></AppErrorBoundary>}
+        {view === 'pack' && <AppErrorBoundary><PackView projectId={project.id} /></AppErrorBoundary>}
         {view === 'radial' && <AppErrorBoundary><RadialView /></AppErrorBoundary>}
       </div>
     </div>
