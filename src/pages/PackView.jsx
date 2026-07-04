@@ -26,8 +26,9 @@ export default function PackView({ projectId }) {
   const [groupProp, setGroupProp] = useState(null)   // null = edge hierarchy, else group-by-tag propId
   const [menuOpen, setMenuOpen] = useState(false)
   const [srcMenu, setSrcMenu] = useState(false)
-  const [drag, setDrag] = useState(null)         // { nodeId, sourceOpt, label, x, y }
+  const [drag, setDrag] = useState(null)         // { nodeId, sourceOpt, label, x, y, add }
   const [hoverBucket, setHoverBucket] = useState(null)
+  const [hoverId, setHoverId] = useState(null)   // leaf under cursor → magnified (Bostock hover-zoom)
   const dragRef = useRef(null)
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
   const srcLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Hierarchy'
@@ -72,18 +73,19 @@ export default function PackView({ projectId }) {
 
   // Retag a node by moving it from one tag-pack to another (targets/source are option ids,
   // or '__untagged__'). Multi-select moves that one membership; single-select replaces.
-  const retag = (nodeId, sourceOpt, targetOpt) => {
+  const retag = (nodeId, sourceOpt, targetOpt, additive) => {
     const def = propertyDefs.find(d => d.id === groupProp); if (!def) return
     const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
     const raw = node?.props?.[groupProp]
     let value
     if (def.type === 'multiSelect') {
       let tags = Array.isArray(raw) ? [...raw] : (raw ? [raw] : [])
-      if (sourceOpt && sourceOpt !== '__untagged__') tags = tags.filter(t => t !== sourceOpt)
+      // additive (Alt-drag) keeps the source tag; plain drag moves the membership.
+      if (!additive && sourceOpt && sourceOpt !== '__untagged__') tags = tags.filter(t => t !== sourceOpt)
       if (targetOpt !== '__untagged__' && !tags.includes(targetOpt)) tags.push(targetOpt)
       value = tags
     } else {
-      value = targetOpt === '__untagged__' ? null : targetOpt
+      value = targetOpt === '__untagged__' ? null : targetOpt   // single-select: Alt has no meaning
     }
     setNodeProp(nodeId, groupProp, value)
     if (projectId) {
@@ -103,11 +105,12 @@ export default function PackView({ projectId }) {
     e.stopPropagation(); e.preventDefault()
     const nodeId = String(d.data.id).split('@')[0]
     const sourceOpt = parseBucket(d.parent?.data?.id)
-    const info = { nodeId, sourceOpt, label: d.data.label, x: e.clientX, y: e.clientY, moved: false }
-    dragRef.current = info; setDrag({ ...info })
+    const multi = propertyDefs.find(x => x.id === groupProp)?.type === 'multiSelect'
+    const info = { nodeId, sourceOpt, label: d.data.label, x: e.clientX, y: e.clientY, moved: false, add: multi && e.altKey }
+    dragRef.current = info; setDrag({ ...info }); setHoverId(null)
     const onMove = ev => {
       const cur = dragRef.current; if (!cur) return
-      cur.x = ev.clientX; cur.y = ev.clientY
+      cur.x = ev.clientX; cur.y = ev.clientY; cur.add = multi && ev.altKey
       if (!cur.moved && (Math.abs(ev.movementX) || Math.abs(ev.movementY))) cur.moved = true
       setDrag({ ...cur })
       setHoverBucket(bucketUnder(ev.clientX, ev.clientY))
@@ -117,8 +120,9 @@ export default function PackView({ projectId }) {
       document.removeEventListener('mouseup', onUp)
       const cur = dragRef.current; dragRef.current = null
       const target = bucketUnder(ev.clientX, ev.clientY)
+      const additive = multi && ev.altKey
       setDrag(null); setHoverBucket(null)
-      if (cur && cur.moved && target && target !== cur.sourceOpt) retag(cur.nodeId, cur.sourceOpt, target)
+      if (cur && cur.moved && target && (target !== cur.sourceOpt || additive)) retag(cur.nodeId, cur.sourceOpt, target, additive)
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -156,9 +160,9 @@ export default function PackView({ projectId }) {
           </>)}
         </div>
       </div>
-      <div style={styles.hint}>{groupProp ? 'drag an item between packs to retag · ' : ''}click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
+      <div style={styles.hint}>{groupProp ? 'drag item between packs to retag · Alt-drag to add tag · ' : ''}click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
       <svg viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}
-        onClick={zoomOut}>
+        onClick={zoomOut} onMouseLeave={() => { if (!dragging) setHoverId(null) }}>
         <g style={{ transform, transformBox: 'view-box', transformOrigin: '0 0', transition: dragging ? 'none' : 'transform 680ms cubic-bezier(0.22,0.61,0.36,1)' }}>
           {descendants.map(d => {
             const isLeaf = !d.children
@@ -176,6 +180,7 @@ export default function PackView({ projectId }) {
                 stroke={isDropTarget ? '#7fd8a8' : (d === f ? '#8fa0ff' : (dStroke || '#0c0c1a'))}
                 strokeWidth={isDropTarget ? 3 / k : (d === f ? 2.5 / k : (dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / k : 1 / k))}
                 style={{ cursor: isTagLeaf ? 'grab' : (d.children ? 'pointer' : 'default'), pointerEvents: pe }}
+                onMouseEnter={isLeaf ? () => { if (!dragging) setHoverId(d.data.id) } : undefined}
                 onMouseDown={isTagLeaf ? e => startLeafDrag(e, d) : undefined}
                 onClick={e => { e.stopPropagation(); if (d.children && d !== f) setFocus(d) }}
               />
@@ -216,11 +221,39 @@ export default function PackView({ projectId }) {
               ? <image key={'e' + d.data.id} href={em.emoji} x={ex - sz / 2} y={ey - sz / 2} width={sz} height={sz} style={{ pointerEvents: 'none' }} />
               : <text key={'e' + d.data.id} x={ex} y={ey} fontSize={sz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>
           })}
+          {/* Hover-zoom: magnify the leaf under the cursor so small items are readable/grabbable. */}
+          {hoverId && !dragging && (() => {
+            const hd = descendants.find(x => x.data.id === hoverId)
+            if (!hd || hd.children) return null
+            const er = Math.min(Math.max(hd.r * 1.7, 44), 130)
+            const isTagLeaf = groupProp && hd.depth >= 2
+            const fontSize = er * 0.3
+            const maxChars = Math.max(5, Math.floor((1.75 * er) / (fontSize * 0.56)))
+            const lines = wrapText(hd.data.label, maxChars).slice(0, 6)
+            const lh = fontSize * 1.08
+            const y0 = hd.y - (lines.length - 1) / 2 * lh
+            const em = hd.data.emoji, esz = Math.min(er * 0.28, 30)
+            return (
+              <g style={{ cursor: isTagLeaf ? 'grab' : 'default' }}
+                onMouseLeave={() => setHoverId(null)}
+                onMouseDown={isTagLeaf ? e => startLeafDrag(e, hd) : undefined}
+                onClick={e => e.stopPropagation()}>
+                <circle cx={hd.x} cy={hd.y} r={er} fill={colorFor(hd)} fillOpacity={0.98} stroke="#8fa0ff" strokeWidth={2 / k} />
+                <text textAnchor="middle" dominantBaseline="middle" fontSize={fontSize} fill="#eef2ff" pointerEvents="none"
+                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.18, fontWeight: 600 }}>
+                  {lines.map((ln, i) => <tspan key={i} x={hd.x} y={y0 + i * lh}>{ln}</tspan>)}
+                </text>
+                {em && (em.type === 'image'
+                  ? <image href={em.emoji} x={hd.x + er * 0.5 - esz / 2} y={hd.y - er * 0.5 - esz / 2} width={esz} height={esz} pointerEvents="none" />
+                  : <text x={hd.x + er * 0.5} y={hd.y - er * 0.5} fontSize={esz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>)}
+              </g>
+            )
+          })()}
         </g>
       </svg>
       {drag && (
-        <div style={{ position: 'fixed', left: drag.x + 12, top: drag.y + 6, zIndex: 50, pointerEvents: 'none', background: '#1a1f4a', border: '1px solid #5b6af0', color: '#e6ebff', borderRadius: 6, padding: '3px 9px', fontSize: '0.8rem', boxShadow: '0 4px 16px rgba(0,0,0,0.6)', whiteSpace: 'nowrap' }}>
-          {trim(drag.label || 'item', 28)} →{hoverBucket && hoverBucket !== drag.sourceOpt ? ' drop to retag' : '…'}
+        <div style={{ position: 'fixed', left: drag.x + 12, top: drag.y + 6, zIndex: 50, pointerEvents: 'none', background: drag.add ? '#173a2a' : '#1a1f4a', border: `1px solid ${drag.add ? '#2f7a55' : '#5b6af0'}`, color: '#e6ebff', borderRadius: 6, padding: '3px 9px', fontSize: '0.8rem', boxShadow: '0 4px 16px rgba(0,0,0,0.6)', whiteSpace: 'nowrap' }}>
+          {trim(drag.label || 'item', 28)} →{hoverBucket && (hoverBucket !== drag.sourceOpt || drag.add) ? (drag.add ? ' drop to ADD tag' : ' drop to retag') : '…'}
         </div>
       )}
       {descendants.length <= 1 && <div style={styles.empty}>Nothing to pack yet — add some nodes in the graph.</div>}

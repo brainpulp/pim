@@ -85,7 +85,9 @@ encodings (shared resolver) · C) kanban · D) tag-tree + multi-tag mirrors (the
   item onto another tag-pack rewrites `node.props[tagProp]` (multi-select moves that one membership; single-select
   replaces; drop on "(untagged)" clears) and persists via `saveProject`. Drop target highlights; a chip follows the
   cursor. Hit-testing via `elementFromPoint` + `data-bucket` (leaves get `pointer-events:none` mid-drag so the bucket
-  beneath is found). · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
+  beneath is found). **Hover-zoom:** hovering a leaf magnifies it (Bostock-style) so tiny items are readable and
+  grabbable — an on-top overlay with the enlarged circle + wrapped label + emoji; you can grab it from there.
+  **Alt-drag** (multi-select only) = additive: keep the source tag, add the target (chip turns green, "ADD tag"). · **radial dendrogram** (ref: mbostock/4339607 — tree drawn radially; can also be fed the tag→nodes
   hierarchy). **SHIPPED** as a new top-level **radial** tab. `src/pages/RadialView.jsx`: d3.cluster + d3.linkRadial,
   scroll-zoom / drag-pan (d3.zoom), **click a node to spin it to the top + zoom in** (rAF rotation tween + d3.zoom
   transition; ⟳ Reset), a source selector (Hierarchy edges **or** group-by-tag → the tag→nodes tree with multi-tag
