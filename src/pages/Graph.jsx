@@ -832,7 +832,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const groups = keys.map((k, i) => {
         const cx = originX + (i % cols) * cellW + cellW / 2
         const cy = isLanes ? originY + worldH / 2 : originY + Math.floor(i / cols) * cellH + cellH / 2
-        const g = { key: k, cx, cy, label: labelFor(k), color: colorFor(k), count: byKey[k].length, layout: organize.layout }
+        const g = { key: k, cx, cy, label: labelFor(k), color: colorFor(k), count: byKey[k].length, layout: organize.layout, memberIds: byKey[k] }
         if (isLanes) {
           const pad = Math.min(22, cellW * 0.06)
           g.laneRect = { x: originX + i * cellW + pad, y: originY + 6, w: cellW - 2 * pad, h: worldH - 12 }
@@ -851,9 +851,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         // First activation (or layout/groupBy change): free everyone and configure the forces.
         simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
         sim.force('link', null)
-        sim.force('charge', d3.forceManyBody().strength(isLanes ? -18 : -40))
-        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(isLanes ? 0.5 : 0.16))
-        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(isLanes ? 0.05 : 0.16))
+        // Weak charge + strong pull to centroid + collide → each group settles into a tight ball
+        // (a real "pack"), instead of spreading across the canvas.
+        sim.force('charge', d3.forceManyBody().strength(isLanes ? -12 : -6))
+        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(isLanes ? 0.5 : 0.45))
+        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(isLanes ? 0.06 : 0.45))
         // Collide by encoded (or manual) radius so size-encoded nodes don't overlap.
         sim.force('collide', d3.forceCollide(n => {
           const p = nodeById[n.id]?.props
@@ -2319,32 +2321,45 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}
             style={readOnly ? { pointerEvents: 'none' } : undefined}>
-            {/* 0. Organize group bubbles / lanes (behind everything; non-interactive) */}
-            {organize && organizeGroups.map(g => (
-              <g key={g.key} style={{ pointerEvents: 'none' }}>
-                {g.laneRect ? (
-                  <>
-                    <rect x={g.laneRect.x} y={g.laneRect.y} width={g.laneRect.w} height={g.laneRect.h} rx={14}
-                      fill={g.color + '20'} stroke={g.color + 'aa'} strokeWidth={2} strokeDasharray="7 6" />
-                    <text x={g.cx} y={g.laneRect.y + 26} textAnchor="middle"
-                      fontSize={22} fontWeight={700} fill={g.color}
-                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>
-                      {g.label} · {g.count}
-                    </text>
-                  </>
-                ) : (
-                  <>
-                    <ellipse cx={g.cx} cy={g.cy} rx={g.rx} ry={g.ry}
-                      fill={g.color + '24'} stroke={g.color + 'bb'} strokeWidth={2} strokeDasharray="7 6" />
-                    <text x={g.cx} y={g.cy - g.ry - 12} textAnchor="middle"
-                      fontSize={22} fontWeight={700} fill={g.color}
-                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>
-                      {g.label} · {g.count}
-                    </text>
-                  </>
-                )}
-              </g>
-            ))}
+            {/* 0. Organize group packs (behind everything; non-interactive). The pack outline is
+                 drawn to actually WRAP its member nodes so items fit inside it. Solid, opaque. */}
+            {organize && (() => {
+              const byId = new Map(simNodesRef.current.map(n => [n.id, n]))
+              return organizeGroups.map(g => {
+                if (g.laneRect) {
+                  return (
+                    <g key={g.key} style={{ pointerEvents: 'none' }}>
+                      <rect x={g.laneRect.x} y={g.laneRect.y} width={g.laneRect.w} height={g.laneRect.h} rx={14}
+                        fill={g.color + '66'} stroke={g.color} strokeWidth={2.5} />
+                      <text x={g.cx} y={g.laneRect.y + 26} textAnchor="middle" fontSize={22} fontWeight={700} fill={g.color}
+                        style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
+                    </g>
+                  )
+                }
+                // Pack: bounding circle of the members' live positions (incl. their own extent).
+                const members = g.memberIds.map(id => byId.get(id)).filter(n => n && n.x != null)
+                let bx = g.cx, by = g.cy, br = 78
+                if (members.length) {
+                  bx = members.reduce((s, m) => s + m.x, 0) / members.length
+                  by = members.reduce((s, m) => s + m.y, 0) / members.length
+                  br = 0
+                  members.forEach(m => {
+                    const vp = resolveVP(m.id)
+                    const { halfW, halfH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), m.label || '',
+                      Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
+                    br = Math.max(br, Math.hypot(m.x - bx, m.y - by) + Math.hypot(halfW, halfH))
+                  })
+                  br += 26
+                }
+                return (
+                  <g key={g.key} style={{ pointerEvents: 'none' }}>
+                    <circle cx={bx} cy={by} r={br} fill={g.color + '66'} stroke={g.color} strokeWidth={2.5} />
+                    <text x={bx} y={by - br - 12} textAnchor="middle" fontSize={22} fontWeight={700} fill={g.color}
+                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
+                  </g>
+                )
+              })
+            })()}
             {/* 1. Frame containers (hidden while organizing — packs replace them) */}
             {!organize && simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
