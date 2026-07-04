@@ -7,7 +7,17 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 ---
 
-## Organize = clustered force layout ("grouping bubbles") (2026-07-04, final)
+## Organize = deterministic circle packing (like d3's pack example) (2026-07-04, FINAL)
+
+Force layouts kept exploding / merging into concentric blobs. The user pointed at d3's classic circle-pack
+example (strongriley d3 pack / countries-by-population) as the target. So: **deterministic circle packing**,
+no force. `d3.packSiblings` packs each group's members into a tight circle; the group circles are packed
+together (bunched, non-overlapping — verified). Nodes are pinned at their packed slots but **glide** there via
+a short rAF tween (0.22 lerp) so it still animates. A retag re-packs deterministically (stable member sort →
+stable packing) and the tween eases nodes to their new slots. Pack outline = the packed enclosing circle
+(hugs members). Empty packs = small fixed circle (drop target). Cluster centre anchored once per session.
+
+### (superseded) — clustered force layout attempt
 
 Landed on the right model after two wrong turns (over-strong force → explosions; then static pinning →
 "loose/anchored, not self-organizing"). Now it's a proper clustered force layout:

@@ -391,7 +391,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   organizeRef.current = organize
   const organizeGroupsRef = useRef([])                  // mirrors `organizeGroups` for drop-to-reassign
   organizeGroupsRef.current = organizeGroups
-  const organizeSessionRef = useRef(null)               // anchored world rect for the grid, per session
+  const organizeSessionRef = useRef(null)               // anchored world centre, per session
+  const organizeAnimRef = useRef(0)                     // rAF id for the glide-to-packed-layout tween
   const [searchOpen, setSearchOpen] = useState(false)   // Cmd/Ctrl+K node spotlight
   const [searchQuery, setSearchQuery] = useState('')
   const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
@@ -782,11 +783,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const sim = simRef.current
 
     if (organize) {
-      // CLUSTERED FORCE LAYOUT ("grouping bubbles"). Nodes float freely and self-organize: a GENTLE
-      // pull toward their group's centre + collision. Nothing is pinned, so it settles smoothly and a
-      // retag just re-points one node at a new centre (targets live in a ref the force reads each tick,
-      // so we never reconfigure forces or reset positions → no explosions). Pack outlines are drawn
-      // live around the members (see render), so each pack is exactly as big as it needs to be.
+      // DETERMINISTIC CIRCLE PACKING (like d3's classic pack example). NOT a force layout — that kept
+      // exploding. d3.packSiblings packs each group's members into a tight circle; the group circles
+      // are packed together (bunched, non-overlapping). Nodes are pinned at their packed slots and
+      // GLIDE there via a short rAF tween so it still feels alive. A retag re-packs deterministically.
       const groupBy = organize.groupBy
       const def = storePropertyDefs.find(d => d.id === groupBy)
       const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight
@@ -814,61 +814,67 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
         return Math.hypot(halfW, halfH)
       }
-      // Group centres — computed ONCE per session (stable), spaced by each group's expected blob size
-      // and packed together (or laid in a row for Lanes); mapped to world coords in the viewport centre.
+      // 1. Pack each group's members into a tight circle (relative to that group's own centre).
+      const gpack = {}
+      keys.forEach(k => {
+        const ids = byKey[k].slice().sort()   // stable order → stable packing across retags
+        if (!ids.length) { gpack[k] = { r: 48, offs: {} }; return }
+        const circles = ids.map(id => ({ id, r: nodeRadius(id) + 3 }))
+        d3.packSiblings(circles)
+        const enc = d3.packEnclose(circles)
+        const offs = {}
+        circles.forEach(c => { offs[c.id] = { dx: c.x - enc.x, dy: c.y - enc.y } })
+        gpack[k] = { r: enc.r + 8, offs }
+      })
+      // 2. Pack the group circles together (bunched). Anchor the cluster centre once per session.
+      const gc = keys.map(k => ({ key: k, r: gpack[k].r + 8 }))
+      if (!isLanes) d3.packSiblings(gc)
+      else { let x = 0; gc.forEach(c => { c.x = x + c.r; c.y = 0; x += c.r * 2 }) }
+      const genc = d3.packEnclose(gc)
       const fresh = !organizeActiveRef.current
         || organizeSessionRef.current?.groupBy !== groupBy
         || organizeSessionRef.current?.layout !== organize.layout
       if (fresh) {
-        const blobR = (k) => {
-          let area = 0; byKey[k].forEach(id => { const r = nodeRadius(id) + 6; area += Math.PI * r * r })
-          return Math.max(64, Math.sqrt(area / Math.PI) * 1.3) + 30   // radius that comfortably holds the members
-        }
-        const radii = keys.map(blobR)
         const T = zoomTransformRef.current
-        const cxW = (-T.x + W / 2) / T.k, cyW = (-T.y + H / 2) / T.k
-        const centers = {}
-        if (isLanes) {
-          const total = radii.reduce((a, b) => a + b * 2, 0); let x = -total / 2
-          keys.forEach((k, i) => { centers[k] = { gx: cxW + x + radii[i], gy: cyW }; x += radii[i] * 2 })
-        } else {
-          const gc = keys.map((k, i) => ({ key: k, r: radii[i] }))
-          d3.packSiblings(gc); const genc = d3.packEnclose(gc)
-          gc.forEach(c => { centers[c.key] = { gx: cxW + (c.x - genc.x), gy: cyW + (c.y - genc.y) } })
-        }
-        organizeSessionRef.current = { groupBy, layout: organize.layout, centers }
+        organizeSessionRef.current = { groupBy, layout: organize.layout, cx: (-T.x + W / 2) / T.k, cy: (-T.y + H / 2) / T.k }
       }
-      const centers = organizeSessionRef.current.centers
-      keys.forEach(k => { if (!centers[k]) centers[k] = { gx: 0, gy: 0 } })
-      // Per-node target centre (read live by the force accessors) + group descriptors for render/drop.
+      const { cx: cxW, cy: cyW } = organizeSessionRef.current
+      const centerByKey = {}
+      gc.forEach(c => { centerByKey[c.key] = { gx: cxW + (c.x - genc.x), gy: cyW + (c.y - genc.y) } })
+      // 3. Absolute target positions + group descriptors.
       const targets = {}
-      keys.forEach(k => byKey[k].forEach(id => { targets[id] = centers[k] }))
+      const groups = keys.map(k => {
+        const c = centerByKey[k]
+        byKey[k].forEach(id => { const o = gpack[k].offs[id] || { dx: 0, dy: 0 }; targets[id] = { x: c.gx + o.dx, y: c.gy + o.dy } })
+        return { key: k, cx: c.gx, cy: c.gy, r: gpack[k].r, label: labelFor(k), color: colorFor(k), count: byKey[k].length }
+      })
       organizeTargetsRef.current = targets
-      const groups = keys.map(k => ({ key: k, cx: centers[k].gx, cy: centers[k].gy, label: labelFor(k),
-        color: colorFor(k), count: byKey[k].length, memberIds: byKey[k] }))
       organizeActiveRef.current = true
       setOrganizeGroups(groups)
-      if (fresh) {
-        // Configure the clustering forces ONCE. Unpin everyone so they can float. The pull to each
-        // group's centre must be STRONG (with no repulsion fighting it) so the groups actually
-        // separate into distinct, non-overlapping balls instead of merging into one central mass;
-        // collision alone gives them their internal spacing.
-        simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
-        sim.force('link', null)
-        sim.force('charge', null)
-        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.gx ?? n.x).strength(0.7))
-        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.gy ?? n.y).strength(0.7))
-        sim.force('collide', d3.forceCollide(n => nodeRadius(n.id) + 2).strength(1))
-        sim.alpha(0.9).restart()
-      } else {
-        // Retag / data change: targets already updated in the ref. Gently reheat (don't reset) so the
-        // one moved node drifts to its new pack; everything else is already at rest and barely stirs.
-        sim.alpha(Math.max(sim.alpha(), 0.3)).restart()
+      // No forces — positions are computed. Glide each node to its target, then pin it.
+      sim.force('link', null); sim.force('charge', null); sim.force('collide', null)
+      sim.force('cluster-x', null); sim.force('cluster-y', null)
+      sim.alphaTarget(0).alpha(0)
+      cancelAnimationFrame(organizeAnimRef.current)
+      const tween = () => {
+        let moving = false
+        const tg = organizeTargetsRef.current
+        simNodesRef.current.forEach(n => {
+          const t = tg[n.id]; if (!t) return
+          const x0 = n.x == null ? t.x : n.x, y0 = n.y == null ? t.y : n.y
+          const dx = t.x - x0, dy = t.y - y0
+          if (Math.abs(dx) + Math.abs(dy) > 1) { n.x = x0 + dx * 0.22; n.y = y0 + dy * 0.22; n.fx = null; n.fy = null; moving = true }
+          else { n.x = t.x; n.y = t.y; n.fx = t.x; n.fy = t.y }
+        })
+        scheduleRender()
+        if (moving) organizeAnimRef.current = requestAnimationFrame(tween)
       }
+      organizeAnimRef.current = requestAnimationFrame(tween)
     } else if (organizeActiveRef.current) {
       // Exit: restore mind-map forces + the stored anchors.
       organizeActiveRef.current = false
       organizeSessionRef.current = null
+      cancelAnimationFrame(organizeAnimRef.current)
       setOrganizeGroups([])
       sim.force('cluster-x', null); sim.force('cluster-y', null)
       sim.force('charge', d3.forceManyBody().strength(-300))
@@ -879,6 +885,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       sim.alpha(0.5).restart()
     }
   }, [organize, storeNodes, storePropertyDefs]) // eslint-disable-line
+  useEffect(() => () => cancelAnimationFrame(organizeAnimRef.current), [])
 
   const getSiblings = useCallback((nodeId) => {
     const parentEdge = storeEdges.find(e => e.target === nodeId)
@@ -2315,35 +2322,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}
             style={readOnly ? { pointerEvents: 'none' } : undefined}>
-            {/* 0. Organize group packs (behind everything; non-interactive). Drawn LIVE around the
-                 members so each pack is exactly big enough to hold them, and grows/shrinks as the
-                 force layout settles. Empty packs keep a small circle at their centre as a drop target. */}
-            {organize && (() => {
-              const byId = new Map(simNodesRef.current.map(n => [n.id, n]))
-              return organizeGroups.map(g => {
-                const members = g.memberIds.map(id => byId.get(id)).filter(n => n && n.x != null)
-                let bx = g.cx, by = g.cy, br = 66
-                if (members.length) {
-                  bx = members.reduce((s, m) => s + m.x, 0) / members.length
-                  by = members.reduce((s, m) => s + m.y, 0) / members.length
-                  br = 0
-                  members.forEach(m => {
-                    const vp = resolveVP(m.id)
-                    const { halfW, halfH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), m.label || '',
-                      Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
-                    br = Math.max(br, Math.hypot(m.x - bx, m.y - by) + Math.hypot(halfW, halfH))
-                  })
-                  br += 16
-                }
-                return (
-                  <g key={g.key} style={{ pointerEvents: 'none' }}>
-                    <circle cx={bx} cy={by} r={br} fill={g.color + '5e'} stroke={g.color} strokeWidth={2.5} />
-                    <text x={bx} y={by - br - 12} textAnchor="middle" fontSize={22} fontWeight={700} fill={g.color}
-                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
-                  </g>
-                )
-              })
-            })()}
+            {/* 0. Organize group packs (behind everything; non-interactive). Deterministic circle
+                 packing — each pack is a tight circle hugging its members; the packs are bunched and
+                 non-overlapping. Empty packs keep a small circle as a drop target. */}
+            {organize && organizeGroups.map(g => (
+              <g key={g.key} style={{ pointerEvents: 'none' }}>
+                <circle cx={g.cx} cy={g.cy} r={g.r} fill={g.color + '5e'} stroke={g.color} strokeWidth={2.5} />
+                <text x={g.cx} y={g.cy - g.r - 10} textAnchor="middle" fontSize={20} fontWeight={700} fill={g.color}
+                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
+              </g>
+            ))}
             {/* 1. Frame containers (hidden while organizing — packs replace them) */}
             {!organize && simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
