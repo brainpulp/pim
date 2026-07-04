@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react'
 import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
-import { buildTree } from '../lib/hierarchy'
+import { buildTree, buildTagTree } from '../lib/hierarchy'
 
 // Zoomable circle packing (ref: mbostock/1747543). A structural view of the node tree:
 // nested circles sized by leaf count (or a Number property). Click a circle to zoom in,
@@ -18,10 +18,14 @@ export default function PackView() {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
+  const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
 
   const [sizeBy, setSizeBy] = useState(null)   // null = size by item count, else a Number propId
+  const [groupProp, setGroupProp] = useState(null)   // null = edge hierarchy, else group-by-tag propId
   const [menuOpen, setMenuOpen] = useState(false)
+  const [srcMenu, setSrcMenu] = useState(false)
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
+  const srcLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Hierarchy'
 
   const decorOf = useMemo(() => {
     const np = views.find(v => v.id === activeViewId)?.nodeProps || {}
@@ -34,10 +38,11 @@ export default function PackView() {
   }, [views, activeViewId])
 
   const root = useMemo(() => {
-    const tree = buildTree(nodes, edges, { decorOf, sizeBy })
+    const def = groupProp ? propertyDefs.find(d => d.id === groupProp) : null
+    const tree = def ? buildTagTree(nodes, def, { decorOf, sizeBy }) : buildTree(nodes, edges, { decorOf, sizeBy })
     const h = d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => (b.value || 0) - (a.value || 0))
     return d3.pack().size([D, D]).padding(3)(h)
-  }, [nodes, edges, decorOf, sizeBy])
+  }, [nodes, edges, decorOf, sizeBy, groupProp, propertyDefs])
 
   const [focus, setFocus] = useState(root)
   // Re-seat focus on data change: keep the same node id if it still exists, else root.
@@ -62,21 +67,34 @@ export default function PackView() {
 
   return (
     <div style={styles.wrap}>
-      {f !== root && (
-        <button style={styles.back} onClick={zoomOut}>← {f.parent && f.parent !== root ? trim(f.parent.data.label, 24) : 'Up'}</button>
-      )}
-      <div style={{ position: 'absolute', top: 12, left: f !== root ? 150 : 12, zIndex: 5 }}>
-        <button style={styles.btn} onClick={() => setMenuOpen(o => !o)}>⬡ size: {trim(sizeLabel, 16)} ▾</button>
-        {menuOpen && (<>
-          <div style={styles.backdrop} onClick={() => setMenuOpen(false)} />
-          <div style={styles.menu} onClick={e => e.stopPropagation()}>
-            <div style={{ ...styles.item, color: !sizeBy ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(null); setMenuOpen(false) }}>{!sizeBy && '✓ '}Item count</div>
-            <div style={styles.mlabel}>By Number property</div>
-            {numberDefs.length ? numberDefs.map(d => (
-              <div key={d.id} style={{ ...styles.item, color: sizeBy === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(d.id); setMenuOpen(false) }}>{sizeBy === d.id && '✓ '}{d.name}</div>
-            )) : <div style={{ ...styles.item, color: '#8090b8', fontSize: '0.74rem' }}>No Number property</div>}
-          </div>
-        </>)}
+      <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {f !== root && <button style={styles.back} onClick={zoomOut}>← {f.parent && f.parent !== root ? trim(f.parent.data.label, 20) : 'Up'}</button>}
+        <div style={{ position: 'relative' }}>
+          <button style={styles.btn} onClick={() => setSrcMenu(o => !o)}>{groupProp ? '❃' : '⬡'} {trim(srcLabel, 16)} ▾</button>
+          {srcMenu && (<>
+            <div style={styles.backdrop} onClick={() => setSrcMenu(false)} />
+            <div style={styles.menu} onClick={e => e.stopPropagation()}>
+              <div style={{ ...styles.item, color: !groupProp ? '#fff' : '#c5d0ff' }} onClick={() => { setGroupProp(null); setSrcMenu(false) }}>{!groupProp && '✓ '}Hierarchy (edges)</div>
+              <div style={styles.mlabel}>Group by tag</div>
+              {tagDefs.length ? tagDefs.map(d => (
+                <div key={d.id} style={{ ...styles.item, color: groupProp === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setGroupProp(d.id); setSrcMenu(false) }}>{groupProp === d.id && '✓ '}{d.name}</div>
+              )) : <div style={{ ...styles.item, color: '#8090b8', fontSize: '0.74rem' }}>No Select/Tags property</div>}
+            </div>
+          </>)}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <button style={styles.btn} onClick={() => setMenuOpen(o => !o)}>size: {trim(sizeLabel, 14)} ▾</button>
+          {menuOpen && (<>
+            <div style={styles.backdrop} onClick={() => setMenuOpen(false)} />
+            <div style={styles.menu} onClick={e => e.stopPropagation()}>
+              <div style={{ ...styles.item, color: !sizeBy ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(null); setMenuOpen(false) }}>{!sizeBy && '✓ '}Item count</div>
+              <div style={styles.mlabel}>By Number property</div>
+              {numberDefs.length ? numberDefs.map(d => (
+                <div key={d.id} style={{ ...styles.item, color: sizeBy === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(d.id); setMenuOpen(false) }}>{sizeBy === d.id && '✓ '}{d.name}</div>
+              )) : <div style={{ ...styles.item, color: '#8090b8', fontSize: '0.74rem' }}>No Number property</div>}
+            </div>
+          </>)}
+        </div>
       </div>
       <div style={styles.hint}>click to zoom{f !== root ? ' · Esc to go up' : ''}</div>
       <svg viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}
@@ -96,34 +114,37 @@ export default function PackView() {
               />
             )
           })}
-          {/* Labels: every node, every level, complete text (fit to circle; may be tiny). */}
+          {/* Labels: every node, every level, complete text — wrapped to fit the circle. */}
           {descendants.filter(d => d.depth > 0 && d.data.label).map(d => {
             const isLeaf = !d.children
-            const len = Math.max(3, d.data.label.length)
+            const fontSize = isLeaf ? d.r * 0.34 : Math.min(d.r * 0.15, 16)
+            const maxChars = Math.max(4, Math.floor((1.75 * d.r) / (fontSize * 0.56)))
+            const lines = wrapText(d.data.label, maxChars).slice(0, isLeaf ? 8 : 2)
+            const lh = fontSize * 1.08
             if (isLeaf) {
-              const fontSize = Math.min(d.r * 0.5, (1.8 * d.r) / (len * 0.6))
+              const y0 = d.y - (lines.length - 1) / 2 * lh
               return (
-                <text key={'t' + d.data.id} x={d.x} y={d.y} textAnchor="middle" dominantBaseline="middle"
+                <text key={'t' + d.data.id} textAnchor="middle" dominantBaseline="middle"
                   fontSize={fontSize} fill="#eef2ff" pointerEvents="none"
                   style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.18, fontWeight: 600 }}>
-                  {d.data.label}
+                  {lines.map((ln, i) => <tspan key={i} x={d.x} y={y0 + i * lh}>{ln}</tspan>)}
                 </text>
               )
             }
             // Parent: a small title hugging the top edge so it doesn't cover children.
-            const fontSize = Math.min(d.r * 0.16, (1.9 * d.r) / (len * 0.6))
+            const y0 = d.y - d.r + fontSize * 1.1
             return (
-              <text key={'t' + d.data.id} x={d.x} y={d.y - d.r + fontSize * 1.1} textAnchor="middle" dominantBaseline="hanging"
+              <text key={'t' + d.data.id} textAnchor="middle" dominantBaseline="hanging"
                 fontSize={fontSize} fill="#cdd6f5" pointerEvents="none"
                 style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.2, fontWeight: 600 }}>
-                {d.data.label}
+                {lines.map((ln, i) => <tspan key={i} x={d.x} y={y0 + i * lh}>{ln}</tspan>)}
               </text>
             )
           })}
-          {/* Emoji decoration, mounted top-right like on the graph nodes. */}
-          {descendants.filter(d => d.data.emoji && d.r > 7).map(d => {
-            const em = d.data.emoji, sz = d.r * 0.5
-            const ex = d.x + d.r * 0.42, ey = d.y - d.r * 0.42
+          {/* Emoji decoration, a small badge mounted top-right like on the graph nodes. */}
+          {descendants.filter(d => d.data.emoji && d.r > 14).map(d => {
+            const em = d.data.emoji, sz = Math.min(d.r * 0.28, 30)
+            const ex = d.x + d.r * 0.5, ey = d.y - d.r * 0.5
             return em.type === 'image'
               ? <image key={'e' + d.data.id} href={em.emoji} x={ex - sz / 2} y={ey - sz / 2} width={sz} height={sz} style={{ pointerEvents: 'none' }} />
               : <text key={'e' + d.data.id} x={ex} y={ey} fontSize={sz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>
@@ -136,6 +157,22 @@ export default function PackView() {
 }
 
 function trim(s, n) { return s && s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : (s || '') }
+
+// Greedy word-wrap into lines of at most `maxChars`; very long words are hard-broken.
+function wrapText(text, maxChars) {
+  const words = String(text).split(/\s+/).filter(Boolean)
+  const lines = []
+  let cur = ''
+  const pushLong = w => { while (w.length > maxChars) { lines.push(w.slice(0, maxChars)); w = w.slice(maxChars) } return w }
+  for (let w of words) {
+    if (w.length > maxChars) { if (cur) { lines.push(cur); cur = '' } w = pushLong(w) }
+    if (!cur) cur = w
+    else if ((cur + ' ' + w).length <= maxChars) cur += ' ' + w
+    else { lines.push(cur); cur = w }
+  }
+  if (cur) lines.push(cur)
+  return lines.length ? lines : ['']
+}
 
 const styles = {
   wrap: { position: 'relative', height: '100%', width: '100%', background: '#0c0c1a', overflow: 'hidden' },
