@@ -7,6 +7,15 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 ---
 
+## Recent fixes (2026-07-04)
+
+- **Table:** column headers had z-index 0, so scrolling let body cells paint over them — titles collided and were
+  unclickable (rename dead). Fixed the sticky stack: headers z3, corner (Name) z4, sticky Name body cells z2,
+  regular body cells 0. Rename target widened to the whole header cell (double-click) + ellipsis on long names.
+- **Pack:** replaced the CSS click-to-zoom with real **d3.zoom** (scroll = zoom, drag = pan, click a circle to fit),
+  so you can zoom into a tag-pack until items are big enough to grab — fixes "drag & drop doesn't work" (leaves were
+  too tiny to hit). Leaf drags are excluded from pan via the zoom filter + `data-leaf`. Hover-zoom kept as a bonus.
+
 ## Open / in progress
 
 | # | Item | Status | Notes |

@@ -49,7 +49,7 @@ export default function Table({ projectId }) {
         <table style={styles.table}>
           <thead>
             <tr>
-              <th style={{ ...styles.th, ...styles.nameCol }}>Name</th>
+              <th style={{ ...styles.th, ...styles.nameCol, zIndex: 4 }}>Name</th>
               {propertyDefs.map(def => (
                 <th key={def.id} style={styles.th}>
                   <ColumnHeader def={def}
@@ -71,7 +71,7 @@ export default function Table({ projectId }) {
           <tbody>
             {nodes.map(n => (
               <tr key={n.id} style={styles.tr}>
-                <td style={{ ...styles.td, ...styles.nameCol }}>
+                <td style={{ ...styles.td, ...styles.nameCol, zIndex: 2 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <TextInput value={n.label} placeholder="Untitled" bold onCommit={v => updateLabel(n.id, v)} />
                     <button style={styles.rowDel} title="Delete item" onClick={() => { if (confirm(`Delete "${n.label || 'Untitled'}"?`)) deleteNode(n.id) }}>×</button>
@@ -108,17 +108,18 @@ function ColumnHeader({ def, onRename, onRetype, onToggleChip, onDelete, open, s
   const [editing, setEditing] = useState(false)
   const typeIcon = PROP_TYPES.find(t => t.type === def.type)?.icon || 'T'
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
-      <span style={{ color: '#5b6af0', fontSize: '0.7rem', width: 14, textAlign: 'center' }}>{typeIcon}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}
+      onDoubleClick={() => !editing && setEditing(true)} title={editing ? undefined : 'Double-click to rename'}>
+      <span style={{ color: '#5b6af0', fontSize: '0.7rem', width: 14, textAlign: 'center', flexShrink: 0 }}>{typeIcon}</span>
       {editing ? (
         <input autoFocus defaultValue={def.name}
           onBlur={e => { onRename(e.target.value.trim() || def.name); setEditing(false) }}
           onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditing(false) }}
           style={styles.headerInput} />
       ) : (
-        <span style={{ flex: 1, cursor: 'pointer', color: '#c5d0ff' }} onDoubleClick={() => setEditing(true)}>{def.name}</span>
+        <span style={{ flex: 1, cursor: 'pointer', color: '#c5d0ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{def.name}</span>
       )}
-      <button style={styles.colMenuBtn} onClick={() => setOpen(!open)}>⋯</button>
+      <button style={styles.colMenuBtn} onClick={() => setOpen(!open)} onDoubleClick={e => e.stopPropagation()}>⋯</button>
       {open && (
         <>
           <div style={styles.backdrop} onClick={() => setOpen(false)} />
@@ -166,8 +167,10 @@ const styles = {
   count: { fontSize: '0.78rem', color: '#8090b8' },
   scroll: { flex: 1, overflow: 'auto', padding: '0 1.5rem 2rem' },
   table: { borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.85rem' },
-  th: { textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #2a3358', borderRight: '1px solid #1a2036', color: '#8090b8', fontWeight: 500, position: 'sticky', top: 0, background: '#12122a', minWidth: 120, verticalAlign: 'middle' },
-  nameCol: { minWidth: 220, position: 'sticky', left: 0, background: '#12122a', zIndex: 1 },
+  // z-index stack (fixes header/body collision): column headers 3, corner (Name header) 4,
+  // sticky Name body cells 2, regular body cells 0 → headers always paint above body.
+  th: { textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #2a3358', borderRight: '1px solid #1a2036', color: '#8090b8', fontWeight: 500, position: 'sticky', top: 0, background: '#12122a', minWidth: 120, maxWidth: 260, verticalAlign: 'middle', zIndex: 3 },
+  nameCol: { minWidth: 220, position: 'sticky', left: 0, background: '#12122a' },
   tr: {},
   td: { padding: '3px 10px', borderBottom: '1px solid #1a2036', borderRight: '1px solid #1a2036', verticalAlign: 'middle', background: '#0e0e1c' },
   headerInput: { flex: 1, background: '#0e0e1c', border: '1px solid #5b6af0', borderRadius: 4, color: '#fff', fontSize: '0.82rem', padding: '2px 5px', outline: 'none' },
