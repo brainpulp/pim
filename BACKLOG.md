@@ -7,16 +7,21 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 ---
 
-## Organize rewrite — deterministic static packing (2026-07-04)
+## Organize = clustered force layout ("grouping bubbles") (2026-07-04, final)
 
-The force-cluster approach was unusable (dragging one node exploded them all, then everything froze —
-nodes snapping back toward their mind-map positions because the sim kept redistributing). Replaced it
-with **deterministic static packing**: `d3.packSiblings` packs each group's members into a tight circle,
-and the group circles are packed together (not on a grid). Every node is **pinned** at its slot (`fx/fy`),
-all grouping forces are turned OFF, so nothing redistributes. A retag re-runs the (pure) packing — the
-moved node lands in its new pack and every other node keeps its exact slot (same members → same layout).
-Group centres are computed once per session so they don't drift. Pack outline = the packed enclosing circle,
-so members always fit. Empty packs stay as fixed drop targets. Lanes = the same packs laid in a row.
+Landed on the right model after two wrong turns (over-strong force → explosions; then static pinning →
+"loose/anchored, not self-organizing"). Now it's a proper clustered force layout:
+- Gentle forces, configured **once** on entry: `forceX/forceY` toward each node's group centre (strength 0.1),
+  `forceManyBody(-22)`, `forceCollide(nodeRadius+3)`. Nothing pinned — nodes float and self-organize.
+- Group centres computed once per session, spaced by each group's expected blob size and **packed together**
+  (`d3.packSiblings`), not on a grid. Lanes = same blobs in a row.
+- Per-node target centre lives in a **ref the force reads each tick**. A retag just updates that ref + a
+  gentle reheat (`alpha≈0.3`) — no force reconfig, no position reset → the one moved node drifts to its new
+  pack, everything else barely stirs. This killed the explosions.
+- **Pack outlines are drawn live** around the members (centroid + extent), so each pack is exactly as big as
+  it needs to be and grows/shrinks as the layout settles. Empty packs keep a small circle as a drop target.
+- Known limit: group centres are fixed at entry, so dragging many nodes into one pack can eventually crowd a
+  neighbour — re-enter Organize to re-fit. A "Re-fit" button is the easy next step if needed.
 
 ## Recent fixes (2026-07-04, cont.)
 
