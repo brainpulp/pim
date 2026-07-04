@@ -7,6 +7,17 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 ---
 
+## Organize rewrite — deterministic static packing (2026-07-04)
+
+The force-cluster approach was unusable (dragging one node exploded them all, then everything froze —
+nodes snapping back toward their mind-map positions because the sim kept redistributing). Replaced it
+with **deterministic static packing**: `d3.packSiblings` packs each group's members into a tight circle,
+and the group circles are packed together (not on a grid). Every node is **pinned** at its slot (`fx/fy`),
+all grouping forces are turned OFF, so nothing redistributes. A retag re-runs the (pure) packing — the
+moved node lands in its new pack and every other node keeps its exact slot (same members → same layout).
+Group centres are computed once per session so they don't drift. Pack outline = the packed enclosing circle,
+so members always fit. Empty packs stay as fixed drop targets. Lanes = the same packs laid in a row.
+
 ## Recent fixes (2026-07-04, cont.)
 
 Organize mode polish (the real home for tag-packing + drag-to-retag with real nodes):

@@ -782,100 +782,95 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const sim = simRef.current
 
     if (organize) {
+      // DETERMINISTIC STATIC PACKING (no force redistribution — that was the source of the
+      // explosions). Each group's members are packed with d3.packSiblings into a tight circle,
+      // and the group circles are themselves packed together (not on a grid). Every node is
+      // PINNED at its computed slot (fx/fy), so nothing drifts and unaffected groups never move
+      // on a retag (same members → identical packing → identical positions).
       const groupBy = organize.groupBy
       const def = storePropertyDefs.find(d => d.id === groupBy)
       const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight
-      // Determine group keys (option ids for select, plus an "(empty)" bucket)
+      const isLanes = organize.layout === 'lanes'
       const keyOf = (n) => {
         const v = n.props?.[groupBy]
         if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) return '__empty__'
-        return String(Array.isArray(v) ? v[0] : v)  // slice-1: single-select; multi handled later
+        return String(Array.isArray(v) ? v[0] : v)
       }
       const nodeById = Object.fromEntries(storeNodes.map(n => [n.id, n]))
+      const simById = new Map(simNodesRef.current.map(n => [n.id, n]))
       const visible = simNodesRef.current.filter(sn => visibleNodeIdsRef.current.has(sn.id))
       const byKey = {}
-      visible.forEach(sn => {
-        const k = keyOf(nodeById[sn.id] || {})
-        ;(byKey[k] = byKey[k] || []).push(sn.id)
-      })
-      // Complete, STABLE key set: every option gets a pack (even empty ones, as drop targets),
-      // plus any stray present values, plus the "(empty)" bucket — always. Keeping the set stable
-      // means a retag doesn't change the pack count, so the grid doesn't reflow the whole graph.
+      visible.forEach(sn => { const k = keyOf(nodeById[sn.id] || {}); (byKey[k] = byKey[k] || []).push(sn.id) })
+      // Complete, stable key set so packs (incl. empty ones) don't appear/disappear on retag.
       const optionKeys = def?.options ? def.options.map(o => o.id) : (def?.type === 'checkbox' ? ['true', 'false'] : [])
       const keys = [...optionKeys]
       Object.keys(byKey).forEach(k => { if (k !== '__empty__' && !keys.includes(k)) keys.push(k) })
       keys.push('__empty__')
       keys.forEach(k => { if (!byKey[k]) byKey[k] = [] })
-      // Lay groups out. Pack = grid of cells; Lanes = one vertical band per group.
-      // Anchor the world rect ONCE per session (first activation, or when groupBy/layout changes)
-      // so later property edits don't drift it if the user has panned.
-      const isLanes = organize.layout === 'lanes'
-      const cols = isLanes ? Math.max(1, keys.length) : Math.max(1, Math.ceil(Math.sqrt(keys.length)))
-      const rows = isLanes ? 1 : Math.max(1, Math.ceil(keys.length / cols))
+      const labelFor = (k) => k === '__empty__' ? '(empty)'
+        : def?.options?.find(o => o.id === k)?.name ?? (def?.type === 'checkbox' ? (k === 'true' ? '✓' : '—') : k)
+      const colorFor = (k) => k === '__empty__' ? '#5a6683' : (def?.options?.find(o => o.id === k)?.color || '#5b6af0')
+      const nodeRadius = (id) => {
+        const vp = resolveVP(id)
+        const { halfW, halfH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), nodeById[id]?.label || '',
+          Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
+        return Math.hypot(halfW, halfH)
+      }
+      // 1. Pack each group's members into a tight cluster (relative to its own centre).
+      const packed = {}
+      keys.forEach(k => {
+        const ids = byKey[k]
+        if (!ids.length) { packed[k] = { circles: [], r: 66 }; return }
+        const circles = ids.map(id => ({ id, r: nodeRadius(id) + 7 }))
+        d3.packSiblings(circles)
+        const enc = d3.packEnclose(circles)
+        circles.forEach(c => { c.dx = c.x - enc.x; c.dy = c.y - enc.y })
+        packed[k] = { circles, r: enc.r }
+      })
+      // 2. Group centres — computed ONCE per session (stable across retags). Packed together
+      //    (or laid in a row for Lanes), then mapped to world coords centred in the viewport.
       const fresh = !organizeActiveRef.current
         || organizeSessionRef.current?.groupBy !== groupBy
         || organizeSessionRef.current?.layout !== organize.layout
       if (fresh) {
+        const radii = keys.map(k => Math.max(packed[k].r, 48) + 34)
         const T = zoomTransformRef.current
-        organizeSessionRef.current = {
-          groupBy, layout: organize.layout,
-          worldW: W / T.k, worldH: H / T.k,
-          originX: -T.x / T.k, originY: -T.y / T.k,
-        }
-      }
-      const { worldW, worldH, originX, originY } = organizeSessionRef.current
-      const cellW = worldW / cols, cellH = worldH / rows
-      const labelFor = (k) => k === '__empty__' ? '(empty)'
-        : def?.options?.find(o => o.id === k)?.name
-          ?? (def?.type === 'checkbox' ? (k === 'true' ? '✓' : '—') : k)
-      const colorFor = (k) => k === '__empty__' ? '#3a4358' : (def?.options?.find(o => o.id === k)?.color || '#5b6af0')
-      const groups = keys.map((k, i) => {
-        const cx = originX + (i % cols) * cellW + cellW / 2
-        const cy = isLanes ? originY + worldH / 2 : originY + Math.floor(i / cols) * cellH + cellH / 2
-        const g = { key: k, cx, cy, label: labelFor(k), color: colorFor(k), count: byKey[k].length, layout: organize.layout, memberIds: byKey[k] }
+        const cxW = (-T.x + W / 2) / T.k, cyW = (-T.y + H / 2) / T.k
+        const centers = {}
         if (isLanes) {
-          const pad = Math.min(22, cellW * 0.06)
-          g.laneRect = { x: originX + i * cellW + pad, y: originY + 6, w: cellW - 2 * pad, h: worldH - 12 }
-          g.rx = Math.max(40, cellW * 0.42); g.ry = worldH * 0.46
+          const total = radii.reduce((a, b) => a + b * 2, 0); let x = -total / 2
+          keys.forEach((k, i) => { centers[k] = { gx: cxW + x + radii[i], gy: cyW }; x += radii[i] * 2 })
         } else {
-          g.rx = Math.max(60, cellW * 0.42); g.ry = Math.max(50, cellH * 0.42)
+          const gc = keys.map((k, i) => ({ key: k, r: radii[i] }))
+          d3.packSiblings(gc); const genc = d3.packEnclose(gc)
+          gc.forEach(c => { centers[c.key] = { gx: cxW + (c.x - genc.x), gy: cyW + (c.y - genc.y) } })
         }
-        return g
+        organizeSessionRef.current = { groupBy, layout: organize.layout, centers }
+      }
+      const centers = organizeSessionRef.current.centers
+      keys.forEach(k => { if (!centers[k]) centers[k] = { gx: 0, gy: 0 } })
+      // 3. Pin every member at its slot; build the group descriptors for render + drop hit-test.
+      const groups = keys.map(k => {
+        const c = centers[k]
+        packed[k].circles.forEach(cc => {
+          const n = simById.get(cc.id)
+          if (n) { n.fx = c.gx + cc.dx; n.fy = c.gy + cc.dy; n.x = n.fx; n.y = n.fy }
+        })
+        return { key: k, cx: c.gx, cy: c.gy, r: Math.max(packed[k].r, 44), label: labelFor(k),
+          color: colorFor(k), count: byKey[k].length, memberIds: byKey[k] }
       })
-      const targets = {}
-      groups.forEach(g => byKey[g.key].forEach(id => { targets[id] = { x: g.cx, y: g.cy } }))
-      organizeTargetsRef.current = targets
       organizeActiveRef.current = true
       setOrganizeGroups(groups)
-      if (fresh) {
-        // First activation (or layout/groupBy change): free everyone and configure the forces.
-        simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
-        sim.force('link', null)
-        // Weak charge + strong pull to centroid + collide → each group settles into a tight ball
-        // (a real "pack"), instead of spreading across the canvas.
-        sim.force('charge', d3.forceManyBody().strength(isLanes ? -12 : -6))
-        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(isLanes ? 0.5 : 0.45))
-        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(isLanes ? 0.06 : 0.45))
-        // Collide by encoded (or manual) radius so size-encoded nodes don't overlap.
-        sim.force('collide', d3.forceCollide(n => {
-          const p = nodeById[n.id]?.props
-          const enc = encodedScaleFor(p, organize.sizeBy, sizeDomainRef.current)
-          const scale = enc ?? (viewNodePropsRef.current[n.id]?.scale || 1)
-          return NODE_R * scale + 5
-        }).strength(0.9))
-        sim.alpha(0.7).restart()
-      } else {
-        // Re-run from a data change (e.g. a retag): DON'T reset positions. Targets already updated
-        // in the ref, so only the node whose group changed drifts; a gentle nudge settles it.
-        sim.alpha(0.15).restart()
-      }
+      // Positions are pinned, so no grouping forces are needed — turn them off so nothing fights.
+      sim.force('link', null); sim.force('charge', null); sim.force('collide', null)
+      sim.force('cluster-x', null); sim.force('cluster-y', null)
+      sim.alpha(0.03).restart()   // a couple of ticks so React re-renders the pinned layout
     } else if (organizeActiveRef.current) {
-      // Exit: drop grouping forces, restore mind-map forces + anchors from the store.
+      // Exit: restore mind-map forces + the stored anchors.
       organizeActiveRef.current = false
       organizeSessionRef.current = null
       setOrganizeGroups([])
-      sim.force('cluster-x', null)
-      sim.force('cluster-y', null)
+      sim.force('cluster-x', null); sim.force('cluster-y', null)
       sim.force('charge', d3.forceManyBody().strength(-300))
       sim.force('collide', d3.forceCollide(NODE_R + 8))
       sim.force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
@@ -1325,10 +1320,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             else value = k
             setNodeProp(id, groupBy, value)
           })
-          // Release just the dragged node(s) so they settle into the new pack; a gentle nudge
-          // avoids disturbing the rest of the graph (the effect re-run also stays low-alpha).
-          dragGroup.forEach(n => { n.fx = null; n.fy = null })
-          simRef.current.alpha(0.2).restart()
+          // The organize effect re-runs on this prop change and re-pins EVERY node deterministically
+          // (the moved node lands in its new pack; all others keep their exact slots). Nothing else
+          // to do here — no force nudge, so the rest of the graph doesn't budge.
           document.removeEventListener('mousemove', onMove)
           document.removeEventListener('mouseup', onUp)
           return
@@ -2321,45 +2315,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
           <g transform={`translate(${T.x},${T.y}) scale(${T.k})`}
             style={readOnly ? { pointerEvents: 'none' } : undefined}>
-            {/* 0. Organize group packs (behind everything; non-interactive). The pack outline is
-                 drawn to actually WRAP its member nodes so items fit inside it. Solid, opaque. */}
-            {organize && (() => {
-              const byId = new Map(simNodesRef.current.map(n => [n.id, n]))
-              return organizeGroups.map(g => {
-                if (g.laneRect) {
-                  return (
-                    <g key={g.key} style={{ pointerEvents: 'none' }}>
-                      <rect x={g.laneRect.x} y={g.laneRect.y} width={g.laneRect.w} height={g.laneRect.h} rx={14}
-                        fill={g.color + '66'} stroke={g.color} strokeWidth={2.5} />
-                      <text x={g.cx} y={g.laneRect.y + 26} textAnchor="middle" fontSize={22} fontWeight={700} fill={g.color}
-                        style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
-                    </g>
-                  )
-                }
-                // Pack: bounding circle of the members' live positions (incl. their own extent).
-                const members = g.memberIds.map(id => byId.get(id)).filter(n => n && n.x != null)
-                let bx = g.cx, by = g.cy, br = 78
-                if (members.length) {
-                  bx = members.reduce((s, m) => s + m.x, 0) / members.length
-                  by = members.reduce((s, m) => s + m.y, 0) / members.length
-                  br = 0
-                  members.forEach(m => {
-                    const vp = resolveVP(m.id)
-                    const { halfW, halfH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), m.label || '',
-                      Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
-                    br = Math.max(br, Math.hypot(m.x - bx, m.y - by) + Math.hypot(halfW, halfH))
-                  })
-                  br += 26
-                }
-                return (
-                  <g key={g.key} style={{ pointerEvents: 'none' }}>
-                    <circle cx={bx} cy={by} r={br} fill={g.color + '66'} stroke={g.color} strokeWidth={2.5} />
-                    <text x={bx} y={by - br - 12} textAnchor="middle" fontSize={22} fontWeight={700} fill={g.color}
-                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
-                  </g>
-                )
-              })
-            })()}
+            {/* 0. Organize group packs (behind everything; non-interactive). Each pack is a
+                 deterministic circle (from d3.packSiblings) that exactly wraps its members. */}
+            {organize && organizeGroups.map(g => (
+              <g key={g.key} style={{ pointerEvents: 'none' }}>
+                <circle cx={g.cx} cy={g.cy} r={g.r + 16} fill={g.color + '5e'} stroke={g.color} strokeWidth={2.5} />
+                <text x={g.cx} y={g.cy - g.r - 26} textAnchor="middle" fontSize={22} fontWeight={700} fill={g.color}
+                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>{g.label} · {g.count}</text>
+              </g>
+            ))}
             {/* 1. Frame containers (hidden while organizing — packs replace them) */}
             {!organize && simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
