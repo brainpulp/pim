@@ -7,6 +7,20 @@ Legend: 🟢 open · ⏳ waiting on Maxi · 💤 idea/needs decision · ✅ done
 
 ---
 
+## Recent fixes (2026-07-04, cont.)
+
+Organize mode polish (the real home for tag-packing + drag-to-retag with real nodes):
+- **Pack titles bigger** (22px bold) and **packs less transparent** (fill ~14%, stroke ~70%).
+- **Drags no longer reshuffle the whole graph:** the group key set is now complete + stable (every
+  option gets a pack), so a retag doesn't change the pack count and the grid never reflows; and the
+  effect's re-run on a data change no longer resets positions / hard-restarts — it just nudges the one
+  node whose group changed (alpha 0.15; drop handler 0.2).
+- **Empty packs stay** as visible drop targets (seeded from all options + always an "(empty)" bucket).
+- **Show links (segments) toggle** in the Organize popover, default **off** — edges hidden while packing.
+- **Frames hidden** while organizing (packs replace them).
+- **Context menu no longer pops when panning:** it now opens on right-button *mouseup* only if the
+  pointer didn't move (native menu always suppressed; open decided after the gesture, not at press).
+
 ## Recent fixes (2026-07-04)
 
 - **Table:** column headers had z-index 0, so scrolling let body cells paint over them — titles collided and were

@@ -793,13 +793,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
       const nodeById = Object.fromEntries(storeNodes.map(n => [n.id, n]))
       const visible = simNodesRef.current.filter(sn => visibleNodeIdsRef.current.has(sn.id))
-      const keys = []
       const byKey = {}
       visible.forEach(sn => {
         const k = keyOf(nodeById[sn.id] || {})
-        if (!byKey[k]) { byKey[k] = []; keys.push(k) }
-        byKey[k].push(sn.id)
+        ;(byKey[k] = byKey[k] || []).push(sn.id)
       })
+      // Complete, STABLE key set: every option gets a pack (even empty ones, as drop targets),
+      // plus any stray present values, plus the "(empty)" bucket — always. Keeping the set stable
+      // means a retag doesn't change the pack count, so the grid doesn't reflow the whole graph.
+      const optionKeys = def?.options ? def.options.map(o => o.id) : (def?.type === 'checkbox' ? ['true', 'false'] : [])
+      const keys = [...optionKeys]
+      Object.keys(byKey).forEach(k => { if (k !== '__empty__' && !keys.includes(k)) keys.push(k) })
+      keys.push('__empty__')
+      keys.forEach(k => { if (!byKey[k]) byKey[k] = [] })
       // Lay groups out. Pack = grid of cells; Lanes = one vertical band per group.
       // Anchor the world rect ONCE per session (first activation, or when groupBy/layout changes)
       // so later property edits don't drift it if the user has panned.
@@ -841,20 +847,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       organizeTargetsRef.current = targets
       organizeActiveRef.current = true
       setOrganizeGroups(groups)
-      // Free live positions so nodes can migrate; pull toward group centroids / lane bands.
-      simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
-      sim.force('link', null)
-      sim.force('charge', d3.forceManyBody().strength(isLanes ? -18 : -40))
-      sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(isLanes ? 0.5 : 0.14))
-      sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(isLanes ? 0.04 : 0.14))
-      // Collide by encoded (or manual) radius so size-encoded nodes don't overlap.
-      sim.force('collide', d3.forceCollide(n => {
-        const p = nodeById[n.id]?.props
-        const enc = encodedScaleFor(p, organize.sizeBy, sizeDomainRef.current)
-        const scale = enc ?? (viewNodePropsRef.current[n.id]?.scale || 1)
-        return NODE_R * scale + 5
-      }).strength(0.9))
-      sim.alpha(0.7).restart()
+      if (fresh) {
+        // First activation (or layout/groupBy change): free everyone and configure the forces.
+        simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
+        sim.force('link', null)
+        sim.force('charge', d3.forceManyBody().strength(isLanes ? -18 : -40))
+        sim.force('cluster-x', d3.forceX(n => organizeTargetsRef.current[n.id]?.x ?? n.x).strength(isLanes ? 0.5 : 0.16))
+        sim.force('cluster-y', d3.forceY(n => organizeTargetsRef.current[n.id]?.y ?? n.y).strength(isLanes ? 0.05 : 0.16))
+        // Collide by encoded (or manual) radius so size-encoded nodes don't overlap.
+        sim.force('collide', d3.forceCollide(n => {
+          const p = nodeById[n.id]?.props
+          const enc = encodedScaleFor(p, organize.sizeBy, sizeDomainRef.current)
+          const scale = enc ?? (viewNodePropsRef.current[n.id]?.scale || 1)
+          return NODE_R * scale + 5
+        }).strength(0.9))
+        sim.alpha(0.7).restart()
+      } else {
+        // Re-run from a data change (e.g. a retag): DON'T reset positions. Targets already updated
+        // in the ref, so only the node whose group changed drifts; a gentle nudge settles it.
+        sim.alpha(0.15).restart()
+      }
     } else if (organizeActiveRef.current) {
       // Exit: drop grouping forces, restore mind-map forces + anchors from the store.
       organizeActiveRef.current = false
@@ -929,21 +941,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
 
-    // Right-click context menu via the native `contextmenu` event (fires on every
-    // right-click and is NOT swallowed by d3-zoom). Suppress it only when the right
-    // button was dragged — i.e. the user was panning. Drag is tracked with a
-    // capture-phase mousedown (runs before d3's bubble listener stops propagation).
+    // Right-click context menu. The native `contextmenu` event fires at *press* time (before any
+    // drag is known), so opening the menu there makes it pop every time you start a right-drag pan.
+    // Instead: always suppress the native menu, track right-button drag, and open our menu on the
+    // right-button MOUSEUP only if the pointer didn't move (i.e. it was a click, not a pan).
     const el = svgRef.current
     let rmb = null
     const onDownCapture = ev => { if (ev.button === 2) rmb = { x: ev.clientX, y: ev.clientY, moved: false } }
     const onMoveCapture = ev => { if (rmb && Math.hypot(ev.clientX - rmb.x, ev.clientY - rmb.y) >= 5) rmb.moved = true }
-    const onContext = ev => {
-      ev.preventDefault()
-      const dragged = rmb?.moved
+    const onContext = ev => ev.preventDefault()   // never show native menu; we open on mouseup
+    const onUpCapture = ev => {
+      if (ev.button !== 2 || !rmb) return
+      const dragged = rmb.moved
+      const cx = rmb.x, cy = rmb.y
       rmb = null
-      if (dragged || !el || readOnly) return   // no edit menus in shared read-only view
+      if (dragged || !el || readOnly) return   // panned, or no edit menus in shared read-only view
       const rect = el.getBoundingClientRect()
-      const px = ev.clientX - rect.left, py = ev.clientY - rect.top
+      const px = cx - rect.left, py = cy - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
 
       // Topmost non-frame node under the cursor → node menu
@@ -981,11 +995,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     el.addEventListener('mousedown', onDownCapture, true)
     window.addEventListener('mousemove', onMoveCapture, true)
+    window.addEventListener('mouseup', onUpCapture, true)
     el.addEventListener('contextmenu', onContext)
     return () => {
       svg.on('.zoom', null)
       el.removeEventListener('mousedown', onDownCapture, true)
       window.removeEventListener('mousemove', onMoveCapture, true)
+      window.removeEventListener('mouseup', onUpCapture, true)
       el.removeEventListener('contextmenu', onContext)
     }
   }, [scheduleRender, loading])
@@ -1307,9 +1323,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             else value = k
             setNodeProp(id, groupBy, value)
           })
-          // Let the cluster forces re-settle around the (recomputed) targets.
+          // Release just the dragged node(s) so they settle into the new pack; a gentle nudge
+          // avoids disturbing the rest of the graph (the effect re-run also stays low-alpha).
           dragGroup.forEach(n => { n.fx = null; n.fy = null })
-          simRef.current.alpha(0.6).restart()
+          simRef.current.alpha(0.2).restart()
           document.removeEventListener('mousemove', onMove)
           document.removeEventListener('mouseup', onUp)
           return
@@ -2308,28 +2325,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 {g.laneRect ? (
                   <>
                     <rect x={g.laneRect.x} y={g.laneRect.y} width={g.laneRect.w} height={g.laneRect.h} rx={14}
-                      fill={g.color + '10'} stroke={g.color + '55'} strokeWidth={1.5} strokeDasharray="6 5" />
-                    <text x={g.cx} y={g.laneRect.y + 20} textAnchor="middle"
-                      fontSize={14} fontWeight={600} fill={g.color}
-                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 3 }}>
+                      fill={g.color + '20'} stroke={g.color + 'aa'} strokeWidth={2} strokeDasharray="7 6" />
+                    <text x={g.cx} y={g.laneRect.y + 26} textAnchor="middle"
+                      fontSize={22} fontWeight={700} fill={g.color}
+                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>
                       {g.label} · {g.count}
                     </text>
                   </>
                 ) : (
                   <>
                     <ellipse cx={g.cx} cy={g.cy} rx={g.rx} ry={g.ry}
-                      fill={g.color + '14'} stroke={g.color + '66'} strokeWidth={1.5} strokeDasharray="6 5" />
-                    <text x={g.cx} y={g.cy - g.ry - 8} textAnchor="middle"
-                      fontSize={14} fontWeight={600} fill={g.color}
-                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 3 }}>
+                      fill={g.color + '24'} stroke={g.color + 'bb'} strokeWidth={2} strokeDasharray="7 6" />
+                    <text x={g.cx} y={g.cy - g.ry - 12} textAnchor="middle"
+                      fontSize={22} fontWeight={700} fill={g.color}
+                      style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>
                       {g.label} · {g.count}
                     </text>
                   </>
                 )}
               </g>
             ))}
-            {/* 1. Frame containers */}
-            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
+            {/* 1. Frame containers (hidden while organizing — packs replace them) */}
+            {!organize && simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
                 viewProps={getVP(n.id)}
                 isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
@@ -2344,8 +2361,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               />
             ))}
 
-            {/* 2. Edges â€" node fill covers the tips cleanly */}
-            {edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen }) => {
+            {/* 2. Edges â€" node fill covers the tips cleanly. Hidden in Organize unless "segments" on. */}
+            {(!organize || organize.showSegments) && edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen }) => {
               const hasBlur = sBlur > 0 || tBlur > 0
               const gid = `eg-${id}`
               const sFade = Math.min(0.5, (sBlur * 2) / lineLen)
@@ -4309,6 +4326,9 @@ function OrganizeControl({ defs, organize, onSet, onClear }) {
             <PickRow label="Size by" defs={numberDefs} value={organize.sizeBy} clearable onPick={id => set({ sizeBy: id })} empty="No Number property" />
             <PickRow label="Color by" defs={colorDefs} value={organize.colorBy} clearable onPick={id => set({ colorBy: id })} empty="No Select property" />
             <div style={{ borderTop: '1px solid #2a3358', margin: '5px 0' }} />
+            <div style={fc.item} onClick={() => set({ showSegments: !organize.showSegments })}>
+              <span style={{ width: 16, display: 'inline-block', color: '#7fd8a8' }}>{organize.showSegments ? '✓' : ''}</span> Show links (segments)
+            </div>
             <div style={{ ...fc.item, color: '#7fd8a8', fontWeight: 600 }} onClick={() => { onClear(); setOpen(false) }}>✓ Done (back to mind map)</div>
           </div>
         </>)}
