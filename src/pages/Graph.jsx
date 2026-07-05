@@ -2944,10 +2944,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           </button>
         )}
 
-        {/* Property filter + organize (non-destructive) — top-right */}
-        {!isPresenting && (storePropertyDefs.length > 0 || propFilter || organize) && (
+        {/* Property filter — top-right. (In-graph "Organize" packing was removed: it couldn't coexist
+            with the live force simulation. The standalone "pack" tab does deterministic circle packing.) */}
+        {!isPresenting && (storePropertyDefs.length > 0 || propFilter) && (
           <div style={{ position:'absolute', top:'0.75rem', right:'0.75rem', zIndex:20, display:'flex', gap:8 }}>
-            <OrganizeControl defs={storePropertyDefs} organize={organize} onSet={setOrganize} onClear={() => setOrganize(null)} />
             <FilterControl defs={storePropertyDefs} filter={propFilter} onSet={setPropFilter} onClear={() => setPropFilter(null)} />
           </div>
         )}

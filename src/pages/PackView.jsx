@@ -29,7 +29,6 @@ export default function PackView({ projectId }) {
   const [srcMenu, setSrcMenu] = useState(false)
   const [drag, setDrag] = useState(null)             // { nodeId, sourceOpt, label, x, y, add }
   const [hoverBucket, setHoverBucket] = useState(null)
-  const [hoverId, setHoverId] = useState(null)       // leaf under cursor → magnified (hover-zoom)
   const dragRef = useRef(null)
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
   const srcLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Hierarchy'
@@ -116,7 +115,7 @@ export default function PackView({ projectId }) {
     const sourceOpt = parseBucket(d.parent?.data?.id)
     const multi = propertyDefs.find(x => x.id === groupProp)?.type === 'multiSelect'
     const info = { nodeId, sourceOpt, label: d.data.label, x: e.clientX, y: e.clientY, moved: false, add: multi && e.altKey }
-    dragRef.current = info; setDrag({ ...info }); setHoverId(null)
+    dragRef.current = info; setDrag({ ...info })
     const onMove = ev => {
       const cur = dragRef.current; if (!cur) return
       cur.x = ev.clientX; cur.y = ev.clientY; cur.add = multi && ev.altKey
@@ -172,8 +171,7 @@ export default function PackView({ projectId }) {
       <div style={styles.hint}>{groupProp ? 'drag item between packs to retag · Alt-drag to add · ' : ''}scroll = zoom · drag = pan · click a circle to zoom</div>
       {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
 
-      <svg ref={svgRef} viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}
-        onMouseLeave={() => { if (!dragging) setHoverId(null) }}>
+      <svg ref={svgRef} viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
         <g transform={`translate(${t.x},${t.y}) scale(${t.k})`}>
           {descendants.map(d => {
             const isLeaf = !d.children
@@ -191,7 +189,6 @@ export default function PackView({ projectId }) {
                 stroke={isDropTarget ? '#7fd8a8' : (dStroke || '#0c0c1a')}
                 strokeWidth={isDropTarget ? 3 / t.k : (dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / t.k : 1 / t.k)}
                 style={{ cursor: isTagLeaf ? 'grab' : (d.children ? 'zoom-in' : 'default'), pointerEvents: pe }}
-                onMouseEnter={isLeaf ? () => { if (!dragging) setHoverId(d.data.id) } : undefined}
                 onMouseDown={isTagLeaf ? e => startLeafDrag(e, d) : undefined}
                 onClick={e => { e.stopPropagation(); if (d.children) fitTo(d.x, d.y, d.r) }}
               />
@@ -231,35 +228,6 @@ export default function PackView({ projectId }) {
               ? <image key={'e' + d.data.id} href={em.emoji} x={ex - sz / 2} y={ey - sz / 2} width={sz} height={sz} style={{ pointerEvents: 'none' }} />
               : <text key={'e' + d.data.id} x={ex} y={ey} fontSize={sz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>
           })}
-          {/* Hover-zoom: magnify the leaf under the cursor so small items are readable/grabbable. */}
-          {hoverId && !dragging && (() => {
-            const hd = descendants.find(x => x.data.id === hoverId)
-            if (!hd || hd.children) return null
-            const er = Math.min(Math.max(hd.r * 1.7, 44 / t.k), 130 / t.k)
-            const isTagLeaf = groupProp && hd.depth >= 2
-            const fontSize = er * 0.3
-            const maxChars = Math.max(5, Math.floor((1.75 * er) / (fontSize * 0.56)))
-            const lines = wrapText(hd.data.label, maxChars).slice(0, 6)
-            const lh = fontSize * 1.08
-            const y0 = hd.y - (lines.length - 1) / 2 * lh
-            const em = hd.data.emoji, esz = Math.min(er * 0.28, 30 / t.k)
-            return (
-              <g style={{ cursor: isTagLeaf ? 'grab' : 'default' }}
-                data-leaf={isTagLeaf ? '1' : undefined}
-                onMouseLeave={() => setHoverId(null)}
-                onMouseDown={isTagLeaf ? e => startLeafDrag(e, hd) : undefined}
-                onClick={e => e.stopPropagation()}>
-                <circle cx={hd.x} cy={hd.y} r={er} fill={colorFor(hd)} fillOpacity={0.98} stroke="#8fa0ff" strokeWidth={2 / t.k} />
-                <text textAnchor="middle" dominantBaseline="middle" fontSize={fontSize} fill="#eef2ff" pointerEvents="none"
-                  style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.18, fontWeight: 600 }}>
-                  {lines.map((ln, i) => <tspan key={i} x={hd.x} y={y0 + i * lh}>{ln}</tspan>)}
-                </text>
-                {em && (em.type === 'image'
-                  ? <image href={em.emoji} x={hd.x + er * 0.5 - esz / 2} y={hd.y - er * 0.5 - esz / 2} width={esz} height={esz} pointerEvents="none" />
-                  : <text x={hd.x + er * 0.5} y={hd.y - er * 0.5} fontSize={esz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>)}
-              </g>
-            )
-          })()}
         </g>
       </svg>
       {drag && (
