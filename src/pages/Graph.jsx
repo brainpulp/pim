@@ -758,6 +758,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         .alphaDecay(0.04).velocityDecay(0.5).alphaMin(0.005).on('tick', scheduleRender)
     } else {
       simRef.current.nodes(simNodesRef.current)
+      // While Organize is active it owns the layout (packed + pinned). Re-adding the link force or
+      // restarting here on a retag is exactly what yanked every node back into a force layout — the
+      // "explosion". Leave the sim alone; the Organize effect re-packs.
+      if (organizeActiveRef.current) return
+      simRef.current
         .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(150).strength(0.4))
         .alpha(0.25).restart()
     }
