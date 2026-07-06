@@ -225,6 +225,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   const centersRef = useRef([])
   const groupsRef = useRef([])
   const zoomRef = useRef(null)
+  const layoutKeyRef = useRef(null)       // pack arrangement is recomputed only when this changes
   const selectedRef = useRef(new Set())
   const [, setTick] = useState(0)
   const [tf, setTf] = useState(d3.zoomIdentity)
@@ -251,7 +252,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       else valid.forEach(id => raw.push({ nodeId: n.id, opt: id, group: idx.get(id), label, color }))
     })
     raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
-    return { groups, bubbles: raw }
+    // Filtered-out items are fully removed from the layout so packs re-pack around what remains.
+    return { groups, bubbles: raw.filter(b => matches(b.label)) }
   }
 
   // Bunch the packs (packSiblings → touching, non-overlapping), each sized to hold its members.
@@ -287,8 +289,16 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   useEffect(() => {
     const { groups, bubbles } = build()
     groupsRef.current = groups
-    const centers = computeCenters(groups, bubbles)
-    centersRef.current = centers
+    // Keep pack centres FIXED across retags — only re-arrange the packs when the set of packs or
+    // the filter changes. Otherwise moving one item would shift every pack (the "flying" bug):
+    // packSiblings/packEnclose re-derive the whole layout from sizes, so a single size change
+    // relocated everything. Pack outlines still track their members, so packs visibly resize.
+    const lk = groups.map(g => g.opt).join('|') + '#' + filter.trim().toLowerCase()
+    if (lk !== layoutKeyRef.current || centersRef.current.length !== groups.length) {
+      centersRef.current = computeCenters(groups, bubbles)
+      layoutKeyRef.current = lk
+    }
+    const centers = centersRef.current
     const prev = bubblesRef.current || []
     const prevByKey = new Map(prev.map(b => [b.key, b]))
     const prevByNode = new Map(); prev.forEach(b => { if (!prevByNode.has(b.nodeId)) prevByNode.set(b.nodeId, b) })
@@ -314,7 +324,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     sim.force('collide', d3.forceCollide(b => b.r + 2).strength(0.9))
     sim.alpha(0.6).restart()
     setTick(t => t + 1)
-  }, [structureKey]) // eslint-disable-line
+  }, [structureKey, filter]) // eslint-disable-line
 
   // Pan / zoom (empty-canvas drag pans; bubble drags fall through the filter).
   useEffect(() => {
@@ -461,7 +471,6 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
         {bubbles.map(b => {
           const held = heldKeys.has(b.key)
           const isSel = selected.has(b.key)
-          const dim = !matches(b.label)
           const light = hexLum(b.color) > 0.55
           const textFill = light ? '#0c0c1a' : '#f2f5ff'
           const fs = Math.max(9, b.r * 0.3)
@@ -473,7 +482,6 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
           const sw = held ? 4 : isSel ? 3.5 : 1.25
           return (
             <g key={b.key} data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`}
-              opacity={dim ? 0.12 : 1} pointerEvents={dim ? 'none' : 'auto'}
               style={{ cursor: 'grab' }} onMouseDown={e => startPress(e, b)}>
               <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} />
               <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={textFill} pointerEvents="none"
