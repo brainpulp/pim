@@ -1,14 +1,12 @@
-import { useRef, useState, useEffect, useMemo } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import * as d3 from 'd3'
 
 // STANDALONE PROTOTYPE — generic clustered-bubble force layout with drag-to-regroup.
-// No cosmetics, no PIM entanglement: one clean d3 force simulation that nothing else touches.
-// Circles cluster by group; drag a circle onto another group's pack and it reassigns + re-clusters.
+// One clean d3 force simulation. Packs are laid out with packSiblings so they bunch tightly and
+// never overlap; nodes cluster into their pack; drag a node onto another pack to reassign it.
 
 const GROUPS = ['A', 'B', 'C', 'D', 'E']
 const COLORS = ['#5b6af0', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']   // PACK (outline) colours
-// Stable per-node identity colours — a node keeps its colour when it changes pack, so you can
-// clearly see which node moved. (Mirrors real PIM nodes: colour = identity, pack = a tag.)
 const NODE_COLORS = ['#7c8cff', '#4fd1c5', '#f6ad55', '#fc8181', '#b794f4', '#68d391', '#f6e05e', '#63b3ed', '#f687b3', '#a0aec0']
 const W = 1000, H = 720
 
@@ -16,58 +14,58 @@ export default function PackLab() {
   const svgRef = useRef(null)
   const simRef = useRef(null)
   const nodesRef = useRef(null)
+  const centersRef = useRef([])            // {x,y,r} per group — bunched via packSiblings
   const [, setTick] = useState(0)
-  const [draggingId, setDraggingId] = useState(null)   // exclude the dragged circle from its pack outline
+  const [draggingId, setDraggingId] = useState(null)
   const [dbg, setDbg] = useState('drag a circle to test')
 
-  // Fixed group centres, laid out in a ring so the clusters bunch together.
-  const centers = useMemo(() => {
-    const R = 210, cx = W / 2, cy = H / 2
-    return GROUPS.map((g, i) => {
-      const a = (i / GROUPS.length) * 2 * Math.PI - Math.PI / 2
-      return { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) }
-    })
-  }, [])
-
-  // 60 circles, deterministic sizes/groups, seeded near their group centre. Each keeps a STABLE
-  // identity colour so it doesn't recolour when it changes pack (you can see which one moved).
   if (!nodesRef.current) {
-    nodesRef.current = Array.from({ length: 60 }, (_, i) => {
-      const group = i % GROUPS.length
-      return { id: i, group, color: NODE_COLORS[i % NODE_COLORS.length], r: 12 + ((i * 13) % 22), x: centers[group].x + (i % 7) * 4, y: centers[group].y + (i % 5) * 4 }
+    nodesRef.current = Array.from({ length: 60 }, (_, i) => ({
+      id: i, group: i % GROUPS.length, color: NODE_COLORS[i % NODE_COLORS.length], r: 12 + ((i * 13) % 22),
+    }))
+  }
+
+  // Bunch the packs together (packSiblings → touching, non-overlapping), sized to their contents.
+  const computeCenters = () => {
+    const nodes = nodesRef.current
+    const gc = GROUPS.map((g, gi) => {
+      const mem = nodes.filter(n => n.group === gi)
+      let area = 0; mem.forEach(n => { const r = n.r + 3; area += Math.PI * r * r })
+      const pr = Math.max(52, Math.sqrt(area / Math.PI) * 1.28) + 18
+      return { gi, r: pr }
     })
+    d3.packSiblings(gc)
+    const enc = d3.packEnclose(gc)
+    centersRef.current = gc.map(c => ({ x: W / 2 + (c.x - enc.x), y: H / 2 + (c.y - enc.y), r: c.r }))
   }
 
   useEffect(() => {
     const nodes = nodesRef.current
+    computeCenters()
+    nodes.forEach(n => { const c = centersRef.current[n.group]; n.x = c.x + (n.id % 7) * 4; n.y = c.y + (n.id % 5) * 4 })
     const sim = d3.forceSimulation(nodes)
-      .force('x', d3.forceX(d => centers[d.group].x).strength(0.28))
-      .force('y', d3.forceY(d => centers[d.group].y).strength(0.28))
+      .force('x', d3.forceX(d => centersRef.current[d.group].x).strength(0.22))
+      .force('y', d3.forceY(d => centersRef.current[d.group].y).strength(0.22))
       .force('collide', d3.forceCollide(d => d.r + 2).strength(0.9))
       .force('charge', d3.forceManyBody().strength(-6))
-      .alphaDecay(0.02).velocityDecay(0.4)
+      .alphaDecay(0.02).velocityDecay(0.55)
       .on('tick', () => setTick(t => t + 1))
     simRef.current = sim
     return () => sim.stop()
-  }, [centers])
+  }, [])
 
   const nodes = nodesRef.current
 
-  // Live pack outline per group. Robust to STRAYS: a member that's far from the cluster core
-  // (in transit or mis-dropped) is dropped from the outline calc, so the pack can never balloon
-  // across the canvas to chase it. Centred on the tight core of members near the group's home.
+  // Pack outline = tight bounding circle of the members near the pack's home (strays ignored, so a
+  // node in transit never balloons the outline).
   const packCirclesExcluding = (excludeId) => GROUPS.map((g, gi) => {
-    const home = centers[gi]
+    const home = centersRef.current[gi] || { x: W / 2, y: H / 2 }
     const mem = nodes.filter(n => n.group === gi && n.id !== excludeId && n.x != null)
     if (!mem.length) return { gi, cx: home.x, cy: home.y, r: 40, count: 0 }
-    // core = members within a sane distance of the group's home (force pulls them here anyway).
-    // Distances beyond that are strays; ignore them for the outline (but still count them).
     const withD = mem.map(n => ({ n, d: Math.hypot(n.x - home.x, n.y - home.y) }))
     const sorted = withD.map(o => o.d).sort((a, b) => a - b)
-    const median = sorted[Math.floor(sorted.length / 2)]
-    const cutoff = Math.max(90, median * 2.2 + 40)
-    let core = withD.filter(o => o.d <= cutoff).map(o => o.n)
-    if (!core.length) core = mem
+    const cutoff = Math.max(90, sorted[Math.floor(sorted.length / 2)] * 2.2 + 40)
+    let core = withD.filter(o => o.d <= cutoff).map(o => o.n); if (!core.length) core = mem
     const cx = core.reduce((s, n) => s + n.x, 0) / core.length
     const cy = core.reduce((s, n) => s + n.y, 0) / core.length
     let r = 0; core.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
@@ -75,11 +73,9 @@ export default function PackLab() {
   })
   const packs = packCirclesExcluding(draggingId)
 
-  // client→SVG using the SVG's own transform matrix — correct under any DPI / zoom / scroll.
   const toSvg = (ev) => {
     const svg = svgRef.current
-    const pt = svg.createSVGPoint()
-    pt.x = ev.clientX; pt.y = ev.clientY
+    const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY
     const loc = pt.matrixTransform(svg.getScreenCTM().inverse())
     return { x: loc.x, y: loc.y }
   }
@@ -95,22 +91,20 @@ export default function PackLab() {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       const p = toSvg(ev)
-      // Assign to the NEAREST pack centre (centres are well separated, so this is unambiguous).
       let best = 0, bd = Infinity
-      centers.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
+      centersRef.current.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
       const fromGroup = node.group
       node.group = best
-      node.x = centers[best].x + ((node.id % 5) - 2) * 6
-      node.y = centers[best].y + ((node.id % 3) - 1) * 6
-      node.fx = null; node.fy = null; node.vx = 0; node.vy = 0
-      // CRITICAL: forceX/forceY CACHE each node's target when initialized; changing d.group does
-      // NOT update it. Re-create the forces so they re-read the new group → the node is actually
-      // pulled to its new pack instead of snapping back to the old one. (This was THE bug.)
-      sim.force('x', d3.forceX(d => centers[d.group].x).strength(0.28))
-      sim.force('y', d3.forceY(d => centers[d.group].y).strength(0.28))
+      // Release it where dropped and let the force GLIDE it into the new pack (eases from rest —
+      // gentler than the old instant snap). No teleport: strays don't balloon the outline anyway.
+      node.fx = null; node.fy = null
+      computeCenters()   // re-bunch the packs for the new sizes
+      // forceX/Y cache their targets on init — re-create so they read the new group + new centres.
+      sim.force('x', d3.forceX(d => centersRef.current[d.group].x).strength(0.22))
+      sim.force('y', d3.forceY(d => centersRef.current[d.group].y).strength(0.22))
       setDraggingId(null)
-      setDbg(`#${node.id}: ${GROUPS[fromGroup]}→${GROUPS[best]}  placed=(${node.x | 0},${node.y | 0})`)
-      sim.alphaTarget(0).alpha(0.6).restart()   // collide spreads it into the pack
+      setDbg(`#${node.id}: ${GROUPS[fromGroup]}→${GROUPS[best]}`)
+      sim.alphaTarget(0).alpha(0.5).restart()
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -120,11 +114,10 @@ export default function PackLab() {
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ color: '#c5d0ff', padding: '10px 16px', fontSize: 14 }}>
         Clustered force packing — 60 circles, 5 packs. <b>Drag a circle onto another pack</b> to reassign it.
-        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v7 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
+        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v8 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
         <span style={{ color: '#f5c451', marginLeft: 14, fontFamily: 'monospace' }}>{dbg}</span>
       </div>
       <svg ref={svgRef} width={W} height={H} style={{ display: 'block', margin: '0 auto', background: '#0c0c1a' }}>
-        {/* pack outlines + labels (behind) */}
         {packs.map(p => (
           <g key={p.gi} pointerEvents="none">
             <circle cx={p.cx} cy={p.cy} r={p.r} fill={COLORS[p.gi] + '22'} stroke={COLORS[p.gi]} strokeWidth={2} />
@@ -133,7 +126,6 @@ export default function PackLab() {
             </text>
           </g>
         ))}
-        {/* circles */}
         {nodes.map(n => (
           <g key={n.id} transform={`translate(${n.x || 0},${n.y || 0})`} style={{ cursor: 'grab' }}
             onMouseDown={e => startDrag(e, n)}>
