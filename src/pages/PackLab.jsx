@@ -70,35 +70,36 @@ export default function PackLab() {
   })
   const packs = packCirclesExcluding(draggingId)
 
-  // Manual drag (client→svg is 1:1 because the svg is drawn at exactly W×H).
+  // client→SVG using the SVG's own transform matrix — correct under any DPI / zoom / scroll.
+  const toSvg = (ev) => {
+    const svg = svgRef.current
+    const pt = svg.createSVGPoint()
+    pt.x = ev.clientX; pt.y = ev.clientY
+    const loc = pt.matrixTransform(svg.getScreenCTM().inverse())
+    return { x: loc.x, y: loc.y }
+  }
+
   const startDrag = (e, node) => {
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current
-    const rect = svgRef.current.getBoundingClientRect()
-    const sx = W / rect.width, sy = H / rect.height   // in case the browser scaled it
     setDraggingId(node.id)
     sim.alphaTarget(0.3).restart()
     node.fx = node.x; node.fy = node.y
-    const onMove = ev => { node.fx = (ev.clientX - rect.left) * sx; node.fy = (ev.clientY - rect.top) * sy }
+    const onMove = ev => { const p = toSvg(ev); node.fx = p.x; node.fy = p.y }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
-      const dx = (ev.clientX - rect.left) * sx, dy = (ev.clientY - rect.top) * sy
-      // Assign by the pack outline you DROP INSIDE (excluding the dragged node so its old pack
-      // doesn't count). If inside none, fall back to nearest centre.
-      const circles = packCirclesExcluding(node.id)
-      const inside = circles.filter(p => Math.hypot(dx - p.cx, dy - p.cy) <= p.r)
-      let best
-      if (inside.length) best = inside.sort((a, b) => Math.hypot(dx - a.cx, dy - a.cy) - Math.hypot(dx - b.cx, dy - b.cy))[0].gi
-      else { best = 0; let bd = Infinity; circles.forEach(p => { const d = (dx - p.cx) ** 2 + (dy - p.cy) ** 2; if (d < bd) { bd = d; best = p.gi } }) }
-      node.group = best            // reassign to the pack it was dropped on
-      // Teleport it into the new pack's centre instead of letting it fly across screen — otherwise
-      // it stays a far-away member of its OLD pack during the flight and balloons that pack's outline.
-      node.x = centers[best].x + ((node.id % 5) - 2) * 5
-      node.y = centers[best].y + ((node.id % 3) - 1) * 5
+      const p = toSvg(ev)
+      // Assign to the NEAREST pack centre (centres are well separated, so this is unambiguous).
+      let best = 0, bd = Infinity
+      centers.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
+      node.group = best
+      // Hard-place it at the new pack's centre so it can never be left stuck in the old one.
+      node.x = centers[best].x + ((node.id % 5) - 2) * 6
+      node.y = centers[best].y + ((node.id % 3) - 1) * 6
       node.fx = null; node.fy = null; node.vx = 0; node.vy = 0
       setDraggingId(null)
-      sim.alphaTarget(0).alpha(0.5).restart()   // collide settles it into the pack
+      sim.alphaTarget(0).alpha(0.6).restart()   // collide spreads it into the pack
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -108,7 +109,7 @@ export default function PackLab() {
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ color: '#c5d0ff', padding: '10px 16px', fontSize: 14 }}>
         Clustered force packing — 60 circles, 5 packs. <b>Drag a circle onto another pack</b> to reassign it.
-        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v3 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
+        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v4 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
       </div>
       <svg ref={svgRef} width={W} height={H} style={{ display: 'block', margin: '0 auto', background: '#0c0c1a' }}>
         {/* pack outlines + labels (behind) */}
