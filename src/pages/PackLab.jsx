@@ -15,6 +15,7 @@ export default function PackLab() {
   const nodesRef = useRef(null)
   const [, setTick] = useState(0)
   const [draggingId, setDraggingId] = useState(null)   // exclude the dragged circle from its pack outline
+  const [dbg, setDbg] = useState('drag a circle to test')
 
   // Fixed group centres, laid out in a ring so the clusters bunch together.
   const centers = useMemo(() => {
@@ -93,12 +94,14 @@ export default function PackLab() {
       // Assign to the NEAREST pack centre (centres are well separated, so this is unambiguous).
       let best = 0, bd = Infinity
       centers.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
+      const fromGroup = node.group
       node.group = best
       // Hard-place it at the new pack's centre so it can never be left stuck in the old one.
       node.x = centers[best].x + ((node.id % 5) - 2) * 6
       node.y = centers[best].y + ((node.id % 3) - 1) * 6
       node.fx = null; node.fy = null; node.vx = 0; node.vy = 0
       setDraggingId(null)
+      setDbg(`#${node.id}: ${GROUPS[fromGroup]}→${GROUPS[best]}  drop=(${p.x | 0},${p.y | 0})  placed=(${node.x | 0},${node.y | 0})`)
       sim.alphaTarget(0).alpha(0.6).restart()   // collide spreads it into the pack
     }
     document.addEventListener('mousemove', onMove)
@@ -109,7 +112,8 @@ export default function PackLab() {
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ color: '#c5d0ff', padding: '10px 16px', fontSize: 14 }}>
         Clustered force packing — 60 circles, 5 packs. <b>Drag a circle onto another pack</b> to reassign it.
-        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v4 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
+        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v5 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
+        <span style={{ color: '#f5c451', marginLeft: 14, fontFamily: 'monospace' }}>{dbg}</span>
       </div>
       <svg ref={svgRef} width={W} height={H} style={{ display: 'block', margin: '0 auto', background: '#0c0c1a' }}>
         {/* pack outlines + labels (behind) */}
@@ -125,7 +129,7 @@ export default function PackLab() {
         {nodes.map(n => (
           <g key={n.id} transform={`translate(${n.x || 0},${n.y || 0})`} style={{ cursor: 'grab' }}
             onMouseDown={e => startDrag(e, n)}>
-            <circle r={n.r} fill={COLORS[n.group]} stroke="#0c0c1a" strokeWidth={1.5} />
+            <circle r={n.r} fill={COLORS[n.group]} stroke={draggingId === n.id ? '#fff' : '#0c0c1a'} strokeWidth={draggingId === n.id ? 4 : 1.5} />
             <text textAnchor="middle" dominantBaseline="central" fontSize={Math.max(9, n.r * 0.7)} fill="#fff" pointerEvents="none">{n.id}</text>
           </g>
         ))}
