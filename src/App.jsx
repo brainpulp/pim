@@ -7,6 +7,7 @@ import Graph from './pages/Graph'
 import Table from './pages/Table'
 import PackView from './pages/PackView'
 import RadialView from './pages/RadialView'
+import PackLab from './pages/PackLab'
 import SharedView from './pages/SharedView'
 import ShareDialog from './components/ShareDialog'
 
@@ -124,7 +125,7 @@ export default function App() {
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {['graph', 'table', 'pack', 'radial'].map(v => (
+          {['graph', 'table', 'pack', 'radial', 'lab'].map(v => (
             <button
               key={v}
               style={{ ...navBtnStyle, ...(view === v ? navBtnActiveStyle : {}) }}
@@ -157,6 +158,7 @@ export default function App() {
         {view === 'table' && <Table projectId={project.id} />}
         {view === 'pack' && <AppErrorBoundary><PackView projectId={project.id} /></AppErrorBoundary>}
         {view === 'radial' && <AppErrorBoundary><RadialView /></AppErrorBoundary>}
+        {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
       </div>
     </div>
   )
