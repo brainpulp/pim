@@ -14,6 +14,7 @@ export default function PackLab() {
   const simRef = useRef(null)
   const nodesRef = useRef(null)
   const [, setTick] = useState(0)
+  const [draggingId, setDraggingId] = useState(null)   // exclude the dragged circle from its pack outline
 
   // Fixed group centres, laid out in a ring so the clusters bunch together.
   const centers = useMemo(() => {
@@ -45,12 +46,27 @@ export default function PackLab() {
     return () => sim.stop()
   }, [centers])
 
+  const nodes = nodesRef.current
+
+  // Live pack outline per group = bounding circle of that group's members.
+  // `exclude` drops the actively-dragged circle so its old pack shrinks away from it immediately.
+  const packCirclesExcluding = (excludeId) => GROUPS.map((g, gi) => {
+    const mem = nodes.filter(n => n.group === gi && n.id !== excludeId && n.x != null)
+    if (!mem.length) return { gi, cx: centers[gi].x, cy: centers[gi].y, r: 40, count: 0 }
+    const cx = mem.reduce((s, n) => s + n.x, 0) / mem.length
+    const cy = mem.reduce((s, n) => s + n.y, 0) / mem.length
+    let r = 0; mem.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
+    return { gi, cx, cy, r: r + 10, count: mem.length }
+  })
+  const packs = packCirclesExcluding(draggingId)
+
   // Manual drag (client→svg is 1:1 because the svg is drawn at exactly W×H).
   const startDrag = (e, node) => {
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current
     const rect = svgRef.current.getBoundingClientRect()
     const sx = W / rect.width, sy = H / rect.height   // in case the browser scaled it
+    setDraggingId(node.id)
     sim.alphaTarget(0.3).restart()
     node.fx = node.x; node.fy = node.y
     const onMove = ev => { node.fx = (ev.clientX - rect.left) * sx; node.fy = (ev.clientY - rect.top) * sy }
@@ -58,26 +74,21 @@ export default function PackLab() {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       const dx = (ev.clientX - rect.left) * sx, dy = (ev.clientY - rect.top) * sy
-      let best = 0, bd = Infinity
-      centers.forEach((c, i) => { const d = (dx - c.x) ** 2 + (dy - c.y) ** 2; if (d < bd) { bd = d; best = i } })
+      // Assign by the pack outline you DROP INSIDE (excluding the dragged node so its old pack
+      // doesn't count). If inside none, fall back to nearest centre.
+      const circles = packCirclesExcluding(node.id)
+      const inside = circles.filter(p => Math.hypot(dx - p.cx, dy - p.cy) <= p.r)
+      let best
+      if (inside.length) best = inside.sort((a, b) => Math.hypot(dx - a.cx, dy - a.cy) - Math.hypot(dx - b.cx, dy - b.cy))[0].gi
+      else { best = 0; let bd = Infinity; circles.forEach(p => { const d = (dx - p.cx) ** 2 + (dy - p.cy) ** 2; if (d < bd) { bd = d; best = p.gi } }) }
       node.group = best            // reassign to the pack it was dropped on
       node.fx = null; node.fy = null
+      setDraggingId(null)
       sim.alphaTarget(0).alpha(0.5).restart()   // let the force carry it into its new pack
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }
-
-  const nodes = nodesRef.current
-  // Live pack outline per group = bounding circle of that group's members.
-  const packs = GROUPS.map((g, gi) => {
-    const mem = nodes.filter(n => n.group === gi && n.x != null)
-    if (!mem.length) return { gi, cx: centers[gi].x, cy: centers[gi].y, r: 40, count: 0 }
-    const cx = mem.reduce((s, n) => s + n.x, 0) / mem.length
-    const cy = mem.reduce((s, n) => s + n.y, 0) / mem.length
-    let r = 0; mem.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
-    return { gi, cx, cy, r: r + 10, count: mem.length }
-  })
 
   return (
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
