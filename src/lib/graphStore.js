@@ -195,6 +195,36 @@ const useGraphStore = create((set, get) => ({
     return optId
   },
 
+  // Rename a select/multiSelect option (label only; id and node values are untouched).
+  renameSelectOption: (propId, optId, name) => set(s => ({
+    propertyDefs: s.propertyDefs.map(p => p.id !== propId ? p : {
+      ...p, options: (p.options || []).map(o => o.id === optId ? { ...o, name } : o),
+    }),
+  })),
+
+  // Recolor a select/multiSelect option.
+  recolorSelectOption: (propId, optId, color) => set(s => ({
+    propertyDefs: s.propertyDefs.map(p => p.id !== propId ? p : {
+      ...p, options: (p.options || []).map(o => o.id === optId ? { ...o, color } : o),
+    }),
+  })),
+
+  // Delete a select/multiSelect option and strip that value from every node.
+  deleteSelectOption: (propId, optId) => set(s => ({
+    propertyDefs: s.propertyDefs.map(p => p.id !== propId ? p : {
+      ...p, options: (p.options || []).filter(o => o.id !== optId),
+    }),
+    nodes: s.nodes.map(n => {
+      const v = n.props?.[propId]; if (v == null) return n
+      if (Array.isArray(v)) {
+        if (!v.includes(optId)) return n
+        return { ...n, props: { ...n.props, [propId]: v.filter(x => x !== optId) } }
+      }
+      if (v !== optId) return n
+      return { ...n, props: { ...n.props, [propId]: null } }
+    }),
+  })),
+
   // Set a node's value for a property. value shape depends on type
   // (string | number | boolean | ISO date string | optionId | optionId[]).
   setNodeProp: (nodeId, propId, value) => set(s => ({

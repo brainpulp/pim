@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import useGraphStore from '../lib/graphStore'
 
 // Shared Notion-style property editors, used by both the Table grid and the node toolbar.
 // PropertyField renders the value editor for one property def; the surrounding layout
@@ -64,6 +65,12 @@ function UrlCell({ value, onChange }) {
 function SelectCell({ def, value, multi, onChange, onAddOption }) {
   const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState('')
+  const [editing, setEditing] = useState(null)      // optId being renamed
+  const [editName, setEditName] = useState('')
+  const [confirmDel, setConfirmDel] = useState(null) // optId pending delete confirm
+  const renameSelectOption = useGraphStore(s => s.renameSelectOption)
+  const recolorSelectOption = useGraphStore(s => s.recolorSelectOption)
+  const deleteSelectOption = useGraphStore(s => s.deleteSelectOption)
   const options = def.options || []
   const selected = multi ? (Array.isArray(value) ? value : []) : (value ? [value] : [])
   const chip = optId => {
@@ -97,11 +104,30 @@ function SelectCell({ def, value, multi, onChange, onAddOption }) {
           <div style={S.backdrop} onClick={() => setOpen(false)} />
           <div style={S.selectMenu} onClick={e => e.stopPropagation()}>
             {options.map(o => (
-              <div key={o.id} style={S.menuItem} onClick={() => toggle(o.id)}>
-                <span style={{ ...S.dot, background: o.color || '#6366f1' }} />
-                <span style={{ flex: 1, color: '#c5d0ff' }}>{o.name}</span>
-                {selected.includes(o.id) && <span style={{ color: '#5b6af0' }}>✓</span>}
-              </div>
+              editing === o.id ? (
+                <div key={o.id} style={{ ...S.menuItem, gap: 6 }} onClick={e => e.stopPropagation()}>
+                  <input type="color" value={o.color || '#6366f1'} onChange={e => recolorSelectOption(def.id, o.id, e.target.value)}
+                    style={{ width: 20, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0 }} title="Color" />
+                  <input value={editName} autoFocus onChange={e => setEditName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { const n = editName.trim(); if (n) renameSelectOption(def.id, o.id, n); setEditing(null) } if (e.key === 'Escape') setEditing(null) }}
+                    style={{ ...S.cellInput, flex: 1, border: '1px solid #2d3a6a', borderRadius: 4, padding: '2px 6px' }} />
+                  <button style={S.addOptBtn} onClick={() => { const n = editName.trim(); if (n) renameSelectOption(def.id, o.id, n); setEditing(null) }}>Save</button>
+                </div>
+              ) : confirmDel === o.id ? (
+                <div key={o.id} style={{ ...S.menuItem, gap: 6 }} onClick={e => e.stopPropagation()}>
+                  <span style={{ flex: 1, color: '#f5b0b0', fontSize: '0.74rem' }}>Delete “{o.name}”? removes it from all items</span>
+                  <button style={{ ...S.addOptBtn, borderColor: '#7a2f2f', background: '#3a1a1a', color: '#f5b0b0' }} onClick={() => { deleteSelectOption(def.id, o.id); setConfirmDel(null) }}>Delete</button>
+                  <button style={S.addOptBtn} onClick={() => setConfirmDel(null)}>Cancel</button>
+                </div>
+              ) : (
+                <div key={o.id} style={S.menuItem}>
+                  <span style={{ ...S.dot, background: o.color || '#6366f1' }} />
+                  <span style={{ flex: 1, color: '#c5d0ff' }} onClick={() => toggle(o.id)}>{o.name}</span>
+                  {selected.includes(o.id) && <span style={{ color: '#5b6af0' }} onClick={() => toggle(o.id)}>✓</span>}
+                  <button style={S.optAction} title="Rename / recolor" onClick={e => { e.stopPropagation(); setEditName(o.name); setEditing(o.id) }}>✎</button>
+                  <button style={S.optAction} title="Delete tag" onClick={e => { e.stopPropagation(); setConfirmDel(o.id) }}>×</button>
+                </div>
+              )
             ))}
             <div style={{ display: 'flex', gap: 4, padding: '6px 8px' }}>
               <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="New option…"
@@ -127,4 +153,5 @@ const S = {
   link: { color: '#88b4e8', fontSize: '0.82rem', textDecoration: 'underline', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, display: 'inline-block' },
   miniEdit: { background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: '0.7rem' },
   addOptBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 4, cursor: 'pointer', fontSize: '0.72rem', padding: '2px 8px' },
+  optAction: { background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: '0.82rem', lineHeight: 1, padding: '0 3px', flexShrink: 0 },
 }

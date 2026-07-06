@@ -41,21 +41,24 @@ export default function PackView({ projectId }) {
     }
   }, [views, activeViewId])
 
-  // ── Retag by moving an item between tag-packs (writes node.props + saves) ────
-  const retag = (nodeId, sourceOpt, targetOpt, additive) => {
-    const def = propertyDefs.find(d => d.id === groupProp); if (!def) return
-    const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
-    const raw = node?.props?.[groupProp]
-    let value
-    if (def.type === 'multiSelect') {
-      let tags = Array.isArray(raw) ? [...raw] : (raw ? [raw] : [])
-      if (!additive && sourceOpt && sourceOpt !== '__untagged__') tags = tags.filter(x => x !== sourceOpt)
-      if (targetOpt !== '__untagged__' && !tags.includes(targetOpt)) tags.push(targetOpt)
-      value = tags
-    } else {
-      value = targetOpt === '__untagged__' ? null : targetOpt
-    }
-    setNodeProp(nodeId, groupProp, value)
+  // ── Retag one or many items in a single batch (writes node.props + one save) ─
+  // list = [{ nodeId, sourceOpt }]. targetOpt '__untagged__' clears the tag (drop outside packs).
+  const retagMany = (list, targetOpt, additive) => {
+    const def = propertyDefs.find(d => d.id === groupProp); if (!def || !list.length) return
+    list.forEach(({ nodeId, sourceOpt }) => {
+      const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+      const raw = node?.props?.[groupProp]
+      let value
+      if (def.type === 'multiSelect') {
+        let tags = Array.isArray(raw) ? [...raw] : (raw ? [raw] : [])
+        if (!additive && sourceOpt && sourceOpt !== '__untagged__') tags = tags.filter(x => x !== sourceOpt)
+        if (targetOpt !== '__untagged__' && !tags.includes(targetOpt)) tags.push(targetOpt)
+        value = tags
+      } else {
+        value = targetOpt === '__untagged__' ? null : targetOpt
+      }
+      setNodeProp(nodeId, groupProp, value)
+    })
     if (projectId) {
       const s = useGraphStore.getState()
       saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs })
@@ -135,7 +138,7 @@ export default function PackView({ projectId }) {
       <div style={styles.hint}>{groupProp ? 'drag an item onto another pack to retag · Alt-drag to add a 2nd tag · scroll = zoom · drag empty = pan' : 'scroll = zoom · drag = pan · click a circle to zoom'}</div>
 
       {groupProp ? (
-        <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetag={retag} />
+        <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany} />
       ) : (<>
         {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
         <svg ref={svgRef} viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
@@ -206,8 +209,15 @@ const radiusFor = (label) => {
   const len = String(label || '').replace(/\s+/g, ' ').trim().length
   return Math.max(30, Math.min(66, 24 + Math.sqrt(Math.max(len, 4)) * 6.6))
 }
+// Relative luminance of a #rrggbb colour → pick legible text (dark on light fills, light on dark).
+const hexLum = (hex) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return 0.35
+  const n = parseInt(m[1], 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255
+  const f = c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+}
 
-function TagPackForce({ def, nodes, decorOf, onRetag }) {
+function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   const svgRef = useRef(null)
   const gRef = useRef(null)
   const simRef = useRef(null)
@@ -215,29 +225,32 @@ function TagPackForce({ def, nodes, decorOf, onRetag }) {
   const centersRef = useRef([])
   const groupsRef = useRef([])
   const zoomRef = useRef(null)
+  const selectedRef = useRef(new Set())
   const [, setTick] = useState(0)
   const [tf, setTf] = useState(d3.zoomIdentity)
-  const [draggingKey, setDraggingKey] = useState(null)
-  const [hoverGroup, setHoverGroup] = useState(null)
+  const [heldKeys, setHeldKeys] = useState(() => new Set())
+  const [hoverGroup, setHoverGroup] = useState(null)   // >=0 pack index, -1 = untag (outside all packs)
+  const [selected, setSelected] = useState(() => new Set())
+  const [filter, setFilter] = useState('')
+  const matches = (label) => !filter.trim() || String(label || '').toLowerCase().includes(filter.trim().toLowerCase())
 
-  // Desired bubbles + groups from the current store state. One bubble per (node, tag value);
-  // multi-tag nodes are mirrored; untagged nodes fall into an "(untagged)" pack.
+  // Desired bubbles + real packs from the store. One bubble per (node, tag value); multi-tag nodes
+  // are mirrored. UNTAGGED nodes get group -1 → no pack, just a weak pull to the centroid.
   const build = () => {
     const opts = def?.options || []
     const groups = opts.map(o => ({ opt: o.id, name: o.name, color: o.color || '#5b6af0' }))
     const idx = new Map(groups.map((g, i) => [g.opt, i]))
-    let hasUntagged = false
     const raw = []
     nodes.forEach(n => {
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
       const color = decorOf?.(n.id)?.color || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
-      if (!valid.length) { hasUntagged = true; raw.push({ nodeId: n.id, opt: '__untagged__', label: n.label || '(untitled)', color }) }
-      else valid.forEach(id => raw.push({ nodeId: n.id, opt: id, label: n.label || '(untitled)', color }))
+      const label = n.label || '(untitled)'
+      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color })
+      else valid.forEach(id => raw.push({ nodeId: n.id, opt: id, group: idx.get(id), label, color }))
     })
-    if (hasUntagged) { groups.push({ opt: '__untagged__', name: '(untagged)', color: '#5a6478' }); idx.set('__untagged__', groups.length - 1) }
-    raw.forEach(b => { b.group = idx.get(b.opt); b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
+    raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
     return { groups, bubbles: raw }
   }
 
@@ -283,16 +296,21 @@ function TagPackForce({ def, nodes, decorOf, onRetag }) {
       const ex = prevByKey.get(d.key)
       if (ex) { ex.group = d.group; ex.r = d.r; ex.color = d.color; ex.label = d.label; return ex }
       const seed = prevByNode.get(d.nodeId)      // same node, moved tag → start from where it was (glide)
-      const c = centers[d.group] || { x: FW / 2, y: FH / 2 }
+      const c = d.group >= 0 ? centers[d.group] : { x: FW / 2, y: FH / 2 }
       const j = (hashStr(d.key) % 24) - 12
       return { ...d, x: seed?.x ?? c.x + j, y: seed?.y ?? c.y + j, vx: 0, vy: 0 }
     })
     bubblesRef.current = next
+    // prune selection of bubbles that no longer exist
+    const live = new Set(next.map(b => b.key))
+    const sel = new Set([...selectedRef.current].filter(k => live.has(k)))
+    if (sel.size !== selectedRef.current.size) { selectedRef.current = sel; setSelected(sel) }
     const sim = simRef.current; if (!sim) return
     sim.nodes(next)
     // forceX/Y cache targets on init → re-create so they read the current groups + centres.
-    sim.force('x', d3.forceX(b => centersRef.current[b.group].x).strength(0.2))
-    sim.force('y', d3.forceY(b => centersRef.current[b.group].y).strength(0.2))
+    // Packed bubbles pull to their pack centre; untagged (group -1) drift weakly to the centroid.
+    sim.force('x', d3.forceX(b => (b.group >= 0 && centersRef.current[b.group]) ? centersRef.current[b.group].x : FW / 2).strength(b => b.group >= 0 ? 0.2 : 0.045))
+    sim.force('y', d3.forceY(b => (b.group >= 0 && centersRef.current[b.group]) ? centersRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.2 : 0.045))
     sim.force('collide', d3.forceCollide(b => b.r + 2).strength(0.9))
     sim.alpha(0.6).restart()
     setTick(t => t + 1)
@@ -328,28 +346,59 @@ function TagPackForce({ def, nodes, decorOf, onRetag }) {
     centersRef.current.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
     return best
   }
+  // Which pack a drop lands in — or -1 (untag) if it's dropped outside every pack outline.
+  const dropTarget = (p) => {
+    const tg = nearestGroup(p); const c = centersRef.current[tg]
+    if (tg == null || !c) return -1
+    return Math.hypot(p.x - c.x, p.y - c.y) > c.r + 34 ? -1 : tg
+  }
 
-  const startDrag = (e, b) => {
+  const setSel = (next) => { selectedRef.current = next; setSelected(next) }
+  const toggleSelect = (key, additive) => {
+    const prev = selectedRef.current
+    const next = new Set(additive ? prev : [])
+    if (additive && prev.has(key)) next.delete(key); else next.add(key)
+    setSel(next)
+  }
+
+  // Press → click selects; drag beyond threshold moves the bubble (or the whole selection) and,
+  // on release, retags every moved item to the pack it was dropped on (or untags it).
+  const startPress = (e, b) => {
     e.preventDefault(); e.stopPropagation()
+    if (!matches(b.label)) return
     const sim = simRef.current
-    setDraggingKey(b.key); sim.alphaTarget(0.3).restart()
-    b.fx = b.x; b.fy = b.y
-    const onMove = ev => { const p = toWorld(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHoverGroup(nearestGroup(p)) }
+    const start = toWorld(e)
+    const groupMove = selectedRef.current.has(b.key) && selectedRef.current.size > 1
+    const keys = groupMove ? [...selectedRef.current] : [b.key]
+    const moving = bubblesRef.current.filter(x => keys.includes(x.key))
+    const offs = moving.map(x => ({ b: x, dx: x.x - start.x, dy: x.y - start.y }))
+    let moved = false
+    const onMove = ev => {
+      const p = toWorld(ev)
+      if (!moved && Math.hypot(p.x - start.x, p.y - start.y) > 5) {
+        moved = true; sim.alphaTarget(0.3).restart(); setHeldKeys(new Set(keys))
+      }
+      if (moved) {
+        offs.forEach(o => { o.b.fx = p.x + o.dx; o.b.fy = p.y + o.dy; o.b.x = o.b.fx; o.b.y = o.b.fy })
+        setHoverGroup(dropTarget(p)); setTick(t => t + 1)
+      }
+    }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
-      const p = toWorld(ev); const tg = nearestGroup(p)
-      b.fx = null; b.fy = null
-      setDraggingKey(null); setHoverGroup(null)
-      sim.alphaTarget(0)
+      if (!moved) { toggleSelect(b.key, ev.shiftKey || ev.metaKey || ev.ctrlKey); return }
+      const p = toWorld(ev)
+      offs.forEach(o => { o.b.fx = null; o.b.fy = null })
+      setHeldKeys(new Set()); setHoverGroup(null); sim.alphaTarget(0)
+      const tg = dropTarget(p)
       const groups = groupsRef.current
+      const targetOpt = tg < 0 ? '__untagged__' : groups[tg].opt
       const additive = def.type === 'multiSelect' && ev.altKey
-      if (tg != null && groups[tg] && (groups[tg].opt !== b.opt || additive)) {
-        b.x = p.x; b.y = p.y   // seed the reborn bubble at the drop point so it glides, not teleports
-        onRetag(b.nodeId, b.opt, groups[tg].opt, additive)
-      } else {
-        sim.alpha(0.4).restart()   // no-op drop → let it settle back
-      }
+      const list = offs
+        .map(o => ({ nodeId: o.b.nodeId, sourceOpt: o.b.opt }))
+        .filter(it => tg < 0 ? it.sourceOpt !== '__untagged__' : (targetOpt !== it.sourceOpt || additive))
+      if (list.length) { onRetagMany(list, targetOpt, additive) }   // store change → reconcile → glide
+      else sim.alpha(0.4).restart()
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -361,7 +410,7 @@ function TagPackForce({ def, nodes, decorOf, onRetag }) {
   const groups = groupsRef.current
   const outlines = groups.map((g, gi) => {
     const home = centersRef.current[gi] || { x: FW / 2, y: FH / 2 }
-    const mem = bubbles.filter(b => b.group === gi && b.key !== draggingKey && b.x != null)
+    const mem = bubbles.filter(b => b.group === gi && !heldKeys.has(b.key) && b.x != null)
     const count = bubbles.filter(b => b.group === gi).length
     if (!mem.length) return { gi, cx: home.x, cy: home.y, r: 60, count, name: g.name, color: g.color }
     const withD = mem.map(n => ({ n, d: Math.hypot(n.x - home.x, n.y - home.y) }))
@@ -373,14 +422,28 @@ function TagPackForce({ def, nodes, decorOf, onRetag }) {
     let r = 0; core.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
     return { gi, cx, cy, r: r + 14, count, name: g.name, color: g.color }
   })
-  const dragging = draggingKey != null
+  const dragging = heldKeys.size > 0
   const zoomed = tf.k !== 1 || tf.x !== 0 || tf.y !== 0
+  const untaggedCount = bubbles.filter(b => b.group === -1).length
+  const clearSelection = () => { if (selectedRef.current.size) setSel(new Set()) }
 
   return (<>
+    <div style={styles.filterBox}>
+      <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter items…"
+        style={styles.filterInput} onMouseDown={e => e.stopPropagation()} />
+      {filter && <button style={styles.filterClear} onClick={() => setFilter('')}>×</button>}
+      {selected.size > 0 && <span style={styles.selCount}>{selected.size} selected</span>}
+    </div>
     {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
     {!bubbles.length && <div style={styles.empty}>No items — tag some nodes with “{def?.name}” in the graph or table.</div>}
     <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
+      <rect x={0} y={0} width={FW} height={FH} fill="transparent" onMouseDown={clearSelection} />
       <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
+        {untaggedCount > 0 && (
+          <text x={FW / 2} y={26} textAnchor="middle" fontSize={15} fill="#8090b8" pointerEvents="none">
+            untagged: {untaggedCount} — drag one onto a pack to tag it · drag a tagged item to open space to untag
+          </text>
+        )}
         {outlines.map(p => {
           const isTarget = dragging && hoverGroup === p.gi
           return (
@@ -396,20 +459,26 @@ function TagPackForce({ def, nodes, decorOf, onRetag }) {
           )
         })}
         {bubbles.map(b => {
-          const held = draggingKey === b.key
+          const held = heldKeys.has(b.key)
+          const isSel = selected.has(b.key)
+          const dim = !matches(b.label)
+          const light = hexLum(b.color) > 0.55
+          const textFill = light ? '#0c0c1a' : '#f2f5ff'
           const fs = Math.max(9, b.r * 0.3)
           const maxChars = Math.max(5, Math.floor((1.7 * b.r) / (fs * 0.56)))
           const lines = wrapText(b.label, maxChars).slice(0, 6)
           const lh = fs * 1.05
-          const y0 = (b.y || 0) - (lines.length - 1) / 2 * lh
+          const y0 = -(lines.length - 1) / 2 * lh
+          const stroke = held ? '#ffffff' : isSel ? '#ffd34d' : 'rgba(232,238,255,0.4)'
+          const sw = held ? 4 : isSel ? 3.5 : 1.25
           return (
             <g key={b.key} data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`}
-              style={{ cursor: 'grab' }} onMouseDown={e => startDrag(e, b)}>
-              <circle r={b.r} fill={b.color} fillOpacity={0.95}
-                stroke={held ? '#fff' : '#0c0c1a'} strokeWidth={held ? 4 : 1.5} />
-              <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill="#0c0c1a" pointerEvents="none"
-                style={{ fontWeight: 700 }}>
-                {lines.map((ln, i) => <tspan key={i} x={0} y={y0 - (b.y || 0) + i * lh}>{ln}</tspan>)}
+              opacity={dim ? 0.12 : 1} pointerEvents={dim ? 'none' : 'auto'}
+              style={{ cursor: 'grab' }} onMouseDown={e => startPress(e, b)}>
+              <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} />
+              <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={textFill} pointerEvents="none"
+                style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
+                {lines.map((ln, i) => <tspan key={i} x={0} y={y0 + i * lh}>{ln}</tspan>)}
               </text>
             </g>
           )
@@ -448,4 +517,8 @@ const styles = {
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
   mlabel: { padding: '5px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
   empty: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: '0.9rem', pointerEvents: 'none' },
+  filterBox: { position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', borderRadius: 8, padding: '3px 6px' },
+  filterInput: { background: 'transparent', border: 'none', outline: 'none', color: '#e6ebff', fontSize: '0.82rem', width: 180, padding: '3px 4px' },
+  filterClear: { background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0 4px' },
+  selCount: { color: '#ffd34d', fontSize: '0.74rem', paddingRight: 4, whiteSpace: 'nowrap' },
 }
