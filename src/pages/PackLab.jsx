@@ -86,7 +86,14 @@ export default function PackLab() {
     setDraggingId(node.id)
     sim.alphaTarget(0.3).restart()
     node.fx = node.x; node.fy = node.y
-    const onMove = ev => { const p = toSvg(ev); node.fx = p.x; node.fy = p.y }
+    const onMove = ev => {
+      const p = toSvg(ev); node.fx = p.x; node.fy = p.y
+      // Live preview: recolor to whichever pack centre the cursor is nearest, so what you see IS
+      // what you'll get on release (no "old colour in new pack" confusion).
+      let b = 0, bd = Infinity
+      centers.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; b = i } })
+      node.group = b
+    }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -112,7 +119,7 @@ export default function PackLab() {
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ color: '#c5d0ff', padding: '10px 16px', fontSize: 14 }}>
         Clustered force packing — 60 circles, 5 packs. <b>Drag a circle onto another pack</b> to reassign it.
-        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v5 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
+        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v6 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
         <span style={{ color: '#f5c451', marginLeft: 14, fontFamily: 'monospace' }}>{dbg}</span>
       </div>
       <svg ref={svgRef} width={W} height={H} style={{ display: 'block', margin: '0 auto', background: '#0c0c1a' }}>
