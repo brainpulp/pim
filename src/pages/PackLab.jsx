@@ -48,14 +48,24 @@ export default function PackLab() {
 
   const nodes = nodesRef.current
 
-  // Live pack outline per group = bounding circle of that group's members.
-  // `exclude` drops the actively-dragged circle so its old pack shrinks away from it immediately.
+  // Live pack outline per group. Robust to STRAYS: a member that's far from the cluster core
+  // (in transit or mis-dropped) is dropped from the outline calc, so the pack can never balloon
+  // across the canvas to chase it. Centred on the tight core of members near the group's home.
   const packCirclesExcluding = (excludeId) => GROUPS.map((g, gi) => {
+    const home = centers[gi]
     const mem = nodes.filter(n => n.group === gi && n.id !== excludeId && n.x != null)
-    if (!mem.length) return { gi, cx: centers[gi].x, cy: centers[gi].y, r: 40, count: 0 }
-    const cx = mem.reduce((s, n) => s + n.x, 0) / mem.length
-    const cy = mem.reduce((s, n) => s + n.y, 0) / mem.length
-    let r = 0; mem.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
+    if (!mem.length) return { gi, cx: home.x, cy: home.y, r: 40, count: 0 }
+    // core = members within a sane distance of the group's home (force pulls them here anyway).
+    // Distances beyond that are strays; ignore them for the outline (but still count them).
+    const withD = mem.map(n => ({ n, d: Math.hypot(n.x - home.x, n.y - home.y) }))
+    const sorted = withD.map(o => o.d).sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
+    const cutoff = Math.max(90, median * 2.2 + 40)
+    let core = withD.filter(o => o.d <= cutoff).map(o => o.n)
+    if (!core.length) core = mem
+    const cx = core.reduce((s, n) => s + n.x, 0) / core.length
+    const cy = core.reduce((s, n) => s + n.y, 0) / core.length
+    let r = 0; core.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
     return { gi, cx, cy, r: r + 10, count: mem.length }
   })
   const packs = packCirclesExcluding(draggingId)
@@ -98,6 +108,7 @@ export default function PackLab() {
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ color: '#c5d0ff', padding: '10px 16px', fontSize: 14 }}>
         Clustered force packing — 60 circles, 5 packs. <b>Drag a circle onto another pack</b> to reassign it.
+        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v3 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
       </div>
       <svg ref={svgRef} width={W} height={H} style={{ display: 'block', margin: '0 auto', background: '#0c0c1a' }}>
         {/* pack outlines + labels (behind) */}
