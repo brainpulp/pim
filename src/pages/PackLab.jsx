@@ -82,9 +82,13 @@ export default function PackLab() {
       if (inside.length) best = inside.sort((a, b) => Math.hypot(dx - a.cx, dy - a.cy) - Math.hypot(dx - b.cx, dy - b.cy))[0].gi
       else { best = 0; let bd = Infinity; circles.forEach(p => { const d = (dx - p.cx) ** 2 + (dy - p.cy) ** 2; if (d < bd) { bd = d; best = p.gi } }) }
       node.group = best            // reassign to the pack it was dropped on
-      node.fx = null; node.fy = null
+      // Teleport it into the new pack's centre instead of letting it fly across screen — otherwise
+      // it stays a far-away member of its OLD pack during the flight and balloons that pack's outline.
+      node.x = centers[best].x + ((node.id % 5) - 2) * 5
+      node.y = centers[best].y + ((node.id % 3) - 1) * 5
+      node.fx = null; node.fy = null; node.vx = 0; node.vy = 0
       setDraggingId(null)
-      sim.alphaTarget(0).alpha(0.5).restart()   // let the force carry it into its new pack
+      sim.alphaTarget(0).alpha(0.5).restart()   // collide settles it into the pack
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
