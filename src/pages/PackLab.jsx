@@ -6,7 +6,10 @@ import * as d3 from 'd3'
 // Circles cluster by group; drag a circle onto another group's pack and it reassigns + re-clusters.
 
 const GROUPS = ['A', 'B', 'C', 'D', 'E']
-const COLORS = ['#5b6af0', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']
+const COLORS = ['#5b6af0', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']   // PACK (outline) colours
+// Stable per-node identity colours — a node keeps its colour when it changes pack, so you can
+// clearly see which node moved. (Mirrors real PIM nodes: colour = identity, pack = a tag.)
+const NODE_COLORS = ['#7c8cff', '#4fd1c5', '#f6ad55', '#fc8181', '#b794f4', '#68d391', '#f6e05e', '#63b3ed', '#f687b3', '#a0aec0']
 const W = 1000, H = 720
 
 export default function PackLab() {
@@ -26,11 +29,12 @@ export default function PackLab() {
     })
   }, [])
 
-  // 60 circles, deterministic sizes/groups, seeded near their group centre.
+  // 60 circles, deterministic sizes/groups, seeded near their group centre. Each keeps a STABLE
+  // identity colour so it doesn't recolour when it changes pack (you can see which one moved).
   if (!nodesRef.current) {
     nodesRef.current = Array.from({ length: 60 }, (_, i) => {
       const group = i % GROUPS.length
-      return { id: i, group, r: 12 + ((i * 13) % 22), x: centers[group].x + (i % 7) * 4, y: centers[group].y + (i % 5) * 4 }
+      return { id: i, group, color: NODE_COLORS[i % NODE_COLORS.length], r: 12 + ((i * 13) % 22), x: centers[group].x + (i % 7) * 4, y: centers[group].y + (i % 5) * 4 }
     })
   }
 
@@ -86,14 +90,7 @@ export default function PackLab() {
     setDraggingId(node.id)
     sim.alphaTarget(0.3).restart()
     node.fx = node.x; node.fy = node.y
-    const onMove = ev => {
-      const p = toSvg(ev); node.fx = p.x; node.fy = p.y
-      // Live preview: recolor to whichever pack centre the cursor is nearest, so what you see IS
-      // what you'll get on release (no "old colour in new pack" confusion).
-      let b = 0, bd = Infinity
-      centers.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; b = i } })
-      node.group = b
-    }
+    const onMove = ev => { const p = toSvg(ev); node.fx = p.x; node.fy = p.y }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -103,12 +100,16 @@ export default function PackLab() {
       centers.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
       const fromGroup = node.group
       node.group = best
-      // Hard-place it at the new pack's centre so it can never be left stuck in the old one.
       node.x = centers[best].x + ((node.id % 5) - 2) * 6
       node.y = centers[best].y + ((node.id % 3) - 1) * 6
       node.fx = null; node.fy = null; node.vx = 0; node.vy = 0
+      // CRITICAL: forceX/forceY CACHE each node's target when initialized; changing d.group does
+      // NOT update it. Re-create the forces so they re-read the new group → the node is actually
+      // pulled to its new pack instead of snapping back to the old one. (This was THE bug.)
+      sim.force('x', d3.forceX(d => centers[d.group].x).strength(0.28))
+      sim.force('y', d3.forceY(d => centers[d.group].y).strength(0.28))
       setDraggingId(null)
-      setDbg(`#${node.id}: ${GROUPS[fromGroup]}→${GROUPS[best]}  drop=(${p.x | 0},${p.y | 0})  placed=(${node.x | 0},${node.y | 0})`)
+      setDbg(`#${node.id}: ${GROUPS[fromGroup]}→${GROUPS[best]}  placed=(${node.x | 0},${node.y | 0})`)
       sim.alphaTarget(0).alpha(0.6).restart()   // collide spreads it into the pack
     }
     document.addEventListener('mousemove', onMove)
@@ -119,7 +120,7 @@ export default function PackLab() {
     <div style={{ height: '100%', width: '100%', background: '#0c0c1a', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ color: '#c5d0ff', padding: '10px 16px', fontSize: 14 }}>
         Clustered force packing — 60 circles, 5 packs. <b>Drag a circle onto another pack</b> to reassign it.
-        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v6 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
+        <span style={{ color: '#7fd8a8', marginLeft: 10 }}>build v7 · {new Date(__BUILD_TIME__).toISOString().slice(11, 16)}</span>
         <span style={{ color: '#f5c451', marginLeft: 14, fontFamily: 'monospace' }}>{dbg}</span>
       </div>
       <svg ref={svgRef} width={W} height={H} style={{ display: 'block', margin: '0 auto', background: '#0c0c1a' }}>
@@ -136,7 +137,7 @@ export default function PackLab() {
         {nodes.map(n => (
           <g key={n.id} transform={`translate(${n.x || 0},${n.y || 0})`} style={{ cursor: 'grab' }}
             onMouseDown={e => startDrag(e, n)}>
-            <circle r={n.r} fill={COLORS[n.group]} stroke={draggingId === n.id ? '#fff' : '#0c0c1a'} strokeWidth={draggingId === n.id ? 4 : 1.5} />
+            <circle r={n.r} fill={n.color} stroke={draggingId === n.id ? '#fff' : '#0c0c1a'} strokeWidth={draggingId === n.id ? 4 : 1.5} />
             <text textAnchor="middle" dominantBaseline="central" fontSize={Math.max(9, n.r * 0.7)} fill="#fff" pointerEvents="none">{n.id}</text>
           </g>
         ))}
