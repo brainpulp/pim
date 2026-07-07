@@ -220,20 +220,23 @@ const hexLum = (hex) => {
 function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   const svgRef = useRef(null)
   const gRef = useRef(null)
-  const simRef = useRef(null)
+  const simRef = useRef(null)          // member bubbles sim
+  const packSimRef = useRef(null)      // pack-circles sim (self-bunching, non-overlapping, draggable)
   const bubblesRef = useRef([])
-  const centersRef = useRef([])
+  const packsRef = useRef([])          // [{gi,opt,name,color,r,x,y,fx,fy,anchored}]
   const groupsRef = useRef([])
   const zoomRef = useRef(null)
-  const layoutKeyRef = useRef(null)       // pack arrangement is recomputed only when this changes
   const selectedRef = useRef(new Set())
+  const heldKeysRef = useRef(new Set())
   const [, setTick] = useState(0)
   const [tf, setTf] = useState(d3.zoomIdentity)
-  const [heldKeys, setHeldKeys] = useState(() => new Set())
+  const [heldKeys, setHeldKeysState] = useState(() => new Set())
   const [hoverGroup, setHoverGroup] = useState(null)   // >=0 pack index, -1 = untag (outside all packs)
   const [selected, setSelected] = useState(() => new Set())
   const [filter, setFilter] = useState('')
+  const [anchoredTick, setAnchoredTick] = useState(0)  // re-render when a pack is (un)anchored
   const matches = (label) => !filter.trim() || String(label || '').toLowerCase().includes(filter.trim().toLowerCase())
+  const setHeldKeys = (s) => { heldKeysRef.current = s; setHeldKeysState(s) }
 
   // Desired bubbles + real packs from the store. One bubble per (node, tag value); multi-tag nodes
   // are mirrored. UNTAGGED nodes get group -1 → no pack, just a weak pull to the centroid.
@@ -256,83 +259,101 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     return { groups, bubbles: raw.filter(b => matches(b.label)) }
   }
 
-  // Bunch the packs (packSiblings → touching, non-overlapping), each sized to hold its members.
-  const computeCenters = (groups, bubbles) => {
-    const gc = groups.map((g, gi) => {
-      let area = 0
-      bubbles.forEach(b => { if (b.group === gi) { const r = b.r + 5; area += Math.PI * r * r } })
-      const pr = Math.max(84, Math.sqrt(area / Math.PI) * 1.22) + 24
-      return { gi, r: pr }
-    })
-    d3.packSiblings(gc)
-    const enc = d3.packEnclose(gc) || { x: 0, y: 0, r: 1 }
-    return gc.map(c => ({ x: FW / 2 + (c.x - enc.x), y: FH / 2 + (c.y - enc.y), r: c.r }))
+  // Pack radius sized (with headroom) to actually contain its members.
+  const rFit = (gi, bubbles) => {
+    let area = 0, n = 0
+    bubbles.forEach(b => { if (b.group === gi) { area += Math.PI * (b.r + 6) ** 2; n++ } })
+    if (!n) return 76
+    return Math.max(76, Math.sqrt(area / Math.PI) * 1.34) + 16
   }
 
-  // Create the sim once.
+  // Create both sims once. Packs: collide (never overlap) + gentle centre gravity → self-bunching.
+  // Members: pull to their pack centre, collide, and are HARD-CONTAINED inside the pack circle each
+  // tick (so belonging is unambiguous and packs can't visually overrun each other).
   useEffect(() => {
-    const sim = d3.forceSimulation([])
-      .force('charge', d3.forceManyBody().strength(-7))
-      .alphaDecay(0.02).velocityDecay(0.55)
+    const packSim = d3.forceSimulation([])
+      .force('x', d3.forceX(FW / 2).strength(0.02))
+      .force('y', d3.forceY(FH / 2).strength(0.02))
+      .force('collide', d3.forceCollide(p => p.r + 22).strength(1).iterations(3))
+      .alphaDecay(0.03).velocityDecay(0.62)
       .on('tick', () => setTick(t => t + 1))
+    packSimRef.current = packSim
+
+    const sim = d3.forceSimulation([])
+      .force('charge', d3.forceManyBody().strength(-5))
+      .force('collide', d3.forceCollide(b => b.r + 2).strength(0.9))
+      .alphaDecay(0.02).velocityDecay(0.55)
+      .on('tick', () => {
+        const packs = packsRef.current, held = heldKeysRef.current
+        for (const b of bubblesRef.current) {
+          if (b.group < 0 || b.fx != null || held.has(b.key)) continue
+          const c = packs[b.group]; if (!c) continue
+          const dx = b.x - c.x, dy = b.y - c.y, d = Math.hypot(dx, dy) || 1
+          const max = Math.max(0, c.r - b.r - 5)
+          if (d > max) { b.x = c.x + dx / d * max; b.y = c.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
+        }
+        setTick(t => t + 1)
+      })
     simRef.current = sim
-    return () => sim.stop()
+    return () => { packSim.stop(); sim.stop() }
   }, [])
 
-  // Reconcile bubbles whenever the tag data changes (this fires after every retag → glide).
   const structureKey = useMemo(() => {
     const opt = (def?.options || []).map(o => o.id + ':' + o.name).join('|')
     const rows = nodes.map(n => n.id + '=' + JSON.stringify(n.props?.[def.id] ?? null) + ':' + (n.label || '')).join(';')
     return opt + '#' + rows
   }, [nodes, def])
 
+  // Reconcile packs + bubbles whenever tags/filter change. Packs keep their position + anchor across
+  // retags (matched by opt); only their radius adapts, and the pack sim eases neighbours apart — so
+  // moving one item never makes the whole board fly.
   useEffect(() => {
     const { groups, bubbles } = build()
     groupsRef.current = groups
-    // Keep pack centres FIXED across retags — only re-arrange the packs when the set of packs or
-    // the filter changes. Otherwise moving one item would shift every pack (the "flying" bug):
-    // packSiblings/packEnclose re-derive the whole layout from sizes, so a single size change
-    // relocated everything. Pack outlines still track their members, so packs visibly resize.
-    const lk = groups.map(g => g.opt).join('|') + '#' + filter.trim().toLowerCase()
-    if (lk !== layoutKeyRef.current || centersRef.current.length !== groups.length) {
-      centersRef.current = computeCenters(groups, bubbles)
-      layoutKeyRef.current = lk
-    }
-    const centers = centersRef.current
+    // seed positions for brand-new packs via packSiblings (nice initial bunch)
+    const gc = groups.map((g, gi) => ({ r: rFit(gi, bubbles) }))
+    d3.packSiblings(gc); const enc = d3.packEnclose(gc) || { x: 0, y: 0 }
+    const prevPacks = new Map((packsRef.current || []).map(p => [p.opt, p]))
+    const packs = groups.map((g, gi) => {
+      const ex = prevPacks.get(g.opt)
+      if (ex) { ex.gi = gi; ex.name = g.name; ex.color = g.color; ex.r = gc[gi].r; return ex }
+      return { gi, opt: g.opt, name: g.name, color: g.color, r: gc[gi].r,
+        x: FW / 2 + (gc[gi].x - enc.x), y: FH / 2 + (gc[gi].y - enc.y), anchored: false }
+    })
+    packsRef.current = packs
+
     const prev = bubblesRef.current || []
     const prevByKey = new Map(prev.map(b => [b.key, b]))
     const prevByNode = new Map(); prev.forEach(b => { if (!prevByNode.has(b.nodeId)) prevByNode.set(b.nodeId, b) })
     const next = bubbles.map(d => {
       const ex = prevByKey.get(d.key)
       if (ex) { ex.group = d.group; ex.r = d.r; ex.color = d.color; ex.label = d.label; return ex }
-      const seed = prevByNode.get(d.nodeId)      // same node, moved tag → start from where it was (glide)
-      const c = d.group >= 0 ? centers[d.group] : { x: FW / 2, y: FH / 2 }
+      const seed = prevByNode.get(d.nodeId)
+      const c = d.group >= 0 ? packs[d.group] : { x: FW / 2, y: FH / 2 }
       const j = (hashStr(d.key) % 24) - 12
       return { ...d, x: seed?.x ?? c.x + j, y: seed?.y ?? c.y + j, vx: 0, vy: 0 }
     })
     bubblesRef.current = next
-    // prune selection of bubbles that no longer exist
     const live = new Set(next.map(b => b.key))
     const sel = new Set([...selectedRef.current].filter(k => live.has(k)))
     if (sel.size !== selectedRef.current.size) { selectedRef.current = sel; setSelected(sel) }
-    const sim = simRef.current; if (!sim) return
+
+    const packSim = packSimRef.current, sim = simRef.current; if (!packSim || !sim) return
+    packSim.nodes(packs); packSim.alpha(0.5).restart()
     sim.nodes(next)
-    // forceX/Y cache targets on init → re-create so they read the current groups + centres.
-    // Packed bubbles pull to their pack centre; untagged (group -1) drift weakly to the centroid.
-    sim.force('x', d3.forceX(b => (b.group >= 0 && centersRef.current[b.group]) ? centersRef.current[b.group].x : FW / 2).strength(b => b.group >= 0 ? 0.2 : 0.045))
-    sim.force('y', d3.forceY(b => (b.group >= 0 && centersRef.current[b.group]) ? centersRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.2 : 0.045))
-    sim.force('collide', d3.forceCollide(b => b.r + 2).strength(0.9))
-    sim.alpha(0.6).restart()
+    sim.force('x', d3.forceX(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].x : FW / 2).strength(b => b.group >= 0 ? 0.35 : 0.04))
+    sim.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.35 : 0.04))
+    sim.alpha(0.7).restart()
     setTick(t => t + 1)
   }, [structureKey, filter]) // eslint-disable-line
 
-  // Pan / zoom (empty-canvas drag pans; bubble drags fall through the filter).
+  // Pan / zoom (bubble + pack drags fall through the filter; empty-canvas drag pans).
   useEffect(() => {
     if (!svgRef.current) return
     const sel = d3.select(svgRef.current)
     const zoom = d3.zoom().scaleExtent([0.3, 8])
       .filter(e => {
-        if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble]')) return false
+        if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-pack]')) return false
         return !e.ctrlKey && !e.button
       })
       .on('zoom', e => setTf(e.transform))
@@ -351,16 +372,12 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     const loc = pt.matrixTransform(g.getScreenCTM().inverse())
     return { x: loc.x, y: loc.y }
   }
-  const nearestGroup = (p) => {
-    let best = null, bd = Infinity
-    centersRef.current.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
-    return best
-  }
-  // Which pack a drop lands in — or -1 (untag) if it's dropped outside every pack outline.
   const dropTarget = (p) => {
-    const tg = nearestGroup(p); const c = centersRef.current[tg]
-    if (tg == null || !c) return -1
-    return Math.hypot(p.x - c.x, p.y - c.y) > c.r + 34 ? -1 : tg
+    let best = null, bd = Infinity
+    packsRef.current.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } })
+    const c = packsRef.current[best]
+    if (best == null || !c) return -1
+    return Math.hypot(p.x - c.x, p.y - c.y) > c.r + 30 ? -1 : best   // outside every pack → untag
   }
 
   const setSel = (next) => { selectedRef.current = next; setSelected(next) }
@@ -371,8 +388,25 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     setSel(next)
   }
 
-  // Press → click selects; drag beyond threshold moves the bubble (or the whole selection) and,
-  // on release, retags every moved item to the pack it was dropped on (or untags it).
+  // ── Drag a pack → it anchors where you drop it; members follow. Double-click / badge releases it.
+  const startPackDrag = (e, pack) => {
+    e.preventDefault(); e.stopPropagation()
+    const p0 = toWorld(e); const ox = pack.x - p0.x, oy = pack.y - p0.y
+    packSimRef.current.alphaTarget(0.3).restart()
+    simRef.current.alphaTarget(0.15).restart()   // keep members warm so they follow
+    const move = ev => { const p = toWorld(ev); pack.fx = p.x + ox; pack.fy = p.y + oy; pack.x = pack.fx; pack.y = pack.fy; setTick(t => t + 1) }
+    const up = () => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      pack.anchored = true            // fx/fy retained → stays put under the force layout
+      packSimRef.current.alphaTarget(0); simRef.current.alphaTarget(0)
+      setAnchoredTick(t => t + 1)
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const releasePack = (pack) => { pack.fx = null; pack.fy = null; pack.anchored = false; packSimRef.current.alpha(0.5).restart(); setAnchoredTick(t => t + 1) }
+  const releaseAllPacks = () => { packsRef.current.forEach(p => { p.fx = null; p.fy = null; p.anchored = false }); packSimRef.current.alpha(0.6).restart(); setAnchoredTick(t => t + 1) }
+
+  // ── Press a bubble → click selects; drag moves it (or the whole selection) and retags on drop.
   const startPress = (e, b) => {
     e.preventDefault(); e.stopPropagation()
     if (!matches(b.label)) return
@@ -407,35 +441,21 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       const list = offs
         .map(o => ({ nodeId: o.b.nodeId, sourceOpt: o.b.opt }))
         .filter(it => tg < 0 ? it.sourceOpt !== '__untagged__' : (targetOpt !== it.sourceOpt || additive))
-      if (list.length) { onRetagMany(list, targetOpt, additive) }   // store change → reconcile → glide
+      if (list.length) { onRetagMany(list, targetOpt, additive) }
       else sim.alpha(0.4).restart()
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }
 
-  // Pack outline = tight bounding circle of the members near the pack home (strays ignored so a
-  // bubble in transit never balloons the outline). Empty packs still show at a minimum radius.
   const bubbles = bubblesRef.current
-  const groups = groupsRef.current
-  const outlines = groups.map((g, gi) => {
-    const home = centersRef.current[gi] || { x: FW / 2, y: FH / 2 }
-    const mem = bubbles.filter(b => b.group === gi && !heldKeys.has(b.key) && b.x != null)
-    const count = bubbles.filter(b => b.group === gi).length
-    if (!mem.length) return { gi, cx: home.x, cy: home.y, r: 60, count, name: g.name, color: g.color }
-    const withD = mem.map(n => ({ n, d: Math.hypot(n.x - home.x, n.y - home.y) }))
-    const sorted = withD.map(o => o.d).sort((a, b) => a - b)
-    const cutoff = Math.max(120, sorted[Math.floor(sorted.length / 2)] * 2.2 + 50)
-    let core = withD.filter(o => o.d <= cutoff).map(o => o.n); if (!core.length) core = mem
-    const cx = core.reduce((s, n) => s + n.x, 0) / core.length
-    const cy = core.reduce((s, n) => s + n.y, 0) / core.length
-    let r = 0; core.forEach(n => { r = Math.max(r, Math.hypot(n.x - cx, n.y - cy) + n.r) })
-    return { gi, cx, cy, r: r + 14, count, name: g.name, color: g.color }
-  })
+  const packs = packsRef.current
   const dragging = heldKeys.size > 0
   const zoomed = tf.k !== 1 || tf.x !== 0 || tf.y !== 0
   const untaggedCount = bubbles.filter(b => b.group === -1).length
+  const anchoredAny = packs.some(p => p.anchored)
   const clearSelection = () => { if (selectedRef.current.size) setSel(new Set()) }
+  void anchoredTick
 
   return (<>
     <div style={styles.filterBox}>
@@ -444,6 +464,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       {filter && <button style={styles.filterClear} onClick={() => setFilter('')}>×</button>}
       {selected.size > 0 && <span style={styles.selCount}>{selected.size} selected</span>}
     </div>
+    {anchoredAny && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllPacks}>⊙ Release packs</button>}
     {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
     {!bubbles.length && <div style={styles.empty}>No items — tag some nodes with “{def?.name}” in the graph or table.</div>}
     <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
@@ -454,17 +475,25 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
             untagged: {untaggedCount} — drag one onto a pack to tag it · drag a tagged item to open space to untag
           </text>
         )}
-        {outlines.map(p => {
+        {/* Pack circles: fixed boundary, members contained inside. Drag to anchor, double-click to release. */}
+        {packs.map(p => {
           const isTarget = dragging && hoverGroup === p.gi
+          const count = bubbles.filter(b => b.group === p.gi).length
           return (
-            <g key={'o' + p.gi} data-bucket={p.name} pointerEvents={dragging ? 'auto' : 'none'}>
-              <circle cx={p.cx} cy={p.cy} r={p.r} fill={p.color + '1e'}
-                stroke={isTarget ? '#7fd8a8' : p.color} strokeWidth={isTarget ? 4 : 2.5} />
-              <text x={p.cx} y={p.cy - p.r - 10} textAnchor="middle" fontSize={26} fontWeight={700}
+            <g key={'o' + p.gi} data-pack="1" style={{ cursor: 'grab' }}
+              onMouseDown={e => startPackDrag(e, p)} onDoubleClick={e => { e.stopPropagation(); if (p.anchored) releasePack(p) }}>
+              <circle cx={p.x} cy={p.y} r={p.r} fill={p.color + '1e'}
+                stroke={isTarget ? '#7fd8a8' : p.color} strokeWidth={isTarget ? 4 : 2.5}
+                strokeDasharray={p.anchored ? '2 7' : undefined} />
+              <text x={p.x} y={p.y - p.r - 10} textAnchor="middle" fontSize={26} fontWeight={700}
                 fill={isTarget ? '#7fd8a8' : p.color}
                 style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>
-                {p.name} · {p.count}
+                {p.name} · {count}
               </text>
+              {p.anchored && (
+                <text x={p.x} y={p.y - p.r + 14} textAnchor="middle" fontSize={18} fill={p.color}
+                  style={{ cursor: 'pointer' }} onMouseDown={e => { e.stopPropagation(); releasePack(p) }}>⊙</text>
+              )}
             </g>
           )
         })}
