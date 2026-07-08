@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react'
 import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
-import { saveProject } from '../lib/db'
+import { saveProject, saveProjectToNotion } from '../lib/db'
 import { buildTree } from '../lib/hierarchy'
 
 // Two packing modes share one shell:
@@ -27,6 +27,22 @@ export default function PackView({ projectId }) {
   const [groupProp, setGroupProp] = useState(null)   // null = edge hierarchy, else group-by-tag propId
   const [menuOpen, setMenuOpen] = useState(false)
   const [srcMenu, setSrcMenu] = useState(false)
+  const [notionSave, setNotionSave] = useState(null)   // null | 'saving' | result string
+  const notionLinked = views.some(v => v.notionDatabaseId)
+
+  const handleSaveNotion = async () => {
+    if (notionSave === 'saving') return
+    const s = useGraphStore.getState()
+    if (!confirm(`Push tag/field values of all ${s.nodes.length} items back to Notion? This overwrites those properties in Notion.`)) return
+    setNotionSave('saving')
+    try {
+      const { updated, errors } = await saveProjectToNotion(s.nodes, s.propertyDefs)
+      setNotionSave(`✓ ${updated} updated${errors?.length ? ` · ${errors.length} failed` : ''}`)
+    } catch (e) {
+      setNotionSave('✗ ' + e.message)
+    }
+    setTimeout(() => setNotionSave(null), 6000)
+  }
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
   const srcLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Hierarchy'
   const groupDef = groupProp ? propertyDefs.find(d => d.id === groupProp) : null
@@ -133,6 +149,12 @@ export default function PackView({ projectId }) {
               </div>
             </>)}
           </div>
+        )}
+        {notionLinked && (
+          <button style={styles.notionSaveBtn} onClick={handleSaveNotion} disabled={notionSave === 'saving'}
+            title="Push all tag/field values back to the linked Notion database">
+            {notionSave === 'saving' ? 'Saving…' : (notionSave || '⇧ Save → Notion')}
+          </button>
         )}
       </div>
       <div style={styles.hint}>{groupProp ? 'drag an item onto another pack to retag · Alt-drag to add a 2nd tag · scroll = zoom · drag empty = pan' : 'scroll = zoom · drag = pan · click a circle to zoom'}</div>
@@ -604,6 +626,7 @@ const styles = {
   hint: { position: 'absolute', top: 14, right: 16, zIndex: 5, color: '#8090b8', fontSize: '0.72rem', userSelect: 'none' },
   reset: { position: 'absolute', bottom: 14, right: 16, zIndex: 5, background: 'rgba(18,18,42,0.9)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '5px 11px', cursor: 'pointer', fontSize: '0.78rem' },
   btn: { background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem' },
+  notionSaveBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#8ab4ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, whiteSpace: 'nowrap' },
   backdrop: { position: 'fixed', inset: 0, zIndex: 6 },
   menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 190, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },

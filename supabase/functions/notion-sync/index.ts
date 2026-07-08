@@ -25,7 +25,8 @@ const COLOR: Record<string, string> = {
 }
 const hex = (c?: string) => COLOR[c || 'default'] || '#6b7280'
 
-async function notion(path: string, init: RequestInit = {}) {
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+async function notion(path: string, init: RequestInit = {}, attempt = 0): Promise<any> {
   const res = await fetch(API + path, {
     ...init,
     headers: {
@@ -35,6 +36,11 @@ async function notion(path: string, init: RequestInit = {}) {
       ...(init.headers || {}),
     },
   })
+  if ((res.status === 429 || res.status === 502 || res.status === 503) && attempt < 4) {
+    const wait = Number(res.headers.get('Retry-After') || '1') * 1000 || 1000
+    await sleep(wait + attempt * 400)
+    return notion(path, init, attempt + 1)
+  }
   const data = await res.json()
   if (!res.ok) throw new Error(`Notion ${path} ${res.status}: ${data?.message || res.statusText}`)
   return data

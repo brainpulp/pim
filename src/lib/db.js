@@ -127,7 +127,8 @@ export async function importNotionDatabase(databaseId) {
   const proj = await pullNotion(databaseId)
   const { data: { user } } = await supabase.auth.getUser()
   const viewId = crypto.randomUUID()
-  const views = [{ id: viewId, name: 'Main', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [] }]
+  // Stash the source database id on the view so the app knows this project is Notion-linked (→ Save button).
+  const views = [{ id: viewId, name: 'Main', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [], notionDatabaseId: proj.notionDatabaseId }]
   const { data, error } = await tb().insert({
     user_id: user.id,
     name: proj.name || 'Notion import',
@@ -139,6 +140,20 @@ export async function importNotionDatabase(databaseId) {
   }).select().single()
   if (error) throw error
   return { row: data, count: (proj.nodes || []).length }
+}
+
+// Push the current tag/field values of every Notion-linked node back to Notion.
+export async function saveProjectToNotion(nodes, propertyDefs) {
+  const changes = (nodes || [])
+    .filter(n => n.props && Object.keys(n.props).length)
+    .map(n => ({
+      pageId: n.id,
+      updates: (propertyDefs || [])
+        .filter(d => d.notionType && n.props[d.id] !== undefined)
+        .map(d => ({ propId: d.id, type: d.type, notionType: d.notionType, value: n.props[d.id] })),
+    }))
+    .filter(c => c.updates.length)
+  return pushNotion(changes) // { updated, errors }
 }
 
 // Upload a 3D model file to Supabase Storage; returns { url, type }
