@@ -562,11 +562,6 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
               <circle cx={p.x} cy={p.y} r={p.r} fill={p.color + '1e'}
                 stroke={isTarget ? '#7fd8a8' : p.color} strokeWidth={isTarget ? 4 : 2.5}
                 strokeDasharray={p.anchored ? '2 7' : undefined} />
-              <text x={p.x} y={p.y - p.r - 10} textAnchor="middle" fontSize={26} fontWeight={700}
-                fill={isTarget ? '#7fd8a8' : p.color}
-                style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: 4 }}>
-                {p.name} · {count}
-              </text>
               {p.anchored && (
                 <text x={p.x} y={p.y - p.r + 14} textAnchor="middle" fontSize={18} fill={p.color}
                   style={{ cursor: 'pointer' }} onMouseDown={e => { e.stopPropagation(); releasePack(p) }}>⊙</text>
@@ -595,6 +590,18 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
                 {lines.map((ln, i) => <tspan key={i} x={0} y={y0 + i * lh}>{ln}</tspan>)}
               </text>
             </g>
+          )
+        })}
+        {/* Pack titles LAST so they sit on top of every bubble, with a heavy outline for legibility. */}
+        {packs.map(p => {
+          const count = bubbles.filter(b => b.group === p.gi).length
+          const isTarget = dragging && hoverGroup === p.gi
+          return (
+            <text key={'t' + p.gi} x={p.x} y={p.y - p.r - 10} textAnchor="middle" fontSize={25} fontWeight={800}
+              fill={isTarget ? '#7fd8a8' : p.color} pointerEvents="none"
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 6, strokeLinejoin: 'round' }}>
+              {p.name} · {count}
+            </text>
           )
         })}
       </g>
