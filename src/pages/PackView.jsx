@@ -276,7 +276,23 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       .force('y', d3.forceY(FH / 2).strength(0.02))
       .force('collide', d3.forceCollide(p => p.r + 22).strength(1).iterations(3))
       .alphaDecay(0.03).velocityDecay(0.62)
-      .on('tick', () => setTick(t => t + 1))
+      .on('tick', () => {
+        // Hard no-overlap: separate any pair of packs that still overlaps (collide can lag under
+        // drag/anchor). Anchored packs (fx set) stay put; the other one yields.
+        const packs = packsRef.current, GAP = 14
+        for (let i = 0; i < packs.length; i++) for (let j = i + 1; j < packs.length; j++) {
+          const a = packs[i], b = packs[j]
+          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + GAP
+          if (d < min) {
+            const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
+            const aFix = a.fx != null, bFix = b.fx != null
+            if (aFix && !bFix) { b.x += ux * push; b.y += uy * push }
+            else if (bFix && !aFix) { a.x -= ux * push; a.y -= uy * push }
+            else if (!aFix && !bFix) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 }
+          }
+        }
+        setTick(t => t + 1)
+      })
     packSimRef.current = packSim
 
     const sim = d3.forceSimulation([])
@@ -405,7 +421,16 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     const p0 = toWorld(e); const ox = pack.x - p0.x, oy = pack.y - p0.y
     packSimRef.current.alphaTarget(0.3).restart()
     simRef.current.alphaTarget(0.3).restart()   // keep members warm so they follow + get shoved aside
-    const move = ev => { const p = toWorld(ev); pack.fx = p.x + ox; pack.fy = p.y + oy; pack.x = pack.fx; pack.y = pack.fy; setTick(t => t + 1) }
+    const move = ev => {
+      const p = toWorld(ev); let x = p.x + ox, y = p.y + oy
+      // clamp the dragged pack out of every other pack so packs never overlap
+      for (const c of packsRef.current) {
+        if (c === pack) continue
+        const dx = x - c.x, dy = y - c.y, d = Math.hypot(dx, dy), min = pack.r + c.r + 14
+        if (d < min) { const dd = d || 1; x = c.x + dx / dd * min; y = c.y + dy / dd * min }
+      }
+      pack.fx = x; pack.fy = y; pack.x = x; pack.y = y; setTick(t => t + 1)
+    }
     const up = () => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
       pack.anchored = true            // fx/fy retained → stays put under the force layout
