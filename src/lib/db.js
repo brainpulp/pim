@@ -105,6 +105,42 @@ export async function redeemShareLink(token) {
   return data // { id, name, role } | null
 }
 
+// ── Notion import / sync (via the notion-sync Edge Function) ───────────────────
+// Pull a Notion database → { name, notionDatabaseId, propertyDefs, nodes, edges }.
+export async function pullNotion(databaseId) {
+  const { data, error } = await supabase.functions.invoke('notion-sync', { body: { action: 'pull', databaseId } })
+  if (error) throw new Error(error.message || 'notion-sync failed')
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
+// Push PIM edits back to Notion. changes: [{ pageId, updates: [{ propId, type, notionType, value }] }]
+export async function pushNotion(changes) {
+  const { data, error } = await supabase.functions.invoke('notion-sync', { body: { action: 'push', changes } })
+  if (error) throw new Error(error.message || 'notion-sync failed')
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
+// Import a Notion database as a brand-new PIM project; returns the created row { id, name, … }.
+export async function importNotionDatabase(databaseId) {
+  const proj = await pullNotion(databaseId)
+  const { data: { user } } = await supabase.auth.getUser()
+  const viewId = crypto.randomUUID()
+  const views = [{ id: viewId, name: 'Main', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [] }]
+  const { data, error } = await tb().insert({
+    user_id: user.id,
+    name: proj.name || 'Notion import',
+    nodes: sanitizeNodes(proj.nodes || []),
+    edges: proj.edges || [],
+    views,
+    active_view_id: viewId,
+    property_defs: proj.propertyDefs || [],
+  }).select().single()
+  if (error) throw error
+  return { row: data, count: (proj.nodes || []).length }
+}
+
 // Upload a 3D model file to Supabase Storage; returns { url, type }
 export async function uploadModel(file, projectId, nodeId) {
   const ext = file.name.split('.').pop().toLowerCase()
