@@ -28,6 +28,8 @@ export default function PackView({ projectId }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [srcMenu, setSrcMenu] = useState(false)
   const [notionSave, setNotionSave] = useState(null)   // null | 'saving' | result string
+  const [filter, setFilter] = useState({ text: '', rules: [] })
+  const filterKey = JSON.stringify(filter)
   const notionLinked = views.some(v => v.notionDatabaseId)
 
   const handleSaveNotion = async () => {
@@ -85,10 +87,11 @@ export default function PackView({ projectId }) {
   // ── Hierarchy (edges) mode: deterministic zoomable pack ─────────────────────
   const root = useMemo(() => {
     if (groupProp) return null
-    const tree = buildTree(nodes, edges, { decorOf, sizeBy })
+    const fnodes = nodes.filter(n => nodeMatchesFilter(n, filter, propertyDefs))
+    const tree = buildTree(fnodes, edges, { decorOf, sizeBy })
     const h = d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => (b.value || 0) - (a.value || 0))
     return d3.pack().size([D, D]).padding(3)(h)
-  }, [nodes, edges, decorOf, sizeBy, groupProp])
+  }, [nodes, edges, decorOf, sizeBy, groupProp, filterKey, propertyDefs]) // eslint-disable-line
   const descendants = root ? root.descendants() : []
   const colorFor = (d) => d.data.color || DEPTH_FILL[Math.min(d.depth, DEPTH_FILL.length - 1)]
 
@@ -159,8 +162,10 @@ export default function PackView({ projectId }) {
       </div>
       <div style={styles.hint}>{groupProp ? 'drag an item onto another pack to retag · Alt-drag to add a 2nd tag · scroll = zoom · drag empty = pan' : 'scroll = zoom · drag = pan · click a circle to zoom'}</div>
 
+      <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
       {groupProp ? (
-        <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany} />
+        <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
+          filterFn={n => nodeMatchesFilter(n, filter, propertyDefs)} filterKey={filterKey} />
       ) : (<>
         {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
         <svg ref={svgRef} viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
@@ -239,7 +244,7 @@ const hexLum = (hex) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
+function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey }) {
   const svgRef = useRef(null)
   const gRef = useRef(null)
   const simRef = useRef(null)          // member bubbles sim
@@ -255,9 +260,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   const [heldKeys, setHeldKeysState] = useState(() => new Set())
   const [hoverGroup, setHoverGroup] = useState(null)   // >=0 pack index, -1 = untag (outside all packs)
   const [selected, setSelected] = useState(() => new Set())
-  const [filter, setFilter] = useState('')
   const [anchoredTick, setAnchoredTick] = useState(0)  // re-render when a pack is (un)anchored
-  const matches = (label) => !filter.trim() || String(label || '').toLowerCase().includes(filter.trim().toLowerCase())
   const setHeldKeys = (s) => { heldKeysRef.current = s; setHeldKeysState(s) }
 
   // Desired bubbles + real packs from the store. One bubble per (node, tag value); multi-tag nodes
@@ -268,6 +271,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     const idx = new Map(groups.map((g, i) => [g.opt, i]))
     const raw = []
     nodes.forEach(n => {
+      if (filterFn && !filterFn(n)) return   // filtered-out items are removed → packs re-pack around the rest
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
@@ -277,8 +281,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       else valid.forEach(id => raw.push({ nodeId: n.id, opt: id, group: idx.get(id), label, color }))
     })
     raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
-    // Filtered-out items are fully removed from the layout so packs re-pack around what remains.
-    return { groups, bubbles: raw.filter(b => matches(b.label)) }
+    return { groups, bubbles: raw }
   }
 
   // Pack radius = the MINIMUM circle that holds its members (tight-pack them with packSiblings,
@@ -413,7 +416,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     sim.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.35 : 0.04))
     sim.alpha(0.7).restart()
     setTick(t => t + 1)
-  }, [structureKey, filter]) // eslint-disable-line
+  }, [structureKey, filterKey]) // eslint-disable-line
 
   // Pan / zoom (bubble + pack drags fall through the filter; empty-canvas drag pans).
   useEffect(() => {
@@ -486,7 +489,6 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   // ── Press a bubble → click selects; drag moves it (or the whole selection) and retags on drop.
   const startPress = (e, b) => {
     e.preventDefault(); e.stopPropagation()
-    if (!matches(b.label)) return
     const sim = simRef.current
     const start = toWorld(e)
     const groupMove = selectedRef.current.has(b.key) && selectedRef.current.size > 1
@@ -535,12 +537,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   void anchoredTick
 
   return (<>
-    <div style={styles.filterBox}>
-      <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter items…"
-        style={styles.filterInput} onMouseDown={e => e.stopPropagation()} />
-      {filter && <button style={styles.filterClear} onClick={() => setFilter('')}>×</button>}
-      {selected.size > 0 && <span style={styles.selCount}>{selected.size} selected</span>}
-    </div>
+    {selected.size > 0 && <div style={styles.selBadge}>{selected.size} selected</div>}
     {anchoredAny && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllPacks}>⊙ Release packs</button>}
     {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
     {!bubbles.length && <div style={styles.empty}>No items — tag some nodes with “{def?.name}” in the graph or table.</div>}
@@ -609,6 +606,107 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
   </>)
 }
 
+// ── Notion-style filter (text + property rules, ANDed) ───────────────────────
+const OPS = {
+  select: ['is', 'is not', 'is empty', 'not empty'],
+  multiSelect: ['contains', 'not contains', 'is empty', 'not empty'],
+  number: ['=', '≠', '>', '<', '≥', '≤', 'is empty', 'not empty'],
+  date: ['before', 'after', 'on', 'is empty', 'not empty'],
+  text: ['contains', 'not contains', 'is empty', 'not empty'],
+  url: ['contains', 'is empty', 'not empty'],
+  checkbox: ['checked', 'unchecked'],
+}
+const needsValue = (op) => !['is empty', 'not empty', 'checked', 'unchecked'].includes(op)
+
+function ruleMatches(node, rule, def) {
+  const v = node.props?.[rule.propId]
+  const empty = v == null || v === '' || (Array.isArray(v) && v.length === 0)
+  switch (rule.op) {
+    case 'is empty': return empty
+    case 'not empty': return !empty
+    case 'is': return v === rule.value
+    case 'is not': return v !== rule.value
+    case 'contains': return def.type === 'multiSelect' ? (Array.isArray(v) && v.includes(rule.value)) : String(v || '').toLowerCase().includes(String(rule.value || '').toLowerCase())
+    case 'not contains': return def.type === 'multiSelect' ? !(Array.isArray(v) && v.includes(rule.value)) : !String(v || '').toLowerCase().includes(String(rule.value || '').toLowerCase())
+    case '=': return Number(v) === Number(rule.value)
+    case '≠': return Number(v) !== Number(rule.value)
+    case '>': return Number(v) > Number(rule.value)
+    case '<': return Number(v) < Number(rule.value)
+    case '≥': return Number(v) >= Number(rule.value)
+    case '≤': return Number(v) <= Number(rule.value)
+    case 'before': return !!v && !!rule.value && String(v) < String(rule.value)
+    case 'after': return !!v && !!rule.value && String(v) > String(rule.value)
+    case 'on': return !!v && !!rule.value && String(v).slice(0, 10) === String(rule.value).slice(0, 10)
+    case 'checked': return !!v
+    case 'unchecked': return !v
+    default: return true
+  }
+}
+function nodeMatchesFilter(node, filter, propertyDefs) {
+  const t = (filter.text || '').trim().toLowerCase()
+  if (t && !String(node.label || '').toLowerCase().includes(t)) return false
+  for (const rule of filter.rules || []) {
+    if (!rule.propId || !rule.op) continue
+    const def = propertyDefs.find(d => d.id === rule.propId)
+    if (!def) continue
+    if (needsValue(rule.op) && (rule.value == null || rule.value === '')) continue // incomplete rule → ignore
+    if (!ruleMatches(node, rule, def)) return false
+  }
+  return true
+}
+
+function FilterBar({ filter, setFilter, propertyDefs }) {
+  const [open, setOpen] = useState(false)
+  const filterable = propertyDefs.filter(d => OPS[d.type])
+  const rules = filter.rules || []
+  const setRule = (i, patch) => setFilter(f => ({ ...f, rules: f.rules.map((r, j) => j === i ? { ...r, ...patch } : r) }))
+  const addRule = () => { const d = filterable[0]; if (!d) return; setFilter(f => ({ ...f, rules: [...(f.rules || []), { propId: d.id, op: OPS[d.type][0], value: '' }] })); setOpen(true) }
+  const delRule = (i) => setFilter(f => ({ ...f, rules: f.rules.filter((_, j) => j !== i) }))
+  const active = rules.length + (filter.text ? 1 : 0)
+  return (
+    <div style={styles.filterBox}>
+      <input value={filter.text || ''} onChange={e => setFilter(f => ({ ...f, text: e.target.value }))}
+        placeholder="Filter items…" style={styles.filterInput} onMouseDown={e => e.stopPropagation()} />
+      {filter.text && <button style={styles.filterClear} onClick={() => setFilter(f => ({ ...f, text: '' }))}>×</button>}
+      <button style={{ ...styles.filterClear, fontSize: '0.76rem', color: active ? '#8ab4ff' : '#8090b8', width: 'auto', padding: '0 6px' }}
+        onClick={() => setOpen(o => !o)} title="Filter by property">⛃ {rules.length ? `${rules.length}` : 'Filter'} ▾</button>
+      {open && (<>
+        <div style={styles.backdrop} onClick={() => setOpen(false)} />
+        <div style={{ ...styles.menu, top: '110%', left: 'auto', right: 0, minWidth: 320, padding: 8 }} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
+          {!filterable.length && <div style={{ color: '#8090b8', fontSize: '0.76rem', padding: 4 }}>No filterable properties.</div>}
+          {rules.map((r, i) => {
+            const def = propertyDefs.find(d => d.id === r.propId) || filterable[0]
+            const ops = OPS[def?.type] || ['contains']
+            return (
+              <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'center' }}>
+                <select value={r.propId} onChange={e => { const nd = propertyDefs.find(d => d.id === e.target.value); setRule(i, { propId: e.target.value, op: OPS[nd.type][0], value: '' }) }} style={styles.fSelect}>
+                  {filterable.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+                <select value={r.op} onChange={e => setRule(i, { op: e.target.value })} style={styles.fSelect}>
+                  {ops.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                {needsValue(r.op) && (
+                  (def?.type === 'select' || def?.type === 'multiSelect')
+                    ? <select value={r.value || ''} onChange={e => setRule(i, { value: e.target.value })} style={styles.fSelect}>
+                        <option value="">—</option>
+                        {(def.options || []).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                      </select>
+                    : <input type={def?.type === 'number' ? 'number' : def?.type === 'date' ? 'date' : 'text'}
+                        value={r.value || ''} onChange={e => setRule(i, { value: e.target.value })}
+                        style={{ ...styles.fSelect, width: 90 }} />
+                )}
+                <button style={styles.filterClear} onClick={() => delRule(i)}>×</button>
+              </div>
+            )
+          })}
+          {!!filterable.length && <button style={{ ...styles.btn, fontSize: '0.76rem', padding: '4px 8px' }} onClick={addRule}>+ Add filter</button>}
+          {rules.length > 0 && <button style={{ ...styles.filterClear, fontSize: '0.74rem', width: 'auto', marginLeft: 8 }} onClick={() => setFilter(f => ({ ...f, rules: [] }))}>clear all</button>}
+        </div>
+      </>)}
+    </div>
+  )
+}
+
 function trim(s, n) { return s && s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : (s || '') }
 
 // Greedy word-wrap into lines of at most `maxChars`; very long words are hard-broken.
@@ -643,4 +741,6 @@ const styles = {
   filterInput: { background: 'transparent', border: 'none', outline: 'none', color: '#e6ebff', fontSize: '0.82rem', width: 180, padding: '3px 4px' },
   filterClear: { background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0 4px' },
   selCount: { color: '#ffd34d', fontSize: '0.74rem', paddingRight: 4, whiteSpace: 'nowrap' },
+  fSelect: { background: '#0f1428', border: '1px solid #2d3a6a', color: '#e6ebff', borderRadius: 5, padding: '3px 5px', fontSize: '0.76rem', maxWidth: 120 },
+  selBadge: { position: 'absolute', bottom: 14, left: 16, zIndex: 5, background: 'rgba(18,18,42,0.92)', border: '1px solid #6b5a2a', color: '#ffd34d', borderRadius: 7, padding: '4px 10px', fontSize: '0.74rem' },
 }
