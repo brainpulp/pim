@@ -96,25 +96,61 @@ export default function PackView({ projectId }) {
   const colorFor = (d) => d.data.color || DEPTH_FILL[Math.min(d.depth, DEPTH_FILL.length - 1)]
 
   const svgRef = useRef(null)
+  const hgRef = useRef(null)              // hierarchy inner <g> (for drag coordinate mapping)
   const zoomRef = useRef(null)
+  const hOffsetsRef = useRef({})          // hierarchy: nodeId → {dx,dy} drag offset (subtree moves with it)
+  const didHDragRef = useRef(false)
   const [t, setT] = useState(d3.zoomIdentity)
+  const [, setDragTick] = useState(0)
   useEffect(() => {
     if (groupProp || !svgRef.current) return
     const sel = d3.select(svgRef.current)
     const zoom = d3.zoom().scaleExtent([0.5, 48])
-      .filter(e => { if (e.type === 'dblclick') return false; return !e.ctrlKey && !e.button })
+      .filter(e => {
+        if (e.type === 'dblclick') return false
+        if (e.type === 'mousedown' && e.target?.closest?.('[data-hcirc]')) return false  // circle drag, not pan
+        return !e.ctrlKey && !e.button
+      })
       .on('zoom', e => setT(e.transform))
     zoomRef.current = zoom
     sel.call(zoom)
     return () => sel.on('.zoom', null)
   }, [groupProp])
+  // Drag a hierarchy circle → offset it (and its whole subtree). Click (no drag) still zooms to fit.
+  const toWorldH = (ev) => {
+    const g = hgRef.current, svg = svgRef.current
+    const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY
+    const loc = pt.matrixTransform(g.getScreenCTM().inverse())
+    return { x: loc.x, y: loc.y }
+  }
+  const accOffset = (d) => {
+    let dx = 0, dy = 0
+    for (const a of d.ancestors()) { const o = hOffsetsRef.current[a.data.id]; if (o) { dx += o.dx; dy += o.dy } }
+    return { dx, dy }
+  }
+  const startHDrag = (e, d) => {
+    e.stopPropagation()
+    const p0 = toWorldH(e)
+    const own0 = hOffsetsRef.current[d.data.id] || { dx: 0, dy: 0 }
+    let moved = false
+    const onMove = ev => {
+      const p = toWorldH(ev)
+      if (!moved && Math.hypot(p.x - p0.x, p.y - p0.y) > 3) { moved = true; didHDragRef.current = true }
+      if (moved) { hOffsetsRef.current[d.data.id] = { dx: own0.dx + (p.x - p0.x), dy: own0.dy + (p.y - p0.y) }; setDragTick(v => v + 1) }
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp)
+      setTimeout(() => { didHDragRef.current = false }, 0)   // let the click handler see it, then reset
+    }
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+  }
   const fitTo = (cx, cy, r, dur = 640) => {
     if (!zoomRef.current || !svgRef.current) return
     const kk = Math.max(0.5, Math.min(48, D / (2 * r * 1.06)))
     const T = d3.zoomIdentity.translate(D / 2 - kk * cx, D / 2 - kk * cy).scale(kk)
     d3.select(svgRef.current).transition().duration(dur).call(zoomRef.current.transform, T)
   }
-  const fitAll = () => fitTo(D / 2, D / 2, D / 2, 480)
+  const fitAll = () => { hOffsetsRef.current = {}; setDragTick(v => v + 1); fitTo(D / 2, D / 2, D / 2, 480) }
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape' && !groupProp) fitAll() }
     window.addEventListener('keydown', onKey)
@@ -169,48 +205,53 @@ export default function PackView({ projectId }) {
       ) : (<>
         {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
         <svg ref={svgRef} viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
-          <g transform={`translate(${t.x},${t.y}) scale(${t.k})`}>
+          <g ref={hgRef} transform={`translate(${t.x},${t.y}) scale(${t.k})`}>
             {descendants.map(d => {
               const isLeaf = !d.children
               const dStroke = d.data.stroke
+              const { dx, dy } = accOffset(d)
               return (
-                <circle key={d.data.id} cx={d.x} cy={d.y} r={d.r}
+                <circle key={d.data.id} data-hcirc="1" cx={d.x + dx} cy={d.y + dy} r={d.r}
                   fill={colorFor(d)} fillOpacity={isLeaf ? 0.92 : 0.45}
                   stroke={dStroke || '#0c0c1a'}
                   strokeWidth={dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / t.k : 1 / t.k}
-                  style={{ cursor: d.children ? 'zoom-in' : 'default' }}
-                  onClick={e => { e.stopPropagation(); if (d.children) fitTo(d.x, d.y, d.r) }}
+                  style={{ cursor: 'grab' }}
+                  onMouseDown={e => startHDrag(e, d)}
+                  onClick={e => { e.stopPropagation(); if (didHDragRef.current) return; if (d.children) fitTo(d.x + dx, d.y + dy, d.r) }}
                 />
               )
             })}
             {descendants.filter(d => d.depth > 0 && d.data.label).map(d => {
               const isLeaf = !d.children
+              const { dx, dy } = accOffset(d)
+              const cx = d.x + dx, cy = d.y + dy
               const fontSize = isLeaf ? d.r * 0.34 : Math.min(d.r * 0.15, 16)
               const maxChars = Math.max(4, Math.floor((1.75 * d.r) / (fontSize * 0.56)))
               const lines = wrapText(d.data.label, maxChars).slice(0, isLeaf ? 8 : 2)
               const lh = fontSize * 1.08
               if (isLeaf) {
-                const y0 = d.y - (lines.length - 1) / 2 * lh
+                const y0 = cy - (lines.length - 1) / 2 * lh
                 return (
-                  <text key={'t' + d.data.id} textAnchor="middle" dominantBaseline="middle"
-                    fontSize={fontSize} fill="#eef2ff" pointerEvents="none"
+                  <text key={'t' + d.data.id} textAnchor="middle" dominantBaseline="middle" pointerEvents="none"
+                    fontSize={fontSize} fill="#eef2ff"
                     style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.18, fontWeight: 600 }}>
-                    {lines.map((ln, i) => <tspan key={i} x={d.x} y={y0 + i * lh}>{ln}</tspan>)}
+                    {lines.map((ln, i) => <tspan key={i} x={cx} y={y0 + i * lh}>{ln}</tspan>)}
                   </text>
                 )
               }
-              const y0 = d.y - d.r + fontSize * 1.1
+              const y0 = cy - d.r + fontSize * 1.1
               return (
-                <text key={'t' + d.data.id} textAnchor="middle" dominantBaseline="hanging"
-                  fontSize={fontSize} fill="#cdd6f5" pointerEvents="none"
+                <text key={'t' + d.data.id} textAnchor="middle" dominantBaseline="hanging" pointerEvents="none"
+                  fontSize={fontSize} fill="#cdd6f5"
                   style={{ paintOrder: 'stroke', stroke: '#0c0c1a', strokeWidth: fontSize * 0.2, fontWeight: 600 }}>
-                  {lines.map((ln, i) => <tspan key={i} x={d.x} y={y0 + i * lh}>{ln}</tspan>)}
+                  {lines.map((ln, i) => <tspan key={i} x={cx} y={y0 + i * lh}>{ln}</tspan>)}
                 </text>
               )
             })}
             {descendants.filter(d => d.data.emoji && d.r * t.k > 12).map(d => {
               const em = d.data.emoji, sz = Math.min(d.r * 0.28, 30)
-              const ex = d.x + d.r * 0.5, ey = d.y - d.r * 0.5
+              const { dx, dy } = accOffset(d)
+              const ex = d.x + dx + d.r * 0.5, ey = d.y + dy - d.r * 0.5
               return em.type === 'image'
                 ? <image key={'e' + d.data.id} href={em.emoji} x={ex - sz / 2} y={ey - sz / 2} width={sz} height={sz} style={{ pointerEvents: 'none' }} />
                 : <text key={'e' + d.data.id} x={ex} y={ey} fontSize={sz} textAnchor="middle" dominantBaseline="central" pointerEvents="none">{em.emoji}</text>
