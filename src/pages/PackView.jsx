@@ -286,11 +286,22 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       .on('tick', () => {
         const packs = packsRef.current, held = heldKeysRef.current
         for (const b of bubblesRef.current) {
-          if (b.group < 0 || b.fx != null || held.has(b.key)) continue
-          const c = packs[b.group]; if (!c) continue
-          const dx = b.x - c.x, dy = b.y - c.y, d = Math.hypot(dx, dy) || 1
-          const max = Math.max(0, c.r - b.r - 5)
-          if (d > max) { b.x = c.x + dx / d * max; b.y = c.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
+          if (b.fx != null || held.has(b.key)) continue
+          const own = b.group >= 0 ? packs[b.group] : null
+          // keep members inside their own pack…
+          if (own) {
+            const dx = b.x - own.x, dy = b.y - own.y, d = Math.hypot(dx, dy) || 1
+            const max = Math.max(0, own.r - b.r - 5)
+            if (d > max) { b.x = own.x + dx / d * max; b.y = own.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
+          }
+          // …and push everyone else OUT of packs they don't belong to (so a moving pack shoves
+          // free-floating / other nodes aside instead of sliding over them).
+          for (const c of packs) {
+            if (c === own) continue
+            const dx = b.x - c.x, dy = b.y - c.y, d = Math.hypot(dx, dy)
+            const min = c.r + b.r + 2
+            if (d < min) { const dd = d || 1; b.x = c.x + dx / dd * min; b.y = c.y + dy / dd * min; b.vx *= 0.4; b.vy *= 0.4 }
+          }
         }
         setTick(t => t + 1)
       })
@@ -393,7 +404,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     e.preventDefault(); e.stopPropagation()
     const p0 = toWorld(e); const ox = pack.x - p0.x, oy = pack.y - p0.y
     packSimRef.current.alphaTarget(0.3).restart()
-    simRef.current.alphaTarget(0.15).restart()   // keep members warm so they follow
+    simRef.current.alphaTarget(0.3).restart()   // keep members warm so they follow + get shoved aside
     const move = ev => { const p = toWorld(ev); pack.fx = p.x + ox; pack.fy = p.y + oy; pack.x = pack.fx; pack.y = pack.fy; setTick(t => t + 1) }
     const up = () => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
