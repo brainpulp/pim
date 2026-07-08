@@ -71,7 +71,7 @@ async function pull(databaseId: string) {
     else if (t === 'multi_select') { pimType = 'multiSelect'; options = (p as any).multi_select.options.map((o: any) => ({ id: o.id, name: o.name, color: hex(o.color) })) }
     else continue   // people, files, formula, rollup, created_time, last_edited_time, button…
     propType[id] = pimType
-    const def: any = { id, name, type: pimType }
+    const def: any = { id, name, type: pimType, notionType: t }
     if (options) def.options = options
     propertyDefs.push(def)
   }
