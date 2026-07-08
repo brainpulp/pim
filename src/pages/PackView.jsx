@@ -259,12 +259,15 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
     return { groups, bubbles: raw.filter(b => matches(b.label)) }
   }
 
-  // Pack radius sized (with headroom) to actually contain its members.
+  // Pack radius = the MINIMUM circle that holds its members (tight-pack them with packSiblings,
+  // take the enclosing radius). Recomputed on every membership change → packs shrink/grow to fit.
   const rFit = (gi, bubbles) => {
-    let area = 0, n = 0
-    bubbles.forEach(b => { if (b.group === gi) { area += Math.PI * (b.r + 6) ** 2; n++ } })
-    if (!n) return 76
-    return Math.max(76, Math.sqrt(area / Math.PI) * 1.34) + 16
+    const circles = []
+    bubbles.forEach(b => { if (b.group === gi) circles.push({ r: b.r + 3 }) })
+    if (!circles.length) return 62
+    d3.packSiblings(circles)
+    const enc = d3.packEnclose(circles) || { r: 62 }
+    return enc.r + 12
   }
 
   // Create both sims once. Packs: collide (never overlap) + gentle centre gravity → self-bunching.
@@ -301,22 +304,38 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany }) {
       .alphaDecay(0.02).velocityDecay(0.55)
       .on('tick', () => {
         const packs = packsRef.current, held = heldKeysRef.current
-        for (const b of bubblesRef.current) {
+        const bs = bubblesRef.current
+        // Hard node–node separation so bubbles NEVER visibly overlap (collide alone only converges
+        // over several ticks). A dragged node (fx set) shoves others but isn't itself displaced.
+        for (let i = 0; i < bs.length; i++) {
+          const a = bs[i]
+          for (let j = i + 1; j < bs.length; j++) {
+            const b = bs[j]
+            const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 1.5
+            if (d < min) {
+              const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
+              const aFix = a.fx != null, bFix = b.fx != null
+              if (aFix && !bFix) { b.x += ux * push; b.y += uy * push }
+              else if (bFix && !aFix) { a.x -= ux * push; a.y -= uy * push }
+              else if (!aFix && !bFix) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 }
+            }
+          }
+        }
+        for (const b of bs) {
           if (b.fx != null || held.has(b.key)) continue
           const own = b.group >= 0 ? packs[b.group] : null
-          // keep members inside their own pack…
-          if (own) {
-            const dx = b.x - own.x, dy = b.y - own.y, d = Math.hypot(dx, dy) || 1
-            const max = Math.max(0, own.r - b.r - 5)
-            if (d > max) { b.x = own.x + dx / d * max; b.y = own.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
-          }
-          // …and push everyone else OUT of packs they don't belong to (so a moving pack shoves
-          // free-floating / other nodes aside instead of sliding over them).
+          // push out of packs it doesn't belong to (a moving pack shoves non-members aside)…
           for (const c of packs) {
             if (c === own) continue
             const dx = b.x - c.x, dy = b.y - c.y, d = Math.hypot(dx, dy)
             const min = c.r + b.r + 2
             if (d < min) { const dd = d || 1; b.x = c.x + dx / dd * min; b.y = c.y + dy / dd * min; b.vx *= 0.4; b.vy *= 0.4 }
+          }
+          // …and keep members inside their own pack.
+          if (own) {
+            const dx = b.x - own.x, dy = b.y - own.y, d = Math.hypot(dx, dy) || 1
+            const max = Math.max(0, own.r - b.r - 4)
+            if (d > max) { b.x = own.x + dx / d * max; b.y = own.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
           }
         }
         setTick(t => t + 1)
