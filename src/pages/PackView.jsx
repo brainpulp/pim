@@ -333,7 +333,9 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey })
     if (!circles.length) return 62
     d3.packSiblings(circles)
     const enc = d3.packEnclose(circles) || { r: 62 }
-    return enc.r + 12
+    // Ideal enclosing radius assumes a PERFECT pack; the force layout can't hit that, so add
+    // slack — otherwise members can't fit without overlapping. Still ~minimal, grows with content.
+    return Math.max(64, (enc.r || 62) * 1.12) + 14
   }
 
   // Create both sims once. Packs: collide (never overlap) + gentle centre gravity → self-bunching.
@@ -371,37 +373,37 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey })
       .on('tick', () => {
         const packs = packsRef.current, held = heldKeysRef.current
         const bs = bubblesRef.current
-        // Hard node–node separation so bubbles NEVER visibly overlap (collide alone only converges
-        // over several ticks). A dragged node (fx set) shoves others but isn't itself displaced.
-        for (let i = 0; i < bs.length; i++) {
-          const a = bs[i]
-          for (let j = i + 1; j < bs.length; j++) {
-            const b = bs[j]
-            const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 1.5
-            if (d < min) {
-              const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
-              const aFix = a.fx != null, bFix = b.fx != null
-              if (aFix && !bFix) { b.x += ux * push; b.y += uy * push }
-              else if (bFix && !aFix) { a.x -= ux * push; a.y -= uy * push }
-              else if (!aFix && !bFix) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 }
+        // Iterate the constraints so they actually CONVERGE within a tick. Order per pass:
+        //   1) push out of packs you don't belong to, 2) keep inside your own pack,
+        //   3) member–member separation LAST → node-node non-overlap is the constraint that wins.
+        for (let pass = 0; pass < 3; pass++) {
+          for (const b of bs) {
+            if (b.fx != null || held.has(b.key)) continue
+            const own = b.group >= 0 ? packs[b.group] : null
+            for (const c of packs) {
+              if (c === own) continue
+              const dx = b.x - c.x, dy = b.y - c.y, d = Math.hypot(dx, dy), min = c.r + b.r + 2
+              if (d < min) { const dd = d || 1; b.x = c.x + dx / dd * min; b.y = c.y + dy / dd * min; b.vx *= 0.4; b.vy *= 0.4 }
+            }
+            if (own) {
+              const dx = b.x - own.x, dy = b.y - own.y, d = Math.hypot(dx, dy) || 1
+              const max = Math.max(0, own.r - b.r - 4)
+              if (d > max) { b.x = own.x + dx / d * max; b.y = own.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
             }
           }
-        }
-        for (const b of bs) {
-          if (b.fx != null || held.has(b.key)) continue
-          const own = b.group >= 0 ? packs[b.group] : null
-          // push out of packs it doesn't belong to (a moving pack shoves non-members aside)…
-          for (const c of packs) {
-            if (c === own) continue
-            const dx = b.x - c.x, dy = b.y - c.y, d = Math.hypot(dx, dy)
-            const min = c.r + b.r + 2
-            if (d < min) { const dd = d || 1; b.x = c.x + dx / dd * min; b.y = c.y + dy / dd * min; b.vx *= 0.4; b.vy *= 0.4 }
-          }
-          // …and keep members inside their own pack.
-          if (own) {
-            const dx = b.x - own.x, dy = b.y - own.y, d = Math.hypot(dx, dy) || 1
-            const max = Math.max(0, own.r - b.r - 4)
-            if (d > max) { b.x = own.x + dx / d * max; b.y = own.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
+          for (let i = 0; i < bs.length; i++) {
+            const a = bs[i]
+            for (let j = i + 1; j < bs.length; j++) {
+              const b = bs[j]
+              const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 1.5
+              if (d < min) {
+                const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
+                const aFix = a.fx != null || held.has(a.key), bFix = b.fx != null || held.has(b.key)
+                if (aFix && !bFix) { b.x += ux * push; b.y += uy * push }
+                else if (bFix && !aFix) { a.x -= ux * push; a.y -= uy * push }
+                else if (!aFix && !bFix) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 }
+              }
+            }
           }
         }
         setTick(t => t + 1)
