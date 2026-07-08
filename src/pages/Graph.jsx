@@ -427,6 +427,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const dragHoverNodeIdRef = useRef(null)
   const [showSlideSidebar, setShowSlideSidebar] = useState(false)
   const [hideFrameOutlines, setHideFrameOutlines] = useState(false)
+  // Auto-hide frame outlines after zooming to a frame (thumbnail click), until the next real pan/zoom.
+  const [autoHideFrames, setAutoHideFrames] = useState(false)
   const prevFrameCountRef = useRef(0)
   const [presentingSlideIdx, setPresentingSlideIdx] = useState(null)
   const presentingSlideIdxRef = useRef(null)
@@ -934,6 +936,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       .filter(zoomFilter)
       .on('zoom', e => {
         zoomTransformRef.current = e.transform
+        // A real user pan/zoom (has sourceEvent) reveals frame outlines again; the programmatic
+        // zoomToFrame transition has no sourceEvent, so it doesn't clear the auto-hide.
+        if (e.sourceEvent) setAutoHideFrames(false)
         scheduleRender()
         // Persist the viewport to localStorage *instantly* so a reload restores it even if
         // the debounced DB save (below) hasn't fired yet. The DB save is the cross-device backup.
@@ -1774,6 +1779,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (animated) sel.transition().duration(600).call(zoomBehaviorRef.current.transform, t)
     else sel.call(zoomBehaviorRef.current.transform, t)
     zoomTransformRef.current = t
+    setAutoHideFrames(true)   // hide frame outlines while focused on this frame (until next pan/zoom)
     scheduleRender()
   }, [scheduleRender])
 
@@ -2349,7 +2355,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onDelete={id => setConfirmDelete(id)}
                 onLabelChange={updateLabel}
                 onToggleSlide={id => slideIds.includes(id) ? removeSlide(id) : addSlide(id)}
-                hideOutline={hideFrameOutlines}
+                hideOutline={hideFrameOutlines || autoHideFrames}
               />
             ))}
 
