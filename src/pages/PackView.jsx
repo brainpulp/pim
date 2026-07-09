@@ -98,7 +98,10 @@ export default function PackView({ projectId }) {
   const svgRef = useRef(null)
   const hgRef = useRef(null)              // hierarchy inner <g> (for drag coordinate mapping)
   const zoomRef = useRef(null)
-  const hOffsetsRef = useRef({})          // hierarchy: nodeId → {dx,dy} drag offset (subtree moves with it)
+  const hPacksRef = useRef([])            // hierarchy top-level branch force-packs [{id,r,x0,y0,x,y,fx,fy,anchored}]
+  const hPackByIdRef = useRef({})
+  const branchOfRef = useRef({})          // descendant id → its top-level branch id
+  const hPackSimRef = useRef(null)
   const didHDragRef = useRef(false)
   const [t, setT] = useState(d3.zoomIdentity)
   const [, setDragTick] = useState(0)
@@ -123,34 +126,94 @@ export default function PackView({ projectId }) {
     const loc = pt.matrixTransform(g.getScreenCTM().inverse())
     return { x: loc.x, y: loc.y }
   }
-  const accOffset = (d) => {
-    let dx = 0, dy = 0
-    for (const a of d.ancestors()) { const o = hOffsetsRef.current[a.data.id]; if (o) { dx += o.dx; dy += o.dy } }
-    return { dx, dy }
+  // Option B: each root-child branch is a force-pack; its nested circles keep the deterministic
+  // d3.pack layout and ride along by the pack's (x-x0, y-y0) offset.
+  const hOffsetFor = (descId) => {
+    const p = hPackByIdRef.current[branchOfRef.current[descId]]
+    return p ? { dx: p.x - p.x0, dy: p.y - p.y0 } : { dx: 0, dy: 0 }
   }
+  // Create the top-level pack sim once (self-bunching + hard no-overlap between branches).
+  useEffect(() => {
+    const sim = d3.forceSimulation([])
+      .force('x', d3.forceX(D / 2).strength(0.025))
+      .force('y', d3.forceY(D / 2).strength(0.025))
+      .force('collide', d3.forceCollide(p => p.r + 8).strength(1).iterations(2))
+      .alphaDecay(0.03).velocityDecay(0.6)
+      .on('tick', () => {
+        const ps = hPacksRef.current, GAP = 6
+        for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
+          const a = ps[i], b = ps[j]
+          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + GAP
+          if (d < min) {
+            const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
+            const af = a.fx != null, bf = b.fx != null
+            if (af && !bf) { b.x += ux * push; b.y += uy * push }
+            else if (bf && !af) { a.x -= ux * push; a.y -= uy * push }
+            else if (!af && !bf) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 }
+          }
+        }
+        setDragTick(v => v + 1)
+      })
+    hPackSimRef.current = sim
+    return () => sim.stop()
+  }, [])
+  // Rebuild branch packs when the (filtered) hierarchy changes; preserve positions/anchors by id.
+  useEffect(() => {
+    if (groupProp || !root) return
+    const tops = root.children || []
+    const branchOf = {}
+    const prev = new Map((hPacksRef.current || []).map(p => [p.id, p]))
+    const packs = tops.map(tl => {
+      tl.descendants().forEach(desc => { branchOf[desc.data.id] = tl.data.id })
+      const ex = prev.get(tl.data.id)
+      if (ex) { ex.r = tl.r; ex.x0 = tl.x; ex.y0 = tl.y; return ex }
+      return { id: tl.data.id, r: tl.r, x0: tl.x, y0: tl.y, x: tl.x, y: tl.y, fx: null, fy: null, anchored: false }
+    })
+    branchOfRef.current = branchOf
+    hPacksRef.current = packs
+    hPackByIdRef.current = Object.fromEntries(packs.map(p => [p.id, p]))
+    const sim = hPackSimRef.current; if (!sim) return
+    sim.nodes(packs); sim.alpha(0.6).restart()
+    setDragTick(v => v + 1)
+  }, [root, groupProp])
+  // Drag anywhere in a branch → move that branch's pack; drop anchors it. Click (no drag) = zoom to fit.
   const startHDrag = (e, d) => {
     e.stopPropagation()
-    const p0 = toWorldH(e)
-    const own0 = hOffsetsRef.current[d.data.id] || { dx: 0, dy: 0 }
+    const pack = hPackByIdRef.current[branchOfRef.current[d.data.id]]; if (!pack) return
+    const p0 = toWorldH(e); const ox = pack.x - p0.x, oy = pack.y - p0.y
+    hPackSimRef.current.alphaTarget(0.3).restart()
     let moved = false
     const onMove = ev => {
       const p = toWorldH(ev)
       if (!moved && Math.hypot(p.x - p0.x, p.y - p0.y) > 3) { moved = true; didHDragRef.current = true }
-      if (moved) { hOffsetsRef.current[d.data.id] = { dx: own0.dx + (p.x - p0.x), dy: own0.dy + (p.y - p0.y) }; setDragTick(v => v + 1) }
+      if (moved) {
+        let x = p.x + ox, y = p.y + oy
+        for (const c of hPacksRef.current) {
+          if (c === pack) continue
+          const dx = x - c.x, dy = y - c.y, dd = Math.hypot(dx, dy), min = pack.r + c.r + 6
+          if (dd < min) { const q = dd || 1; x = c.x + dx / q * min; y = c.y + dy / q * min }
+        }
+        pack.fx = x; pack.fy = y; pack.x = x; pack.y = y; setDragTick(v => v + 1)
+      }
     }
     const onUp = () => {
       document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp)
-      setTimeout(() => { didHDragRef.current = false }, 0)   // let the click handler see it, then reset
+      if (moved) pack.anchored = true
+      hPackSimRef.current.alphaTarget(0)
+      setTimeout(() => { didHDragRef.current = false }, 0)
+      setDragTick(v => v + 1)
     }
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
   }
+  const releaseHPack = (id) => { const p = hPackByIdRef.current[id]; if (!p) return; p.fx = null; p.fy = null; p.anchored = false; hPackSimRef.current?.alpha(0.5).restart(); setDragTick(v => v + 1) }
+  const releaseAllHPacks = () => { hPacksRef.current.forEach(p => { p.fx = null; p.fy = null; p.anchored = false }); hPackSimRef.current?.alpha(0.6).restart(); setDragTick(v => v + 1) }
   const fitTo = (cx, cy, r, dur = 640) => {
     if (!zoomRef.current || !svgRef.current) return
     const kk = Math.max(0.5, Math.min(48, D / (2 * r * 1.06)))
     const T = d3.zoomIdentity.translate(D / 2 - kk * cx, D / 2 - kk * cy).scale(kk)
     d3.select(svgRef.current).transition().duration(dur).call(zoomRef.current.transform, T)
   }
-  const fitAll = () => { hOffsetsRef.current = {}; setDragTick(v => v + 1); fitTo(D / 2, D / 2, D / 2, 480) }
+  const fitAll = () => { fitTo(D / 2, D / 2, D / 2, 480) }
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape' && !groupProp) fitAll() }
     window.addEventListener('keydown', onKey)
@@ -203,27 +266,31 @@ export default function PackView({ projectId }) {
         <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
           filterFn={n => nodeMatchesFilter(n, filter, propertyDefs)} filterKey={filterKey} />
       ) : (<>
+        {hPacksRef.current.some(p => p.anchored) && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllHPacks}>⊙ Release packs</button>}
         {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
         <svg ref={svgRef} viewBox={`0 0 ${D} ${D}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
           <g ref={hgRef} transform={`translate(${t.x},${t.y}) scale(${t.k})`}>
             {descendants.map(d => {
               const isLeaf = !d.children
               const dStroke = d.data.stroke
-              const { dx, dy } = accOffset(d)
+              const { dx, dy } = hOffsetFor(d.data.id)
+              const pk = d.depth === 1 ? hPackByIdRef.current[d.data.id] : null
               return (
                 <circle key={d.data.id} data-hcirc="1" cx={d.x + dx} cy={d.y + dy} r={d.r}
                   fill={colorFor(d)} fillOpacity={isLeaf ? 0.92 : 0.45}
-                  stroke={dStroke || '#0c0c1a'}
-                  strokeWidth={dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / t.k : 1 / t.k}
+                  stroke={pk?.anchored ? '#7fd8a8' : (dStroke || '#0c0c1a')}
+                  strokeWidth={pk?.anchored ? 2.5 / t.k : (dStroke ? Math.max(d.data.strokeWidth || 1.5, 1.4) / t.k : 1 / t.k)}
+                  strokeDasharray={pk?.anchored ? `${6 / t.k} ${5 / t.k}` : undefined}
                   style={{ cursor: 'grab' }}
                   onMouseDown={e => startHDrag(e, d)}
+                  onDoubleClick={e => { e.stopPropagation(); if (pk?.anchored) releaseHPack(d.data.id) }}
                   onClick={e => { e.stopPropagation(); if (didHDragRef.current) return; if (d.children) fitTo(d.x + dx, d.y + dy, d.r) }}
                 />
               )
             })}
             {descendants.filter(d => d.depth > 0 && d.data.label).map(d => {
               const isLeaf = !d.children
-              const { dx, dy } = accOffset(d)
+              const { dx, dy } = hOffsetFor(d.data.id)
               const cx = d.x + dx, cy = d.y + dy
               const fontSize = isLeaf ? d.r * 0.34 : Math.min(d.r * 0.15, 16)
               const maxChars = Math.max(4, Math.floor((1.75 * d.r) / (fontSize * 0.56)))
@@ -250,7 +317,7 @@ export default function PackView({ projectId }) {
             })}
             {descendants.filter(d => d.data.emoji && d.r * t.k > 12).map(d => {
               const em = d.data.emoji, sz = Math.min(d.r * 0.28, 30)
-              const { dx, dy } = accOffset(d)
+              const { dx, dy } = hOffsetFor(d.data.id)
               const ex = d.x + dx + d.r * 0.5, ey = d.y + dy - d.r * 0.5
               return em.type === 'image'
                 ? <image key={'e' + d.data.id} href={em.emoji} x={ex - sz / 2} y={ey - sz / 2} width={sz} height={sz} style={{ pointerEvents: 'none' }} />
