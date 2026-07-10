@@ -489,19 +489,30 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
             }
           }
         }
-        // Re-center each pack on its members' CENTROID and size it to just hold them (minimum
-        // necessary). Measuring from the force-center broke when few members drifted off it — the
-        // radius ballooned. Tracking the centroid keeps the circle tight around wherever they sit.
+        // Re-center each pack on its members' CENTROID, and ease its radius toward a STABLE target
+        // (rTarget = the tight packSiblings enclosure of its members, computed only on membership
+        // change). Sizing to the *live* member spread inflated the radius when neighbouring packs
+        // shoved members outward — a feedback loop that let packs overlap. A fixed target breaks it,
+        // so the pack-pack separation below converges to genuinely non-overlapping circles.
         for (const p of packs) {
           let cx = 0, cy = 0, n = 0
           for (const b of bs) { if (b.group === p.gi) { cx += b.x; cy += b.y; n++ } }
-          if (n) {
-            cx /= n; cy /= n
-            if (p.fx == null) { p.x += (cx - p.x) * 0.2; p.y += (cy - p.y) * 0.2 }   // don't fight an anchored pack
-            let maxd = 0
-            for (const b of bs) { if (b.group === p.gi) { const d = Math.hypot(b.x - p.x, b.y - p.y) + b.r; if (d > maxd) maxd = d } }
-            p.r += ((maxd + 6) - p.r) * 0.25
-          } else { p.r += (44 - p.r) * 0.25 }
+          if (n && p.fx == null) { cx /= n; cy /= n; p.x += (cx - p.x) * 0.15; p.y += (cy - p.y) * 0.15 }
+          const target = n ? (p.rTarget || 46) : 44
+          p.r += (target - p.r) * 0.2
+        }
+        // Keep packs apart here too — the member sim outlives the pack sim, and centroid tracking
+        // above can nudge a pack toward a neighbour after that sim has cooled. Anchored packs win.
+        for (let i = 0; i < packs.length; i++) for (let j = i + 1; j < packs.length; j++) {
+          const a = packs[i], b = packs[j]
+          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 7
+          if (d < min) {
+            const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
+            const aFix = a.fx != null, bFix = b.fx != null
+            if (aFix && !bFix) { b.x += ux * push; b.y += uy * push }
+            else if (bFix && !aFix) { a.x -= ux * push; a.y -= uy * push }
+            else if (!aFix && !bFix) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 }
+          }
         }
         setTick(t => t + 1)
       })
@@ -531,6 +542,9 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
       return { gi, opt: g.opt, name: g.name, color: g.color, r: gc[gi].r,
         x: FW / 2 + (gc[gi].x - enc.x), y: FH / 2 + (gc[gi].y - enc.y), anchored: false }
     })
+    // Stable per-pack target radius (tight enclosure of its current members). The tick eases the
+    // live radius toward this instead of chasing transient member scatter → no inflation, no overlap.
+    packs.forEach(p => { p.rTarget = rFit(p.gi, bubbles) })
     packsRef.current = packs
 
     const prev = bubblesRef.current || []

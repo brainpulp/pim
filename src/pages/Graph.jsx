@@ -4,7 +4,7 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
-import { loadProject, saveProject, uploadModel, uploadThumbnail } from '../lib/db'
+import { saveProject, uploadModel, uploadThumbnail } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
 
@@ -467,22 +467,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const saveTimer = useRef(null)
   const loadOkRef = useRef(false)   // true only after a successful project load — gates autosave
 
+  // Shared read-only view: data is fetched up-front (public RPC) and passed in, so we load it
+  // straight into the store. The owner path is loaded by App (so all tabs share one load); this
+  // component just reflects that load status below.
+  const storeLoadedProjectId = useGraphStore(s => s.loadedProjectId)
   useEffect(() => {
-    setLoading(true)
-    loadOkRef.current = false   // block autosave until THIS project has loaded successfully
-    // Shared read-only view: data is fetched up-front (via a public RPC) and passed in,
-    // so we never hit loadProject (which is gated by RLS to the owner/members).
-    if (sharedData) {
-      loadProjectData({ nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views, activeViewId: sharedData.active_view_id, propertyDefs: sharedData.property_defs })
-      loadOkRef.current = true
-      setLoading(false)
-      return
-    }
-    loadProject(projectId)
-      .then(d => { loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles }); loadOkRef.current = true })
-      .catch(e => { console.error('Load failed:', e); loadOkRef.current = false })   // do NOT autosave — would blank the project
-      .finally(() => setLoading(false))
-  }, [projectId]) // eslint-disable-line
+    if (!sharedData) return
+    loadProjectData({ nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views, activeViewId: sharedData.active_view_id, propertyDefs: sharedData.property_defs, loadedProjectId: projectId })
+    loadOkRef.current = true
+    setLoading(false)
+  }, [projectId, sharedData]) // eslint-disable-line
+  useEffect(() => {
+    if (sharedData) return
+    const ok = storeLoadedProjectId === projectId
+    loadOkRef.current = ok        // gate autosave: only once THIS project's snapshot is in the store
+    setLoading(!ok)
+  }, [storeLoadedProjectId, projectId, sharedData])
 
   const storeNodes      = useGraphStore(s => s.nodes)
   const storeEdges      = useGraphStore(s => s.edges)

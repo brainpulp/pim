@@ -64,6 +64,9 @@ const _undoHistory = []
 const MAX_UNDO = 50
 
 const useGraphStore = create((set, get) => ({
+  // Which project's snapshot is currently in the store (guards loads + gates autosave across all tabs).
+  loadedProjectId: null,
+
   // â”€â”€ View-independent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   nodes: [],
   edges: [],
@@ -93,7 +96,8 @@ const useGraphStore = create((set, get) => ({
 
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs, styles }) => set({
+  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs, styles, loadedProjectId }) => set({
+    loadedProjectId: loadedProjectId ?? null,
     nodes: nodes || [],
     edges: edges || [],
     propertyDefs: propertyDefs || [],

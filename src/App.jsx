@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, Component } from 'react'
 import { supabase } from './lib/supabase'
-import { renameProject } from './lib/db'
+import { renameProject, loadProject } from './lib/db'
+import useGraphStore from './lib/graphStore'
 import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
@@ -57,6 +58,23 @@ export default function App() {
     localStorage.setItem('pim_last_project', JSON.stringify({ id, name }))
     setProject({ id, name })
   }
+
+  // Load the open project's snapshot into the store here (not inside Graph) so EVERY tab —
+  // graph, table, pack, board, lab — reflects the project you opened. Loading it only inside
+  // Graph meant switching projects while on a non-graph tab left the previous project on screen.
+  const loadProjectData = useGraphStore(s => s.loadProjectData)
+  const [projectLoadErr, setProjectLoadErr] = useState(null)
+  useEffect(() => {
+    if (!project?.id || shareToken) return
+    let cancelled = false
+    setProjectLoadErr(null)
+    if (useGraphStore.getState().loadedProjectId !== project.id) {
+      loadProject(project.id)
+        .then(d => { if (!cancelled) loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles, loadedProjectId: project.id }) })
+        .catch(e => { if (!cancelled) { console.error('Load failed:', e); setProjectLoadErr(e.message || 'Failed to load project') } })
+    }
+    return () => { cancelled = true }
+  }, [project?.id, shareToken, loadProjectData])
   const closeProject = () => {
     localStorage.removeItem('pim_last_project')
     setProject(null)
@@ -144,6 +162,11 @@ export default function App() {
       </nav>
       {showShare && (
         <ShareDialog projectId={project.id} projectName={project.name} onClose={() => setShowShare(false)} />
+      )}
+      {projectLoadErr && (
+        <div style={{ background: '#2a1a1a', borderBottom: '1px solid #f87171', color: '#f87171', fontSize: '0.8rem', padding: '6px 14px', flexShrink: 0 }}>
+          Couldn’t load this project: {projectLoadErr}
+        </div>
       )}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {view === 'graph' && (
