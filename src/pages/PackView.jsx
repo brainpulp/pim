@@ -20,6 +20,8 @@ export default function PackView({ projectId }) {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const addNode = useGraphStore(s => s.addNode)
+  const addSelectOption = useGraphStore(s => s.addSelectOption)
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
   const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
 
@@ -82,6 +84,26 @@ export default function PackView({ projectId }) {
       saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs })
         .catch(e => console.error('Save:', e))
     }
+  }
+  const persist = () => {
+    if (!projectId) return
+    const s = useGraphStore.getState()
+    saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs })
+      .catch(e => console.error('Save:', e))
+  }
+  // Create a new item in pack mode; tag it with `opt` (the pack it was dropped near), or leave untagged.
+  const handleCreateNode = (label, opt) => {
+    const def = propertyDefs.find(d => d.id === groupProp)
+    const id = addNode((label || '').trim() || 'New item')
+    if (def && opt && opt !== '__untagged__') setNodeProp(id, groupProp, def.type === 'multiSelect' ? [opt] : opt)
+    persist()
+    return id
+  }
+  // Add a new value (option) to the grouping property → a new empty pack.
+  const handleAddValue = (name) => {
+    if (!groupProp || !(name || '').trim()) return
+    addSelectOption(groupProp, name.trim())
+    persist()
   }
 
   // ── Hierarchy (edges) mode: deterministic zoomable pack ─────────────────────
@@ -264,6 +286,7 @@ export default function PackView({ projectId }) {
       <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
       {groupProp ? (
         <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
+          onCreateNode={handleCreateNode} onAddValue={handleAddValue}
           filterFn={n => nodeMatchesFilter(n, filter, propertyDefs)} filterKey={filterKey} />
       ) : (<>
         {hPacksRef.current.some(p => p.anchored) && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllHPacks}>⊙ Release packs</button>}
@@ -352,7 +375,7 @@ const hexLum = (hex) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey }) {
+function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, filterFn, filterKey }) {
   const svgRef = useRef(null)
   const gRef = useRef(null)
   const simRef = useRef(null)          // member bubbles sim
@@ -369,6 +392,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey })
   const [hoverGroup, setHoverGroup] = useState(null)   // >=0 pack index, -1 = untag (outside all packs)
   const [selected, setSelected] = useState(() => new Set())
   const [anchoredTick, setAnchoredTick] = useState(0)  // re-render when a pack is (un)anchored
+  const [ctx, setCtx] = useState(null)   // right-click menu { sx, sy, opt, packName }
   const setHeldKeys = (s) => { heldKeysRef.current = s; setHeldKeysState(s) }
 
   // Desired bubbles + real packs from the store. One bubble per (node, tag value); multi-tag nodes
@@ -644,6 +668,13 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey })
   const untaggedCount = bubbles.filter(b => b.group === -1).length
   const anchoredAny = packs.some(p => p.anchored)
   const clearSelection = () => { if (selectedRef.current.size) setSel(new Set()) }
+  // Right-click → context menu. Proximity to a pack decides which value a new item gets tagged with.
+  const onBgContext = (e) => {
+    e.preventDefault()
+    const p = toWorld(e); const tg = dropTarget(p)
+    const g = tg >= 0 ? groupsRef.current[tg] : null
+    setCtx({ sx: e.clientX, sy: e.clientY, opt: g ? g.opt : '__untagged__', packName: g ? g.name : null })
+  }
   void anchoredTick
 
   return (<>
@@ -651,7 +682,18 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, filterFn, filterKey })
     {anchoredAny && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllPacks}>⊙ Release packs</button>}
     {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
     {!bubbles.length && <div style={styles.empty}>No items — tag some nodes with “{def?.name}” in the graph or table.</div>}
-    <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg}>
+    {ctx && (<>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onMouseDown={() => setCtx(null)} onContextMenu={e => { e.preventDefault(); setCtx(null) }} />
+      <div style={{ position: 'fixed', left: ctx.sx, top: ctx.sy, zIndex: 41, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 200, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' }} onMouseDown={e => e.stopPropagation()}>
+        <div style={styles.item} onClick={() => { const c = ctx; setCtx(null); const nm = prompt(c.packName ? `New item in “${c.packName}”` : 'New item (untagged)'); if (nm != null) onCreateNode && onCreateNode(nm, c.opt) }}>
+          + New item{ctx.packName ? ` in “${trim(ctx.packName, 16)}”` : ' (untagged)'}
+        </div>
+        <div style={styles.item} onClick={() => { setCtx(null); const nm = prompt(`New “${def?.name}” value`); if (nm) onAddValue && onAddValue(nm) }}>
+          + Add “{trim(def?.name, 16)}” value…
+        </div>
+      </div>
+    </>)}
+    <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg} onContextMenu={onBgContext}>
       <rect x={0} y={0} width={FW} height={FH} fill="transparent" onMouseDown={clearSelection} />
       <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
         {untaggedCount > 0 && (
