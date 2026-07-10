@@ -2347,7 +2347,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         }}
       />
       </>)}
-      <div onMouseDown={() => { canvasFocused.current = true }} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div onMouseDown={() => { canvasFocused.current = true }}
+        onContextMenu={e => { const t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return; e.preventDefault() }}
+        style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
