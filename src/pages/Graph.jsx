@@ -127,7 +127,16 @@ function clipDist(shape, halfW, halfH, ux, uy) {
 }
 
 // â”€â”€ Shape SVG body â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter, imageUrl, nodeId }) {
+// strokeDash: 'solid' | 'dashed' | 'dotted' → SVG dasharray (scaled to stroke width)
+function dashArray(dash, sw = 1.5) {
+  if (dash === 'dashed') return `${Math.max(3, sw * 2.6)},${Math.max(2, sw * 1.8)}`
+  if (dash === 'dotted') return `${Math.max(0.4, sw * 0.55)},${Math.max(2, sw * 1.9)}`
+  return undefined
+}
+
+function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, strokeDash, filter, imageUrl, nodeId }) {
+  const dash = dashArray(strokeDash, strokeWidth)
+  const cap = strokeDash === 'dotted' ? 'round' : undefined
   if (shape === 'none') return null
   if (shape === 'image') {
     const rx = 8
@@ -171,15 +180,15 @@ function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, filter, 
     )
   }
   if (shape === 'roundrect')
-    return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={halfH * 0.45} ry={halfH * 0.45} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+    return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={halfH * 0.45} ry={halfH * 0.45} fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={dash} strokeLinecap={cap} />
   if (shape === 'rect')
-    return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={0} ry={0} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+    return <rect x={-halfW} y={-halfH} width={halfW*2} height={halfH*2} rx={0} ry={0} fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={dash} strokeLinecap={cap} />
   if (shape === 'ellipse')
-    return <ellipse rx={halfW} ry={halfH} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
+    return <ellipse rx={halfW} ry={halfH} fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={dash} strokeLinecap={cap} filter={filter} />
   if (shape === 'diamond')
-    return <polygon points={`0,${-halfH} ${halfW},0 0,${halfH} ${-halfW},0`} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
+    return <polygon points={`0,${-halfH} ${halfW},0 0,${halfH} ${-halfW},0`} fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={dash} strokeLinecap={cap} filter={filter} />
   // default: circle
-  return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} filter={filter} />
+  return <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={dash} strokeLinecap={cap} filter={filter} />
 }
 
 // True if a hex color reads as "light" (so we know whether to contrast with black or white).
@@ -469,7 +478,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       return
     }
     loadProject(projectId)
-      .then(d => { loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs }); loadOkRef.current = true })
+      .then(d => { loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles }); loadOkRef.current = true })
       .catch(e => { console.error('Load failed:', e); loadOkRef.current = false })   // do NOT autosave — would blank the project
       .finally(() => setLoading(false))
   }, [projectId]) // eslint-disable-line
@@ -479,6 +488,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const storePropertyDefs = useGraphStore(s => s.propertyDefs)
   const storePropertyDefsRef = useRef(storePropertyDefs)
   storePropertyDefsRef.current = storePropertyDefs
+  const storeStyles     = useGraphStore(s => s.styles)
+  const saveStyleFromNode = useGraphStore(s => s.saveStyleFromNode)
+  const updateStyleFromNode = useGraphStore(s => s.updateStyleFromNode)
+  const renameStyle     = useGraphStore(s => s.renameStyle)
+  const deleteStyle     = useGraphStore(s => s.deleteStyle)
+  const applyStyleAction = useGraphStore(s => s.applyStyle)
   const setNodeProp     = useGraphStore(s => s.setNodeProp)
   const addPropertyDef  = useGraphStore(s => s.addPropertyDef)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
@@ -578,12 +593,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       try {
-        await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId, propertyDefs: storePropertyDefs })
+        await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId, propertyDefs: storePropertyDefs, styles: storeStyles })
         setSaveStatus('saved')
       } catch (e) { console.error('Save:', e); setSaveStatus('error') }
     }, 1500)
     return () => clearTimeout(saveTimer.current)
-  }, [storeNodes, storeEdges, storePropertyDefs, views, activeViewId, projectId, loading]) // eslint-disable-line
+  }, [storeNodes, storeEdges, storePropertyDefs, storeStyles, views, activeViewId, projectId, loading]) // eslint-disable-line
 
   const getVP = useCallback((nodeId) => ({
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
@@ -2735,6 +2750,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetTextColor={c => setNodeViewProp(hn.id, 'textColor', c)}
               onSetStrokeColor={c => setNodeViewProp(hn.id, 'strokeColor', c)}
               onSetStrokeWidth={w => setNodeViewProp(hn.id, 'strokeWidth', w)}
+              onSetStrokeDash={d => setNodeViewProp(hn.id, 'strokeDash', d)}
+              styles={storeStyles}
+              onSaveStyle={name => saveStyleFromNode(hn.id, name)}
+              onUpdateStyle={id => updateStyleFromNode(id, hn.id)}
+              onRenameStyle={renameStyle}
+              onDeleteStyle={deleteStyle}
+              onApplyStyle={id => { pushUndo(); const ids = selectedNodeIds.size > 1 ? [...selectedNodeIds] : [hn.id]; applyStyleAction(id, ids) }}
               onSetBorderBlur={v => setNodeViewProp(hn.id, 'borderBlur', v)}
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
@@ -3808,12 +3830,12 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             </defs>
             <g filter={`url(#bedge-${node.id})`}>
               <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
-                stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
+                stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} strokeDash={viewProps.strokeDash} />
             </g>
           </>
         ) : (
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
-            stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} />
+            stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} strokeDash={viewProps.strokeDash} />
         )}
 
         {/* Background image — covers the node body, clipped to its shape, behind the label */}
@@ -4407,10 +4429,12 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
-  const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
+  const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
+  const [newStyleName, setNewStyleName] = useState('')
   const [notesDraft, setNotesDraft] = useState(notes)
   const [emojiInput, setEmojiInput] = useState('')
   const [emojiSearch, setEmojiSearch] = useState('')
@@ -4505,6 +4529,8 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     background:'transparent', border:'none', color:'#8090b8', cursor:'pointer',
     fontSize:'0.78rem', padding:'0 4px 0 0', lineHeight:1,
   }
+  const styleMiniBtn = { background:'transparent', border:'none', color:'#7b8fcc', cursor:'pointer', fontSize:'0.82rem', padding:'0 3px', lineHeight:1 }
+  const styleApplyBtn = { background:'#1a1f4a', border:'1px solid #3a4a8a', color:'#c5d0ff', borderRadius:4, cursor:'pointer', fontSize:'0.68rem', padding:'2px 7px', whiteSpace:'nowrap' }
 
   return (
     <div style={wrap}
@@ -4520,6 +4546,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       <>
         {textRow('Color', () => setPanel('color'), { right: '›', opens: 'color' })}
         {textRow('Shape', () => setPanel('shape'), { right: '›', opens: 'shape' })}
+        {textRow('Styles', () => setPanel('styles'), { right: styles.length ? String(styles.length) : '›', rightColor: styles.length ? '#88b4e8' : '#8090b8', opens: 'styles' })}
         {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›', opens: 'imageUrl' })}
         {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
         {textRow('Properties', () => setPanel('props'), (() => {
@@ -4629,6 +4656,14 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetStrokeWidth(Math.min(8, ((viewProps.strokeWidth||0)+0.5)))}>+</button>
               {(viewProps.strokeColor || viewProps.strokeWidth) && <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#f87171', cursor:'pointer', fontSize:10 }} onClick={() => { onSetStrokeColor(null); onSetStrokeWidth(0) }}>x</button>}
             </div>
+            <div style={{ display:'flex', gap:5, alignItems:'center', marginTop:5 }}>
+              <span style={{ fontSize:'0.6rem', color:'#7080a0', letterSpacing:'0.05em' }}>LINE</span>
+              {[['solid','──'],['dashed','– –'],['dotted','· ·']].map(([d, lbl]) => {
+                const on = (viewProps.strokeDash || 'solid') === d
+                return <button key={d} onClick={() => onSetStrokeDash && onSetStrokeDash(d)}
+                  style={{ padding:'1px 7px', borderRadius:3, border:`1px solid ${on ? '#5b6af0' : '#2a3358'}`, background: on ? '#1e2440' : 'transparent', color: on ? '#c5d0ff' : '#7b8fcc', cursor:'pointer', fontSize:11 }}>{lbl}</button>
+              })}
+            </div>
           </div>
           <div>
             <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>GLOW</div>
@@ -4659,6 +4694,45 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* â"€â"€ Styles panel (snapshot cosmetics) â"€â"€ */}
+      {panel === 'styles' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:190 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#c5d0ff' }}>Styles</span>
+          </div>
+          <div style={{ display:'flex', gap:4 }}>
+            <input value={newStyleName} onChange={e => setNewStyleName(e.target.value)} placeholder="Name this look…"
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && newStyleName.trim()) { onSaveStyle(newStyleName.trim()); setNewStyleName('') } }}
+              style={{ flex:1, minWidth:0, background:'#12122a', border:'1px solid #2a3358', borderRadius:4, color:'#e6ebff', fontSize:'0.72rem', padding:'3px 6px', outline:'none' }} />
+            <button style={styleApplyBtn} onClick={() => { if (newStyleName.trim()) { onSaveStyle(newStyleName.trim()); setNewStyleName('') } }}>+ Save</button>
+          </div>
+          {!styles.length && <div style={{ color:'#8090b8', fontSize:'0.7rem', lineHeight:1.4 }}>No styles yet. Save this node's look above, then apply it to other nodes.</div>}
+          {styles.map(st => {
+            const p = st.props || {}
+            const sw = {
+              width:18, height:18, flexShrink:0,
+              borderRadius: (p.shape === 'rect' || p.shape === 'roundrect') ? 4 : (p.shape === 'diamond' ? 2 : '50%'),
+              background: (p.fillColor && p.fillColor !== 'none' && p.fillColor !== 'transparent') ? p.fillColor : 'transparent',
+              border: `${Math.max(1, p.strokeWidth || 1.5)}px ${p.strokeDash === 'dotted' ? 'dotted' : p.strokeDash === 'dashed' ? 'dashed' : 'solid'} ${p.strokeColor || '#2d3a6a'}`,
+            }
+            return (
+              <div key={st.id} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                <span style={sw} />
+                <span style={{ flex:1, minWidth:0, fontSize:'0.74rem', color:'#c5d0ff', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {st.name}{p.nodeEmojis?.[0]?.emoji ? ' ' + p.nodeEmojis[0].emoji : ''}
+                </span>
+                <button style={styleApplyBtn} onClick={() => onApplyStyle(st.id)} title="Apply to selected node(s)">Apply</button>
+                <button style={styleMiniBtn} onClick={() => onUpdateStyle(st.id)} title="Update this style from the current node">⟳</button>
+                <button style={styleMiniBtn} onClick={() => { const n = prompt('Rename style', st.name); if (n && n.trim()) onRenameStyle(st.id, n.trim()) }} title="Rename">✎</button>
+                <button style={{ ...styleMiniBtn, color:'#f87171' }} onClick={() => onDeleteStyle(st.id)} title="Delete style">×</button>
+              </div>
+            )
+          })}
+          {styles.length > 0 && <div style={{ fontSize:'0.64rem', color:'#7080a0', lineHeight:1.4 }}>Apply hits the current node, or all selected nodes if several are selected.</div>}
         </div>
       )}
 

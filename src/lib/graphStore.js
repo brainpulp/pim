@@ -28,6 +28,9 @@ export const PALETTE = [
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none', 'image']
 
+// Cosmetic props captured by a saved node "style" (snapshot). View-dependent props only.
+export const STYLE_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'scale', 'nodeEmojis']
+
 export const COLOR_PALETTE = PALETTE
 export const FILL_COLORS = PALETTE
 export const TEXT_COLORS = PALETTE
@@ -69,6 +72,9 @@ const useGraphStore = create((set, get) => ({
   // each node stores values in node.props[propId]. Types: text|number|date|checkbox|select|multiSelect|url.
   propertyDefs: [],
 
+  // â”€â”€ Reusable node styles (cosmetic snapshots, view-independent list). Applied into a view's nodeProps.
+  styles: [],
+
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
   activeViewId: 'view-default',
@@ -87,10 +93,11 @@ const useGraphStore = create((set, get) => ({
 
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs }) => set({
+  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs, styles }) => set({
     nodes: nodes || [],
     edges: edges || [],
     propertyDefs: propertyDefs || [],
+    styles: styles || [],
     views: views?.length ? views.map(v => {
       const merged = { bgColor: '#0c0c1a', images: [], customEmojis: [], ...v }
       if (!merged.slides) {
@@ -106,6 +113,33 @@ const useGraphStore = create((set, get) => ({
       return merged
     }) : [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
     activeViewId: activeViewId || 'view-default',
+  }),
+
+  // â”€â”€ Node styles (snapshot cosmetics) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Capture the active-view look of a node as a reusable named style.
+  saveStyleFromNode: (nodeId, name) => {
+    const s = get()
+    const vp = s.views.find(v => v.id === s.activeViewId)?.nodeProps?.[nodeId] || {}
+    const props = {}
+    STYLE_KEYS.forEach(k => { if (vp[k] !== undefined) props[k] = vp[k] })
+    const id = uid()
+    set(st => ({ styles: [...st.styles, { id, name: name || 'Style', props }] }))
+    return id
+  },
+  updateStyleFromNode: (id, nodeId) => set(s => {
+    const vp = s.views.find(v => v.id === s.activeViewId)?.nodeProps?.[nodeId] || {}
+    const props = {}
+    STYLE_KEYS.forEach(k => { if (vp[k] !== undefined) props[k] = vp[k] })
+    return { styles: s.styles.map(x => x.id === id ? { ...x, props } : x) }
+  }),
+  renameStyle: (id, name) => set(s => ({ styles: s.styles.map(x => x.id === id ? { ...x, name } : x) })),
+  deleteStyle: (id) => set(s => ({ styles: s.styles.filter(x => x.id !== id) })),
+  // Apply a style's props into the active view's nodeProps for each node id.
+  applyStyle: (styleId, nodeIds) => set(s => {
+    const st = s.styles.find(x => x.id === styleId); if (!st) return {}
+    let views = s.views
+    ;(nodeIds || []).forEach(nid => { views = patchViewNode(views, s.activeViewId, nid, st.props) })
+    return { views }
   }),
 
   // â”€â”€ Node ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
