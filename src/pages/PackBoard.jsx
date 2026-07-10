@@ -43,6 +43,25 @@ export default function PackBoard({ projectId }) {
     const np = activeView?.nodeProps || {}
     return id => { const p = np[id] || {}; return (p.fillColor && p.fillColor !== 'none' && p.fillColor !== 'transparent') ? p.fillColor : null }
   }, [activeView])
+  // Full graph-view cosmetics for a node (so tree leaves mirror the graph): fill, stroke, dash, shape,
+  // scale, emoji, text color — read from the active view's nodeProps.
+  const decorOf = useMemo(() => {
+    const np = activeView?.nodeProps || {}
+    return id => {
+      const p = np[id] || {}
+      const shape = p.shape && !['frame', '3d', 'image', 'none'].includes(p.shape) ? p.shape : null
+      return {
+        fill: (p.fillColor && p.fillColor !== 'none' && p.fillColor !== 'transparent') ? p.fillColor : null,
+        textColor: p.textColor || null,
+        stroke: (p.strokeColor && p.strokeColor !== 'none') ? p.strokeColor : null,
+        strokeWidth: p.strokeWidth,
+        strokeDash: p.strokeDash,
+        shape,
+        scale: p.scale || 1,
+        emoji: (p.nodeEmojis || [])[0] || null,
+      }
+    }
+  }, [activeView])
   const nodeVisible = (id) => (activeView?.nodeProps?.[id]?.visible !== false)
 
   // Load layout from the active view; one-time migrate legacy localStorage layout into the view.
@@ -131,7 +150,7 @@ export default function PackBoard({ projectId }) {
             const def = propertyDefs.find(d => d.id === sys.propId)
             if (!def) return null
             const common = {
-              key: sys.id, sys, def, nodes: visibleNodes, decorColor, toWorld,
+              key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld,
               onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add),
               onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
             }
@@ -296,7 +315,7 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, nodes, decorOf, toWorld, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -314,10 +333,17 @@ function TreeCluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, on
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
-      const color = decorColor?.(n.id) || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
+      const dec = decorOf?.(n.id) || {}
+      const color = dec.fill || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
       const label = n.label || '(untitled)'
-      if (!valid.length) { hasUntagged = true; leaves.push({ nodeId: n.id, opt: '__untagged__', label, color }) }
-      else valid.forEach(id => leaves.push({ nodeId: n.id, opt: id, label, color }))
+      // Size and collision radius honour the node's graph-view shape + scale so leaves mirror the graph.
+      const scl = Math.min(1.8, Math.max(0.65, dec.scale || 1))
+      const baseR = radiusFor(label) * 0.7 * scl
+      const shape = dec.shape || 'circle'
+      const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
+      const mk = (opt) => ({ nodeId: n.id, opt, label, color, decor: dec, shape, baseR, r: bound })
+      if (!valid.length) { hasUntagged = true; leaves.push(mk('__untagged__')) }
+      else valid.forEach(id => leaves.push(mk(id)))
     })
     if (hasUntagged) values.push({ opt: '__untagged__', name: '(untagged)', color: '#6b7394' })
     return { values, leaves }
@@ -366,7 +392,8 @@ function TreeCluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, on
       const parent = vById.get(d.opt) || root
       const j = (hashStr(id) % 40) - 20
       const base = ex || { id, kind: 'leaf', x: parent.x + j, y: parent.y + j, vx: 0, vy: 0 }
-      base.opt = d.opt; base.nodeId = d.nodeId; base.label = d.label; base.color = d.color; base.r = radiusFor(d.label) * 0.72
+      base.opt = d.opt; base.nodeId = d.nodeId; base.label = d.label; base.color = d.color
+      base.decor = d.decor; base.shape = d.shape; base.baseR = d.baseR; base.r = d.r
       return base
     })
     const fns = [root, ...vnodes, ...lnodes]
@@ -451,8 +478,8 @@ function TreeCluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, on
           </g>
         )
       })}
-      {/* item leaves (2nd generation) — draggable to retag */}
-      {leaves.map(l => <Bubble key={l.id} b={l} held={held.has(l.id)} onDown={e => startDrag(e, l)} />)}
+      {/* item leaves (2nd generation) — real graph nodes with their cosmetics; draggable to retag */}
+      {leaves.map(l => <LeafNode key={l.id} b={l} held={held.has(l.id)} onDown={e => startDrag(e, l)} />)}
     </g>
   )
 }
@@ -467,6 +494,46 @@ function ClusterHeader({ def, kind, cx, y, onHead, onRemove }) {
       <text x={-86} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
       <text x={100} y={5} fontSize={16} fill="#f87171" textAnchor="middle" style={{ cursor: 'pointer' }}
         onMouseDown={e => { e.stopPropagation(); if (confirm(`Remove the “${def.name}” ${kind === 'tree' ? 'tree' : 'circle pack'}?`)) onRemove() }}>×</text>
+    </g>
+  )
+}
+
+// strokeDash → SVG dasharray (mirrors the graph's dashArray).
+function dashArrayB(dash, sw = 1.4) {
+  if (dash === 'dashed') return `${Math.max(3, sw * 2.6)},${Math.max(2, sw * 1.8)}`
+  if (dash === 'dotted') return `${Math.max(0.4, sw * 0.55)},${Math.max(2, sw * 1.9)}`
+  return undefined
+}
+
+// A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
+function LeafNode({ b, held, onDown }) {
+  const dec = b.decor || {}
+  const shape = b.shape || 'circle'
+  const s = b.baseR || b.r
+  const fill = b.color
+  const light = hexLum(fill) > 0.55
+  const stroke = held ? '#fff' : (dec.stroke || 'rgba(232,238,255,0.4)')
+  const sw = held ? 3 : (dec.strokeWidth || 1.2)
+  const dash = held ? undefined : dashArrayB(dec.strokeDash, sw)
+  const tf = dec.textColor || (light ? '#0c0c1a' : '#f2f5ff')
+  const emoji = dec.emoji
+  const fs = Math.max(8, s * 0.32), maxChars = Math.max(5, Math.floor((1.7 * s) / (fs * 0.56)))
+  const lines = wrapText(b.label, maxChars).slice(0, 4), lh = fs * 1.05
+  const yStart = (emoji ? fs * 0.5 : 0) - (lines.length - 1) / 2 * lh
+  let body
+  if (shape === 'ellipse') body = <ellipse rx={s * 1.35} ry={s * 0.82} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
+  else if (shape === 'roundrect') { const hw = s * 1.3, hh = s * 0.82; body = <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx={hh * 0.45} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} /> }
+  else if (shape === 'rect') { const hw = s * 1.3, hh = s * 0.82; body = <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} /> }
+  else if (shape === 'diamond') body = <polygon points={`0,${-s * 1.15} ${s * 1.15},0 0,${s * 1.15} ${-s * 1.15},0`} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
+  else body = <circle r={s} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
+  return (
+    <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown}>
+      {body}
+      {emoji && <text textAnchor="middle" dominantBaseline="middle" fontSize={s * 0.7} y={-s * 0.42} pointerEvents="none">{emoji}</text>}
+      <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
+        style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
+        {lines.map((ln, i) => <tspan key={i} x={0} y={yStart + i * lh}>{ln}</tspan>)}
+      </text>
     </g>
   )
 }
