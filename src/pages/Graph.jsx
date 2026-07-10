@@ -1036,7 +1036,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // covering the canvas are still tracked; overlay targets are skipped when opening our menu.
     const onDownCapture = ev => { if (ev.button === 2) rmb = { x: ev.clientX, y: ev.clientY, moved: false, target: ev.target } }
     const onMoveCapture = ev => { if (rmb && Math.hypot(ev.clientX - rmb.x, ev.clientY - rmb.y) >= 5) rmb.moved = true }
-    const onContext = ev => ev.preventDefault()   // never show native menu; we open on mouseup
+    // Suppress the native menu everywhere (window capture) — binding only to the svg let it leak over
+    // the HTML overlays (NodeToolbar, menus) that sit above the canvas. Keep it on form fields.
+    const onContext = ev => { const t = ev.target; if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return; ev.preventDefault() }
     const OVERLAY_SEL = '[data-nodetoolbar],[data-menu],[data-slide-sidebar],input,textarea,select,a,button'
     const onUpCapture = ev => {
       if (ev.button !== 2 || !rmb) return
@@ -1085,13 +1087,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     window.addEventListener('mousedown', onDownCapture, true)
     window.addEventListener('mousemove', onMoveCapture, true)
     window.addEventListener('mouseup', onUpCapture, true)
-    el.addEventListener('contextmenu', onContext)
+    window.addEventListener('contextmenu', onContext, true)
     return () => {
       svg.on('.zoom', null)
       window.removeEventListener('mousedown', onDownCapture, true)
       window.removeEventListener('mousemove', onMoveCapture, true)
       window.removeEventListener('mouseup', onUpCapture, true)
-      el.removeEventListener('contextmenu', onContext)
+      window.removeEventListener('contextmenu', onContext, true)
     }
   }, [scheduleRender, loading])
 

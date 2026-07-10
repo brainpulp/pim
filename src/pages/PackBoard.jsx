@@ -80,7 +80,7 @@ export default function PackBoard({ projectId }) {
     const n = systems.length
     const x = 300 + (n % 3) * 640, y = 300 + Math.floor(n / 3) * 580
     commit([...systems, { id: crypto.randomUUID(), propId, x, y, kind }])
-    setAdding(false)
+    // Leave the menu open so several packs/trees can be added in a row; click away to dismiss.
   }
   const removeSystem = (id) => commit(systems.filter(s => s.id !== id))
   const systemsRef = useRef(systems); systemsRef.current = systems
@@ -122,7 +122,7 @@ export default function PackBoard({ projectId }) {
             </div>
           </>)}
         </div>
-        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · drag a header to move it · scroll = zoom · drag empty = pan</span>
+        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · pick from the menu repeatedly to add more · drag a header to move · scroll = zoom · drag empty = pan</span>
       </div>
       {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
       <svg ref={svgRef} style={styles.svg}>
@@ -203,9 +203,11 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
           for (let i = 0; i < bs.length; i++) { const a = bs[i]; for (let j = i + 1; j < bs.length; j++) { const b = bs[j]; const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 1.5; if (d < min) { const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d; const af = a.fx != null || h.has(a.key), bf = b.fx != null || h.has(b.key); if (af && !bf) { b.x += ux * push; b.y += uy * push } else if (bf && !af) { a.x -= ux * push; a.y -= uy * push } else if (!af && !bf) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 } } } }
         }
         for (const p of packs) {
+          // Exclude the bubble being dragged so the pack doesn't grow to chase it out of the circle
+          // (that would stop a drag-out from ever reading as "outside" → no untag).
           let cx = 0, cy = 0, n = 0
-          for (const b of bs) if (b.group === p.gi) { cx += b.x; cy += b.y; n++ }
-          if (n) { cx /= n; cy /= n; p.x += (cx - p.x) * 0.2; p.y += (cy - p.y) * 0.2; let md = 0; for (const b of bs) if (b.group === p.gi) { const d = Math.hypot(b.x - p.x, b.y - p.y) + b.r; if (d > md) md = d } p.r += ((md + 6) - p.r) * 0.25 } else p.r += (42 - p.r) * 0.25
+          for (const b of bs) if (b.group === p.gi && !h.has(b.key)) { cx += b.x; cy += b.y; n++ }
+          if (n) { cx /= n; cy /= n; p.x += (cx - p.x) * 0.2; p.y += (cy - p.y) * 0.2; let md = 0; for (const b of bs) if (b.group === p.gi && !h.has(b.key)) { const d = Math.hypot(b.x - p.x, b.y - p.y) + b.r; if (d > md) md = d } p.r += ((md + 6) - p.r) * 0.25 } else p.r += (42 - p.r) * 0.25
         }
         setTick(t => t + 1)
       })
