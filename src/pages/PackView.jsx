@@ -20,6 +20,7 @@ export default function PackView({ projectId }) {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const addNode = useGraphStore(s => s.addNode)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
@@ -105,11 +106,14 @@ export default function PackView({ projectId }) {
     addSelectOption(groupProp, name.trim())
     persist()
   }
+  // Hide a node in the active view (it disappears from this view's pack/graph until unhidden).
+  const handleHideNode = (nodeId) => { setNodeViewProp(nodeId, 'visible', false); persist() }
+  const nodeVisible = (id) => (views.find(v => v.id === activeViewId)?.nodeProps?.[id]?.visible !== false)
 
   // ── Hierarchy (edges) mode: deterministic zoomable pack ─────────────────────
   const root = useMemo(() => {
     if (groupProp) return null
-    const fnodes = nodes.filter(n => nodeMatchesFilter(n, filter, propertyDefs))
+    const fnodes = nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs))
     const tree = buildTree(fnodes, edges, { decorOf, sizeBy })
     const h = d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => (b.value || 0) - (a.value || 0))
     return d3.pack().size([D, D]).padding(3)(h)
@@ -286,8 +290,9 @@ export default function PackView({ projectId }) {
       <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
       {groupProp ? (
         <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
-          onCreateNode={handleCreateNode} onAddValue={handleAddValue}
-          filterFn={n => nodeMatchesFilter(n, filter, propertyDefs)} filterKey={filterKey} />
+          onCreateNode={handleCreateNode} onAddValue={handleAddValue} onHideNode={handleHideNode}
+          filterFn={n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)}
+          filterKey={filterKey + '|' + Object.keys(views.find(v => v.id === activeViewId)?.nodeProps || {}).filter(id => (views.find(v => v.id === activeViewId).nodeProps[id]?.visible === false)).length} />
       ) : (<>
         {hPacksRef.current.some(p => p.anchored) && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllHPacks}>⊙ Release packs</button>}
         {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
@@ -375,7 +380,7 @@ const hexLum = (hex) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, filterFn, filterKey }) {
+function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, filterFn, filterKey }) {
   const svgRef = useRef(null)
   const gRef = useRef(null)
   const simRef = useRef(null)          // member bubbles sim
@@ -496,13 +501,19 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
             }
           }
         }
-        // Shrink each pack to HUG its member cloud (no empty ring) — measured from the actual spread,
-        // eased so it doesn't jitter. Empty packs keep a small min radius as a drop target.
+        // Re-center each pack on its members' CENTROID and size it to just hold them (minimum
+        // necessary). Measuring from the force-center broke when few members drifted off it — the
+        // radius ballooned. Tracking the centroid keeps the circle tight around wherever they sit.
         for (const p of packs) {
-          let maxd = 0, n = 0
-          for (const b of bs) { if (b.group === p.gi) { const d = Math.hypot(b.x - p.x, b.y - p.y) + b.r; if (d > maxd) maxd = d; n++ } }
-          const target = n ? maxd + 6 : 46
-          p.r += (target - p.r) * 0.2
+          let cx = 0, cy = 0, n = 0
+          for (const b of bs) { if (b.group === p.gi) { cx += b.x; cy += b.y; n++ } }
+          if (n) {
+            cx /= n; cy /= n
+            if (p.fx == null) { p.x += (cx - p.x) * 0.2; p.y += (cy - p.y) * 0.2 }   // don't fight an anchored pack
+            let maxd = 0
+            for (const b of bs) { if (b.group === p.gi) { const d = Math.hypot(b.x - p.x, b.y - p.y) + b.r; if (d > maxd) maxd = d } }
+            p.r += ((maxd + 6) - p.r) * 0.25
+          } else { p.r += (44 - p.r) * 0.25 }
         }
         setTick(t => t + 1)
       })
@@ -553,8 +564,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const packSim = packSimRef.current, sim = simRef.current; if (!packSim || !sim) return
     packSim.nodes(packs); packSim.alpha(0.5).restart()
     sim.nodes(next)
-    sim.force('x', d3.forceX(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].x : FW / 2).strength(b => b.group >= 0 ? 0.35 : 0.04))
-    sim.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.35 : 0.04))
+    sim.force('x', d3.forceX(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].x : FW / 2).strength(b => b.group >= 0 ? 0.5 : 0.04))
+    sim.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.5 : 0.04))
     sim.alpha(0.7).restart()
     setTick(t => t + 1)
   }, [structureKey, filterKey]) // eslint-disable-line
@@ -682,7 +693,9 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     e.preventDefault()
     const p = toWorld(e); const tg = dropTarget(p)
     const g = tg >= 0 ? groupsRef.current[tg] : null
-    setCtx({ sx: e.clientX, sy: e.clientY, opt: g ? g.opt : '__untagged__', packName: g ? g.name : null })
+    let hit = null
+    for (const b of bubblesRef.current) { if (Math.hypot(p.x - (b.x || 0), p.y - (b.y || 0)) <= b.r) hit = b }  // topmost bubble under cursor
+    setCtx({ sx: e.clientX, sy: e.clientY, opt: g ? g.opt : '__untagged__', packName: g ? g.name : null, nodeId: hit?.nodeId, label: hit?.label })
   }
   void anchoredTick
 
@@ -694,6 +707,12 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     {ctx && (<>
       <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onMouseDown={() => setCtx(null)} onContextMenu={e => { e.preventDefault(); setCtx(null) }} />
       <div style={{ position: 'fixed', left: ctx.sx, top: ctx.sy, zIndex: 41, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 200, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' }} onMouseDown={e => e.stopPropagation()}>
+        {ctx.nodeId && (
+          <div style={styles.item} onClick={() => { const c = ctx; setCtx(null); onHideNode && onHideNode(c.nodeId) }}>
+            Hide “{trim(ctx.label, 18)}” in this view
+          </div>
+        )}
+        {ctx.nodeId && <div style={{ borderTop: '1px solid #2a3358', margin: '3px 6px' }} />}
         <div style={styles.item} onClick={() => { const c = ctx; setCtx(null); const nm = prompt(c.packName ? `New item in “${c.packName}”` : 'New item (untagged)'); if (nm != null) onCreateNode && onCreateNode(nm, c.opt) }}>
           + New item{ctx.packName ? ` in “${trim(ctx.packName, 16)}”` : ' (untagged)'}
         </div>
