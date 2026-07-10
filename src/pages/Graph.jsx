@@ -6,6 +6,7 @@ import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
 import { loadProject, saveProject, uploadModel, uploadThumbnail } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
+import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
 
 // â"€â"€ Text measurement â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 let _measureCanvas = null
@@ -722,6 +723,40 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (frameRef.current) return
     frameRef.current = requestAnimationFrame(() => { frameRef.current = null; setTick(t => t + 1) })
   }, [])
+
+  // Apply a one-shot arrangement: anchor each node at its computed position (store + live sim).
+  const applyArrangement = useCallback((placements) => {
+    if (!placements || !placements.length) return
+    pushUndo()
+    placements.forEach(({ id, x, y }) => {
+      setAnchor(id, x, y)
+      const sn = simNodesRef.current.find(n => n.id === id)
+      if (sn) { sn.x = x; sn.y = y; sn.fx = x; sn.fy = y; sn.vx = 0; sn.vy = 0 }
+    })
+    if (simRef.current) simRef.current.alpha(0.5).restart()
+    scheduleRender()
+  }, [pushUndo, setAnchor, scheduleRender])
+
+  // Dispatch an arrange layout from the toolbar for node `rootId`, honoring multi-selection.
+  const doArrange = useCallback((rootId, layout) => {
+    const posMap = new Map(simNodesRef.current.map(n => [n.id, { x: n.x, y: n.y }]))
+    const edges = useGraphStore.getState().edges
+    const flat = FLAT_LAYOUTS.some(l => l.key === layout)
+    const sel = selectedNodeIdsRef.current
+    const targets = sel && sel.size > 1 ? [...sel] : [rootId]
+    let placements = []
+    if (targets.length > 1 && flat) {
+      placements = arrangeNodes(targets, layout, posMap)                    // arrange the selection itself
+    } else if (targets.length > 1) {
+      targets.forEach(t => { placements.push(...arrangeSubtree(t, layout, edges, posMap)) })  // batch each subtree
+    } else if (flat) {
+      const kids = edges.filter(e => e.source === rootId).map(e => e.target)
+      placements = arrangeNodes(kids.length ? kids : [rootId], layout, posMap)
+    } else {
+      placements = arrangeSubtree(rootId, layout, edges, posMap)
+    }
+    applyArrangement(placements)
+  }, [applyArrangement])
 
   // Topology → sim
   useEffect(() => {
@@ -2751,6 +2786,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetStrokeColor={c => setNodeViewProp(hn.id, 'strokeColor', c)}
               onSetStrokeWidth={w => setNodeViewProp(hn.id, 'strokeWidth', w)}
               onSetStrokeDash={d => setNodeViewProp(hn.id, 'strokeDash', d)}
+              onArrange={layout => { doArrange(hn.id, layout); close() }}
+              selCount={selectedNodeIds.size}
               styles={storeStyles}
               onSaveStyle={name => saveStyleFromNode(hn.id, name)}
               onUpdateStyle={id => updateStyleFromNode(id, hn.id)}
@@ -4430,7 +4467,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
@@ -4529,6 +4566,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     background:'transparent', border:'none', color:'#8090b8', cursor:'pointer',
     fontSize:'0.78rem', padding:'0 4px 0 0', lineHeight:1,
   }
+  const arrangeBtn = { background:'#12122a', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:5, cursor:'pointer', fontSize:'0.72rem', padding:'4px 8px' }
   const styleMiniBtn = { background:'transparent', border:'none', color:'#7b8fcc', cursor:'pointer', fontSize:'0.82rem', padding:'0 3px', lineHeight:1 }
   const styleApplyBtn = { background:'#1a1f4a', border:'1px solid #3a4a8a', color:'#c5d0ff', borderRadius:4, cursor:'pointer', fontSize:'0.68rem', padding:'2px 7px', whiteSpace:'nowrap' }
 
@@ -4547,6 +4585,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {textRow('Color', () => setPanel('color'), { right: '›', opens: 'color' })}
         {textRow('Shape', () => setPanel('shape'), { right: '›', opens: 'shape' })}
         {textRow('Styles', () => setPanel('styles'), { right: styles.length ? String(styles.length) : '›', rightColor: styles.length ? '#88b4e8' : '#8090b8', opens: 'styles' })}
+        {textRow(selCount > 1 ? `Arrange (${selCount} selected)` : 'Arrange', () => setPanel('arrange'), { right: '›', opens: 'arrange' })}
         {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›', opens: 'imageUrl' })}
         {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
         {textRow('Properties', () => setPanel('props'), (() => {
@@ -4693,6 +4732,31 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
                 }} />
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* â"€â"€ Arrange panel (one-shot layouts) â"€â"€ */}
+      {panel === 'arrange' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:180 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#c5d0ff' }}>{selCount > 1 ? `Arrange ${selCount} subtrees` : 'Arrange subtree'}</span>
+          </div>
+          <div style={{ fontSize:'0.6rem', color:'#7080a0', letterSpacing:'0.05em' }}>PARENT + CHILDREN</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+            {SUBTREE_LAYOUTS.map(l => (
+              <button key={l.key} style={arrangeBtn} onClick={() => onArrange && onArrange(l.key)}>{l.label}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:'0.6rem', color:'#7080a0', letterSpacing:'0.05em', marginTop:2 }}>{selCount > 1 ? 'SELECTION' : 'DIRECT CHILDREN'}</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+            {FLAT_LAYOUTS.map(l => (
+              <button key={l.key} style={arrangeBtn} onClick={() => onArrange && onArrange(l.key)}>{l.label}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:'0.62rem', color:'#7080a0', lineHeight:1.4 }}>
+            {selCount > 1 ? 'Parent layouts arrange each selected node’s subtree; flat layouts arrange the selection.' : 'Anchors the arranged nodes; drag or Release to free them.'}
           </div>
         </div>
       )}
