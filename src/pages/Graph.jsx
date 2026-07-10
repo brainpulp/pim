@@ -758,6 +758,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     applyArrangement(placements)
   }, [applyArrangement])
 
+  // Release anchors on a node's entire subtree (children/descendants), letting them float again.
+  const doReleaseSubtree = useCallback((rootId) => {
+    const edges = useGraphStore.getState().edges
+    const cmap = new Map()
+    edges.forEach(e => { if (!cmap.has(e.source)) cmap.set(e.source, []); cmap.get(e.source).push(e.target) })
+    const sel = selectedNodeIdsRef.current
+    const roots = sel && sel.size > 1 ? [...sel] : [rootId]
+    const ids = new Set()
+    const walk = (id) => { (cmap.get(id) || []).forEach(k => { if (!ids.has(k)) { ids.add(k); walk(k) } }) }
+    roots.forEach(r => walk(r))   // descendants only (not the root itself)
+    if (!ids.size) return
+    pushUndo()
+    ids.forEach(id => {
+      releaseAnchor(id)
+      const sn = simNodesRef.current.find(n => n.id === id)
+      if (sn) { sn.fx = null; sn.fy = null }
+    })
+    if (simRef.current) simRef.current.alpha(0.6).restart()
+    scheduleRender()
+  }, [pushUndo, releaseAnchor, scheduleRender])
+
   // Topology → sim
   useEffect(() => {
     const posById = {}
@@ -2789,6 +2810,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetStrokeWidth={w => setNodeViewProp(hn.id, 'strokeWidth', w)}
               onSetStrokeDash={d => setNodeViewProp(hn.id, 'strokeDash', d)}
               onArrange={layout => { doArrange(hn.id, layout); close() }}
+              onReleaseChildren={() => { doReleaseSubtree(hn.id); close() }}
               selCount={selectedNodeIds.size}
               styles={storeStyles}
               onSaveStyle={name => saveStyleFromNode(hn.id, name)}
@@ -4469,7 +4491,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, selCount = 0,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
@@ -4757,8 +4779,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               <button key={l.key} style={arrangeBtn} onClick={() => onArrange && onArrange(l.key)}>{l.label}</button>
             ))}
           </div>
+          <div style={{ borderTop:'1px solid #2a3358', margin:'3px 0' }} />
+          <button style={{ ...arrangeBtn, color:'#f6ad55', borderColor:'#5a4a2a' }} onClick={() => onReleaseChildren && onReleaseChildren()}>⊙ Unanchor all children</button>
           <div style={{ fontSize:'0.62rem', color:'#7080a0', lineHeight:1.4 }}>
-            {selCount > 1 ? 'Parent layouts arrange each selected node’s subtree; flat layouts arrange the selection.' : 'Anchors the arranged nodes; drag or Release to free them.'}
+            {selCount > 1 ? 'Parent layouts arrange each selected node’s subtree; flat layouts arrange the selection.' : 'Anchors the arranged nodes; drag or unanchor to free them.'}
           </div>
         </div>
       )}
