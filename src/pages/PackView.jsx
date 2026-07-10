@@ -263,20 +263,8 @@ export default function PackView({ projectId }) {
             </div>
           </>)}
         </div>
-        {!groupProp && (
-          <div style={{ position: 'relative' }}>
-            <button style={styles.btn} onClick={() => setMenuOpen(o => !o)}>size: {trim(sizeLabel, 14)} ▾</button>
-            {menuOpen && (<>
-              <div style={styles.backdrop} onClick={() => setMenuOpen(false)} />
-              <div style={styles.menu} onClick={e => e.stopPropagation()}>
-                <div style={{ ...styles.item, color: !sizeBy ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(null); setMenuOpen(false) }}>{!sizeBy && '✓ '}Item count</div>
-                <div style={styles.mlabel}>By Number property</div>
-                {numberDefs.length ? numberDefs.map(d => (
-                  <div key={d.id} style={{ ...styles.item, color: sizeBy === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setSizeBy(d.id); setMenuOpen(false) }}>{sizeBy === d.id && '✓ '}{d.name}</div>
-                )) : <div style={{ ...styles.item, color: '#8090b8', fontSize: '0.74rem' }}>No Number property</div>}
-              </div>
-            </>)}
-          </div>
+        {false && (
+          <div style={{ position: 'relative' }} />
         )}
         {notionLinked && (
           <button style={styles.notionSaveBtn} onClick={handleSaveNotion} disabled={notionSave === 'saving'}

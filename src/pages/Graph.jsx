@@ -1032,15 +1032,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // right-button MOUSEUP only if the pointer didn't move (i.e. it was a click, not a pan).
     const el = svgRef.current
     let rmb = null
-    const onDownCapture = ev => { if (ev.button === 2) rmb = { x: ev.clientX, y: ev.clientY, moved: false } }
+    // Listen on window (not just the svg) so right-clicks that land on the HTML toolbar/menu overlays
+    // covering the canvas are still tracked; overlay targets are skipped when opening our menu.
+    const onDownCapture = ev => { if (ev.button === 2) rmb = { x: ev.clientX, y: ev.clientY, moved: false, target: ev.target } }
     const onMoveCapture = ev => { if (rmb && Math.hypot(ev.clientX - rmb.x, ev.clientY - rmb.y) >= 5) rmb.moved = true }
     const onContext = ev => ev.preventDefault()   // never show native menu; we open on mouseup
+    const OVERLAY_SEL = '[data-nodetoolbar],[data-menu],[data-slide-sidebar],input,textarea,select,a,button'
     const onUpCapture = ev => {
       if (ev.button !== 2 || !rmb) return
       const dragged = rmb.moved
       const cx = rmb.x, cy = rmb.y
+      const overlay = rmb.target?.closest?.(OVERLAY_SEL)
       rmb = null
-      if (dragged || !el || readOnly) return   // panned, or no edit menus in shared read-only view
+      if (dragged || !el || readOnly || overlay) return   // panned, over an overlay, or read-only
       const rect = el.getBoundingClientRect()
       const px = cx - rect.left, py = cy - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
@@ -1078,13 +1082,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
     }
-    el.addEventListener('mousedown', onDownCapture, true)
+    window.addEventListener('mousedown', onDownCapture, true)
     window.addEventListener('mousemove', onMoveCapture, true)
     window.addEventListener('mouseup', onUpCapture, true)
     el.addEventListener('contextmenu', onContext)
     return () => {
       svg.on('.zoom', null)
-      el.removeEventListener('mousedown', onDownCapture, true)
+      window.removeEventListener('mousedown', onDownCapture, true)
       window.removeEventListener('mousemove', onMoveCapture, true)
       window.removeEventListener('mouseup', onUpCapture, true)
       el.removeEventListener('contextmenu', onContext)
