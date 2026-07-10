@@ -3,10 +3,13 @@ import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
 import { saveProject } from '../lib/db'
 
-// Multi-pack / multi-tree CANVAS (feature #1, first slice). One shared pannable canvas hosts several
-// independent "circle pack" clusters — each groups the same nodes by a different tag property. Add
-// packs with "+ Circle pack", drag a pack's header to move its whole cluster. Retag by dragging an
-// item between sub-packs within a cluster. Persisted per-project in localStorage for now.
+// Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
+// clusters. Two kinds:
+//   • "Circle pack" — groups nodes by a tag property into nested, non-overlapping bubbles.
+//   • "Property tree" — a force-directed tree: property name = root, its values = 1st generation,
+//     the items holding each value = 2nd generation (leaves). Drag a leaf onto another value to retag.
+// Add with "+ Add" → pick a kind + property. Drag a cluster's header to move it. Retag by dragging an
+// item between groups within a cluster. Layout is saved on the active view (syncs across devices).
 
 const NODE_COLORS = ['#7c8cff', '#4fd1c5', '#f6ad55', '#fc8181', '#b794f4', '#68d391', '#f6e05e', '#63b3ed', '#f687b3', '#a0aec0']
 const hashStr = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h) }
@@ -18,6 +21,7 @@ function wrapText(text, maxChars) {
   for (let w of words) { if (w.length > maxChars) { if (cur) { lines.push(cur); cur = '' } w = pushLong(w) } if (!cur) cur = w; else if ((cur + ' ' + w).length <= maxChars) cur += ' ' + w; else { lines.push(cur); cur = w } }
   if (cur) lines.push(cur); return lines.length ? lines : ['']
 }
+const EMPTY = []
 
 export default function PackBoard({ projectId }) {
   const nodes = useGraphStore(s => s.nodes)
@@ -25,25 +29,40 @@ export default function PackBoard({ projectId }) {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
 
   const svgRef = useRef(null), gRef = useRef(null), zoomRef = useRef(null)
   const [tf, setTf] = useState(d3.zoomIdentity)
-  const [systems, setSystems] = useState([])   // [{ id, propId, x, y }]
+  const [systems, setSystems] = useState([])   // working copy: [{ id, propId, x, y, kind }]
   const [adding, setAdding] = useState(false)
 
-  const decorColor = useMemo(() => {
-    const np = views.find(v => v.id === activeViewId)?.nodeProps || {}
-    return id => { const p = np[id] || {}; return (p.fillColor && p.fillColor !== 'none' && p.fillColor !== 'transparent') ? p.fillColor : null }
-  }, [views, activeViewId])
-  const nodeVisible = (id) => (views.find(v => v.id === activeViewId)?.nodeProps?.[id]?.visible !== false)
+  const activeView = views.find(v => v.id === activeViewId)
 
-  // Persist systems per project (localStorage first slice).
+  const decorColor = useMemo(() => {
+    const np = activeView?.nodeProps || {}
+    return id => { const p = np[id] || {}; return (p.fillColor && p.fillColor !== 'none' && p.fillColor !== 'transparent') ? p.fillColor : null }
+  }, [activeView])
+  const nodeVisible = (id) => (activeView?.nodeProps?.[id]?.visible !== false)
+
+  // Load layout from the active view; one-time migrate legacy localStorage layout into the view.
   useEffect(() => {
+    if (!activeView) return
+    if (Array.isArray(activeView.boardSystems)) { setSystems(activeView.boardSystems); return }
+    let legacy = null
+    try { const raw = localStorage.getItem(`pim:board:${projectId}`); if (raw) legacy = JSON.parse(raw) } catch { /* ignore */ }
+    if (legacy && legacy.length) { setSystems(legacy); setBoardSystems(legacy); persist(legacy) }
+    else setSystems([])
+  }, [activeViewId]) // eslint-disable-line
+
+  const persist = (next) => {
     if (!projectId) return
-    try { const raw = localStorage.getItem(`pim:board:${projectId}`); if (raw) setSystems(JSON.parse(raw)) } catch { /* ignore */ }
-  }, [projectId])
-  const saveSystems = (next) => { setSystems(next); try { if (projectId) localStorage.setItem(`pim:board:${projectId}`, JSON.stringify(next)) } catch { /* ignore */ } }
+    const s = useGraphStore.getState()
+    const views2 = s.views.map(v => v.id === s.activeViewId ? { ...v, boardSystems: next } : v)
+    saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: views2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e))
+  }
+  // Commit to store + DB (add / remove / move-end). Move-drag itself stays local for smoothness.
+  const commit = (next) => { setSystems(next); setBoardSystems(next); persist(next) }
 
   useEffect(() => {
     if (!svgRef.current) return
@@ -57,15 +76,16 @@ export default function PackBoard({ projectId }) {
 
   const toWorld = (ev) => { const g = gRef.current, svg = svgRef.current; const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const l = pt.matrixTransform(g.getScreenCTM().inverse()); return { x: l.x, y: l.y } }
 
-  const addSystem = (propId) => {
+  const addSystem = (propId, kind) => {
     const n = systems.length
-    const x = 300 + (n % 3) * 620, y = 300 + Math.floor(n / 3) * 560
-    saveSystems([...systems, { id: crypto.randomUUID(), propId, x, y }])
+    const x = 300 + (n % 3) * 640, y = 300 + Math.floor(n / 3) * 580
+    commit([...systems, { id: crypto.randomUUID(), propId, x, y, kind }])
     setAdding(false)
   }
-  const removeSystem = (id) => saveSystems(systems.filter(s => s.id !== id))
-  const moveSystem = (id, x, y) => { setSystems(prev => prev.map(s => s.id === id ? { ...s, x, y } : s)); }
-  const commitSystems = () => { try { if (projectId) localStorage.setItem(`pim:board:${projectId}`, JSON.stringify(systems)) } catch { /* ignore */ } }
+  const removeSystem = (id) => commit(systems.filter(s => s.id !== id))
+  const systemsRef = useRef(systems); systemsRef.current = systems
+  const moveSystem = (id, x, y) => setSystems(prev => prev.map(s => s.id === id ? { ...s, x, y } : s))
+  const commitMove = () => commit(systemsRef.current)   // latest moved positions
 
   const retag = (propId, nodeId, sourceOpt, targetOpt, additive) => {
     const def = propertyDefs.find(d => d.id === propId); if (!def) return
@@ -82,36 +102,40 @@ export default function PackBoard({ projectId }) {
     if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   }
 
-  const visibleNodes = useMemo(() => nodes.filter(n => nodeVisible(n.id)), [nodes, views, activeViewId]) // eslint-disable-line
+  const visibleNodes = useMemo(() => nodes.filter(n => nodeVisible(n.id)), [nodes, activeView]) // eslint-disable-line
 
   return (
     <div style={styles.wrap} onContextMenu={e => e.preventDefault()}>
       <div style={styles.toolbar}>
         <div style={{ position: 'relative' }}>
-          <button style={styles.addBtn} onClick={() => setAdding(o => !o)} disabled={!tagDefs.length}>+ Circle pack</button>
+          <button style={styles.addBtn} onClick={() => setAdding(o => !o)} disabled={!tagDefs.length}>+ Add</button>
           {adding && (<>
             <div style={styles.backdrop} onClick={() => setAdding(false)} />
             <div style={styles.menu} onClick={e => e.stopPropagation()}>
-              <div style={styles.mlabel}>Group by tag</div>
-              {tagDefs.length ? tagDefs.map(d => (
-                <div key={d.id} style={styles.item} onClick={() => addSystem(d.id)}>{d.name}</div>
-              )) : <div style={{ ...styles.item, color: '#8090b8' }}>No Select/Tags property</div>}
+              {!tagDefs.length && <div style={{ ...styles.item, color: '#8090b8' }}>No Select/Tags property</div>}
+              {tagDefs.length > 0 && <>
+                <div style={styles.mlabel}>◎ Circle pack — group by</div>
+                {tagDefs.map(d => (<div key={'p' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
+                <div style={{ ...styles.mlabel, marginTop: 4 }}>⌥ Property tree — branch by</div>
+                {tagDefs.map(d => (<div key={'t' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'tree')}>{d.name}</div>))}
+              </>}
             </div>
           </>)}
         </div>
-        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} pack{systems.length === 1 ? '' : 's'} · drag a pack’s header to move it · scroll = zoom · drag empty = pan</span>
+        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · drag a header to move it · scroll = zoom · drag empty = pan</span>
       </div>
-      {!systems.length && <div style={styles.empty}>No circle packs yet. Click <b style={{ color: '#8ab4ff' }}>+ Circle pack</b> and pick a tag property to add one.</div>}
+      {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
       <svg ref={svgRef} style={styles.svg}>
         <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
           {systems.map(sys => {
             const def = propertyDefs.find(d => d.id === sys.propId)
             if (!def) return null
-            return (
-              <Cluster key={sys.id} sys={sys} def={def} nodes={visibleNodes} decorColor={decorColor}
-                toWorld={toWorld} onRetag={(nid, so, to, add) => retag(sys.propId, nid, so, to, add)}
-                onMove={moveSystem} onCommitMove={commitSystems} onRemove={() => removeSystem(sys.id)} />
-            )
+            const common = {
+              key: sys.id, sys, def, nodes: visibleNodes, decorColor, toWorld,
+              onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add),
+              onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
+            }
+            return sys.kind === 'tree' ? <TreeCluster {...common} /> : <Cluster {...common} />
           })}
         </g>
       </svg>
@@ -250,13 +274,7 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      {/* system header (drag to move the whole cluster) */}
-      <g data-syshead="1" transform={`translate(${(bounds.minX + bounds.maxX) / 2},${headY})`} style={{ cursor: 'grab' }} onMouseDown={startHeadDrag}>
-        <rect x={-110} y={-16} width={220} height={30} rx={7} fill="#141428" stroke="#2d3a6a" />
-        <text x={-96} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
-        <text x={92} y={5} fontSize={16} fill="#f87171" textAnchor="middle" style={{ cursor: 'pointer' }}
-          onMouseDown={e => { e.stopPropagation(); if (confirm(`Remove the “${def.name}” circle pack?`)) onRemove() }}>×</text>
-      </g>
+      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} onHead={startHeadDrag} onRemove={onRemove} />
       {packs.map(p => {
         const count = bubbles.filter(b => b.group === p.gi).length
         const isT = dragging && hover === p.gi
@@ -268,20 +286,201 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
           </g>
         )
       })}
-      {bubbles.map(b => {
-        const isHeld = held.has(b.key), light = hexLum(b.color) > 0.55, tf = light ? '#0c0c1a' : '#f2f5ff'
-        const fs = Math.max(8, b.r * 0.3), maxChars = Math.max(5, Math.floor((1.7 * b.r) / (fs * 0.56)))
-        const lines = wrapText(b.label, maxChars).slice(0, 5), lh = fs * 1.05, y0 = -(lines.length - 1) / 2 * lh
+      {bubbles.map(b => <Bubble key={b.key} b={b} held={held.has(b.key)} onDown={e => startDrag(e, b)} />)}
+    </g>
+  )
+}
+
+// Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
+// LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
+// Drag a leaf onto another value node to retag (same semantics as the pack cluster).
+function TreeCluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onCommitMove, onRemove }) {
+  const simRef = useRef(null)
+  const fnodesRef = useRef([]), valuesRef = useRef([])
+  const heldRef = useRef(new Set())
+  const [, setTick] = useState(0)
+  const [held, setHeld] = useState(() => new Set())
+  const [hover, setHover] = useState(null)
+
+  const build = () => {
+    const opts = def.options || []
+    const values = opts.map(o => ({ opt: o.id, name: o.name, color: o.color || '#5b6af0' }))
+    const idx = new Map(values.map((v, i) => [v.opt, i]))
+    const leaves = []
+    let hasUntagged = false
+    nodes.forEach(n => {
+      const v = n.props?.[def.id]
+      const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
+      const valid = ids.filter(id => idx.has(id))
+      const color = decorColor?.(n.id) || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
+      const label = n.label || '(untitled)'
+      if (!valid.length) { hasUntagged = true; leaves.push({ nodeId: n.id, opt: '__untagged__', label, color }) }
+      else valid.forEach(id => leaves.push({ nodeId: n.id, opt: id, label, color }))
+    })
+    if (hasUntagged) values.push({ opt: '__untagged__', name: '(untagged)', color: '#6b7394' })
+    return { values, leaves }
+  }
+  const structureKey = useMemo(() => {
+    const opt = (def.options || []).map(o => o.id + ':' + o.name).join('|')
+    const rows = nodes.map(n => n.id + '=' + JSON.stringify(n.props?.[def.id] ?? null) + ':' + (n.label || '')).join(';')
+    return opt + '#' + rows
+  }, [nodes, def])
+
+  useEffect(() => {
+    const sim = d3.forceSimulation([])
+      .force('charge', d3.forceManyBody().strength(d => d.kind === 'leaf' ? -60 : -200))
+      .force('link', d3.forceLink([]).id(d => d.id).distance(l => l.kind === 'rv' ? 190 : 78).strength(l => l.kind === 'rv' ? 0.08 : 0.5))
+      .force('collide', d3.forceCollide(d => d.r + 4).strength(0.9).iterations(2))
+      .force('radial', d3.forceRadial(d => d.kind === 'value' ? 200 : 0, 0, 0).strength(d => d.kind === 'value' ? 0.55 : 0))
+      .alphaDecay(0.025).velocityDecay(0.5)
+      .on('tick', () => {
+        const fns = fnodesRef.current, h = heldRef.current
+        const root = fns.find(f => f.kind === 'root'); if (root) { root.x = 0; root.y = 0; root.fx = 0; root.fy = 0 }
+        // Hard node separation so leaves never overlap (force alone leaves slow residual overlap).
+        for (let pass = 0; pass < 2; pass++) {
+          for (let i = 0; i < fns.length; i++) { const a = fns[i]; if (a.kind === 'root') continue; for (let j = i + 1; j < fns.length; j++) { const b = fns[j]; if (b.kind === 'root') continue; const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 2; if (d < min) { const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d; const af = a.fx != null || h.has(a.id), bf = b.fx != null || h.has(b.id); if (af && !bf) { b.x += ux * push; b.y += uy * push } else if (bf && !af) { a.x -= ux * push; a.y -= uy * push } else if (!af && !bf) { a.x -= ux * push / 2; a.y -= uy * push / 2; b.x += ux * push / 2; b.y += uy * push / 2 } } } }
+        }
+        setTick(t => t + 1)
+      })
+    simRef.current = sim
+    return () => sim.stop()
+  }, [])
+
+  useEffect(() => {
+    const { values, leaves } = build()
+    const prev = new Map((fnodesRef.current || []).map(f => [f.id, f]))
+    const root = prev.get('__root__') || { id: '__root__', kind: 'root', x: 0, y: 0, fx: 0, fy: 0 }
+    root.r = Math.max(34, Math.min(52, 24 + Math.sqrt(def.name.length) * 5)); root.name = def.name
+    const vnodes = values.map((v, i) => {
+      const id = 'v:' + v.opt; const ex = prev.get(id)
+      const ang = (i / Math.max(1, values.length)) * Math.PI * 2
+      const base = ex || { id, kind: 'value', x: Math.cos(ang) * 200, y: Math.sin(ang) * 200, vx: 0, vy: 0 }
+      base.opt = v.opt; base.name = v.name; base.color = v.color; base.r = Math.max(26, Math.min(46, 18 + Math.sqrt(v.name.length) * 4.5))
+      return base
+    })
+    const vById = new Map(vnodes.map(v => [v.opt, v]))
+    const lnodes = leaves.map(d => {
+      const id = 'l:' + d.nodeId + '@' + d.opt; const ex = prev.get(id)
+      const parent = vById.get(d.opt) || root
+      const j = (hashStr(id) % 40) - 20
+      const base = ex || { id, kind: 'leaf', x: parent.x + j, y: parent.y + j, vx: 0, vy: 0 }
+      base.opt = d.opt; base.nodeId = d.nodeId; base.label = d.label; base.color = d.color; base.r = radiusFor(d.label) * 0.72
+      return base
+    })
+    const fns = [root, ...vnodes, ...lnodes]
+    fnodesRef.current = fns; valuesRef.current = vnodes
+    const links = [
+      ...vnodes.map(v => ({ source: root.id, target: v.id, kind: 'rv' })),
+      ...lnodes.map(l => ({ source: 'v:' + l.opt, target: l.id, kind: 'vl' })),
+    ]
+    const sm = simRef.current; if (!sm) return
+    sm.nodes(fns)
+    sm.force('link').links(links)
+    sm.alpha(0.8).restart(); setTick(t => t + 1)
+  }, [structureKey]) // eslint-disable-line
+
+  const setHeldKeys = (s) => { heldRef.current = s; setHeld(s) }
+  const local = (ev) => { const p = toWorld(ev); return { x: p.x - sys.x, y: p.y - sys.y } }
+  const dropTarget = (p) => { let best = null, bd = Infinity; valuesRef.current.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } }); const c = valuesRef.current[best]; if (best == null || !c) return -1; return Math.hypot(p.x - c.x, p.y - c.y) > c.r + 40 ? -1 : best }
+
+  const startDrag = (e, b) => {
+    if (e.button === 2) return
+    e.preventDefault(); e.stopPropagation()
+    const sim = simRef.current; const start = local(e)
+    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.id])); sim.alphaTarget(0.3).restart()
+    const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
+    const up = ev => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
+      const vals = valuesRef.current; const targetOpt = tg < 0 ? '__untagged__' : vals[tg].opt
+      if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && targetOpt !== b.opt) onRetag(b.nodeId, b.opt, targetOpt, false)
+      else sim.alpha(0.3).restart()
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const startHeadDrag = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const p0 = toWorld(e); const ox = sys.x - p0.x, oy = sys.y - p0.y
+    const move = ev => { const p = toWorld(ev); onMove(sys.id, p.x + ox, p.y + oy) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); onCommitMove() }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+
+  const fns = fnodesRef.current, values = valuesRef.current
+  const root = fns.find(f => f.kind === 'root')
+  const leaves = fns.filter(f => f.kind === 'leaf')
+  const dragging = held.size > 0
+  const minY = fns.reduce((m, f) => Math.min(m, f.y - f.r), 0)
+  const headY = minY - 44
+  const countByOpt = {}; leaves.forEach(l => { countByOpt[l.opt] = (countByOpt[l.opt] || 0) + 1 })
+
+  return (
+    <g transform={`translate(${sys.x},${sys.y})`}>
+      <ClusterHeader def={def} kind="tree" cx={0} y={headY} onHead={startHeadDrag} onRemove={onRemove} />
+      {/* links: root→value then value→leaf */}
+      <g pointerEvents="none">
+        {root && values.map(v => (
+          <line key={'e' + v.id} x1={root.x} y1={root.y} x2={v.x} y2={v.y} stroke={v.color} strokeOpacity={0.5} strokeWidth={2} />
+        ))}
+        {leaves.map(l => { const v = values.find(x => x.opt === l.opt); if (!v) return null
+          return <line key={'e' + l.id} x1={v.x} y1={v.y} x2={l.x} y2={l.y} stroke={l.color} strokeOpacity={0.28} strokeWidth={1.4} /> })}
+      </g>
+      {/* root */}
+      {root && (
+        <g pointerEvents="none" transform={`translate(${root.x},${root.y})`}>
+          <circle r={root.r} fill="#141428" stroke="#7c8cff" strokeWidth={2.5} />
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={13} fontWeight={800} fill="#c5d0ff"
+            style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>
+            {wrapText(root.name, 9).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * 14}>{ln}</tspan>)}
+          </text>
+        </g>
+      )}
+      {/* value nodes (1st generation) */}
+      {values.map(v => {
+        const isT = dragging && hover != null && values[hover] === v
         return (
-          <g key={b.key} data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={e => startDrag(e, b)}>
-            <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={isHeld ? '#fff' : 'rgba(232,238,255,0.4)'} strokeWidth={isHeld ? 3.5 : 1.2} />
-            <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
-              style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
-              {lines.map((ln, i) => <tspan key={i} x={0} y={y0 + i * lh}>{ln}</tspan>)}
+          <g key={v.id} pointerEvents="none" transform={`translate(${v.x},${v.y})`}>
+            <circle r={v.r} fill={v.color + '2a'} stroke={isT ? '#7fd8a8' : v.color} strokeWidth={isT ? 3.5 : 2.4} />
+            <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fontWeight={800} fill={isT ? '#7fd8a8' : '#e8eeff'}
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>
+              {wrapText(v.name, 9).slice(0, 2).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * 13 - 4}>{ln}</tspan>)}
+              <tspan x={0} y={12} fontSize={10} fillOpacity={0.85}>· {countByOpt[v.opt] || 0}</tspan>
             </text>
           </g>
         )
       })}
+      {/* item leaves (2nd generation) — draggable to retag */}
+      {leaves.map(l => <Bubble key={l.id} b={l} held={held.has(l.id)} onDown={e => startDrag(e, l)} />)}
+    </g>
+  )
+}
+
+// Shared draggable header chip for a cluster.
+function ClusterHeader({ def, kind, cx, y, onHead, onRemove }) {
+  const glyph = kind === 'tree' ? '⌥' : '◎'
+  return (
+    <g data-syshead="1" transform={`translate(${cx},${y})`} style={{ cursor: 'grab' }} onMouseDown={onHead}>
+      <rect x={-118} y={-16} width={236} height={30} rx={7} fill="#141428" stroke="#2d3a6a" />
+      <text x={-104} y={4} fontSize={13} fill="#8ab4ff">{glyph}</text>
+      <text x={-86} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
+      <text x={100} y={5} fontSize={16} fill="#f87171" textAnchor="middle" style={{ cursor: 'pointer' }}
+        onMouseDown={e => { e.stopPropagation(); if (confirm(`Remove the “${def.name}” ${kind === 'tree' ? 'tree' : 'circle pack'}?`)) onRemove() }}>×</text>
+    </g>
+  )
+}
+
+// A draggable item bubble (used by both pack and tree clusters).
+function Bubble({ b, held, onDown }) {
+  const light = hexLum(b.color) > 0.55, tf = light ? '#0c0c1a' : '#f2f5ff'
+  const fs = Math.max(8, b.r * 0.3), maxChars = Math.max(5, Math.floor((1.7 * b.r) / (fs * 0.56)))
+  const lines = wrapText(b.label, maxChars).slice(0, 5), lh = fs * 1.05, y0 = -(lines.length - 1) / 2 * lh
+  return (
+    <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown}>
+      <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={held ? '#fff' : 'rgba(232,238,255,0.4)'} strokeWidth={held ? 3.5 : 1.2} />
+      <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
+        style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
+        {lines.map((ln, i) => <tspan key={i} x={0} y={y0 + i * lh}>{ln}</tspan>)}
+      </text>
     </g>
   )
 }
@@ -292,7 +491,7 @@ const styles = {
   toolbar: { position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 12, alignItems: 'center' },
   addBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 },
   backdrop: { position: 'fixed', inset: 0, zIndex: 6 },
-  menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 190, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
+  menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 210, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
   mlabel: { padding: '5px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
   empty: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: '0.9rem', pointerEvents: 'none' },

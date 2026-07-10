@@ -535,6 +535,11 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, bgColor: color } : v),
   })),
 
+  // Board (multi-pack/tree canvas) layout lives on the active view so it syncs across devices.
+  setBoardSystems: (systems) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, boardSystems: systems } : v),
+  })),
+
   setViewPan: (x, y, k) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, pan: { x, y, k } }),
   })),
