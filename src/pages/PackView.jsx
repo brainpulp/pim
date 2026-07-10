@@ -244,7 +244,7 @@ export default function PackView({ projectId }) {
   const zoomed = t.k !== 1 || t.x !== 0 || t.y !== 0
 
   return (
-    <div style={styles.wrap}>
+    <div style={styles.wrap} onContextMenu={groupProp ? (e => e.preventDefault()) : undefined}>
       <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 8, alignItems: 'center' }}>
         <div style={{ position: 'relative' }}>
           <button style={styles.btn} onClick={() => setSrcMenu(o => !o)}>{groupProp ? '❃' : '⬡'} {trim(srcLabel, 16)} ▾</button>
@@ -421,12 +421,11 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
   const rFit = (gi, bubbles) => {
     const circles = []
     bubbles.forEach(b => { if (b.group === gi) circles.push({ r: b.r + 3 }) })
-    if (!circles.length) return 62
+    if (!circles.length) return 46
     d3.packSiblings(circles)
-    const enc = d3.packEnclose(circles) || { r: 62 }
-    // Ideal enclosing radius assumes a PERFECT pack; the force layout can't hit that, so add
-    // slack — otherwise members can't fit without overlapping. Still ~minimal, grows with content.
-    return Math.max(64, (enc.r || 62) * 1.12) + 14
+    const enc = d3.packEnclose(circles) || { r: 46 }
+    // Seed radius only — the sim then eases each pack down to hug its actual member cloud (tight).
+    return Math.max(46, (enc.r || 46) * 1.05) + 6
   }
 
   // Create both sims once. Packs: collide (never overlap) + gentle centre gravity → self-bunching.
@@ -434,14 +433,14 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
   // tick (so belonging is unambiguous and packs can't visually overrun each other).
   useEffect(() => {
     const packSim = d3.forceSimulation([])
-      .force('x', d3.forceX(FW / 2).strength(0.02))
-      .force('y', d3.forceY(FH / 2).strength(0.02))
-      .force('collide', d3.forceCollide(p => p.r + 22).strength(1).iterations(3))
+      .force('x', d3.forceX(FW / 2).strength(0.035))
+      .force('y', d3.forceY(FH / 2).strength(0.035))
+      .force('collide', d3.forceCollide(p => p.r + 6).strength(1).iterations(3))
       .alphaDecay(0.03).velocityDecay(0.62)
       .on('tick', () => {
         // Hard no-overlap: separate any pair of packs that still overlaps (collide can lag under
         // drag/anchor). Anchored packs (fx set) stay put; the other one yields.
-        const packs = packsRef.current, GAP = 14
+        const packs = packsRef.current, GAP = 7
         for (let i = 0; i < packs.length; i++) for (let j = i + 1; j < packs.length; j++) {
           const a = packs[i], b = packs[j]
           const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + GAP
@@ -478,7 +477,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
             }
             if (own) {
               const dx = b.x - own.x, dy = b.y - own.y, d = Math.hypot(dx, dy) || 1
-              const max = Math.max(0, own.r - b.r - 4)
+              const max = Math.max(0, own.r - b.r - 2)
               if (d > max) { b.x = own.x + dx / d * max; b.y = own.y + dy / d * max; b.vx *= 0.4; b.vy *= 0.4 }
             }
           }
@@ -496,6 +495,14 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
               }
             }
           }
+        }
+        // Shrink each pack to HUG its member cloud (no empty ring) — measured from the actual spread,
+        // eased so it doesn't jitter. Empty packs keep a small min radius as a drop target.
+        for (const p of packs) {
+          let maxd = 0, n = 0
+          for (const b of bs) { if (b.group === p.gi) { const d = Math.hypot(b.x - p.x, b.y - p.y) + b.r; if (d > maxd) maxd = d; n++ } }
+          const target = n ? maxd + 6 : 46
+          p.r += (target - p.r) * 0.2
         }
         setTick(t => t + 1)
       })
@@ -521,7 +528,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const prevPacks = new Map((packsRef.current || []).map(p => [p.opt, p]))
     const packs = groups.map((g, gi) => {
       const ex = prevPacks.get(g.opt)
-      if (ex) { ex.gi = gi; ex.name = g.name; ex.color = g.color; ex.r = gc[gi].r; return ex }
+      if (ex) { ex.gi = gi; ex.name = g.name; ex.color = g.color; return ex }   // keep measured radius
       return { gi, opt: g.opt, name: g.name, color: g.color, r: gc[gi].r,
         x: FW / 2 + (gc[gi].x - enc.x), y: FH / 2 + (gc[gi].y - enc.y), anchored: false }
     })
@@ -595,6 +602,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
 
   // ── Drag a pack → it anchors where you drop it; members follow. Double-click / badge releases it.
   const startPackDrag = (e, pack) => {
+    if (e.button === 2) return   // let right-click open the context menu, not drag
     e.preventDefault(); e.stopPropagation()
     const p0 = toWorld(e); const ox = pack.x - p0.x, oy = pack.y - p0.y
     packSimRef.current.alphaTarget(0.3).restart()
@@ -604,7 +612,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
       // clamp the dragged pack out of every other pack so packs never overlap
       for (const c of packsRef.current) {
         if (c === pack) continue
-        const dx = x - c.x, dy = y - c.y, d = Math.hypot(dx, dy), min = pack.r + c.r + 14
+        const dx = x - c.x, dy = y - c.y, d = Math.hypot(dx, dy), min = pack.r + c.r + 7
         if (d < min) { const dd = d || 1; x = c.x + dx / dd * min; y = c.y + dy / dd * min }
       }
       pack.fx = x; pack.fy = y; pack.x = x; pack.y = y; setTick(t => t + 1)
@@ -622,6 +630,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
 
   // ── Press a bubble → click selects; drag moves it (or the whole selection) and retags on drop.
   const startPress = (e, b) => {
+    if (e.button === 2) return   // right-click → context menu, not drag/select
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current
     const start = toWorld(e)
