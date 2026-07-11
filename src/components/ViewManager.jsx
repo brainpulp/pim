@@ -97,7 +97,7 @@ const styles = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '0.5rem 0.75rem', borderBottom: '1px solid #1e1e2e',
   },
-  headerLabel: { fontSize: '0.65rem', fontWeight: 700, color: '#555', letterSpacing: '0.08em' },
+  headerLabel: { fontSize: '0.65rem', fontWeight: 700, color: '#8090b8', letterSpacing: '0.08em' },
   addBtn: {
     fontSize: '0.85rem', padding: '1px 6px', borderRadius: 4,
     border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer',
@@ -114,7 +114,7 @@ const styles = {
   viewName: (active) => ({
     flex: 1, fontSize: '0.8rem', cursor: 'default',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    color: active ? '#c7d0f8' : '#777', userSelect: 'none',
+    color: active ? '#c7d0f8' : '#8090b8', userSelect: 'none',
   }),
   input: {
     flex: 1, background: '#1a1a2e', border: '1px solid #5b6af0',

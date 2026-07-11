@@ -3,6 +3,7 @@ import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
 import { saveProject } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
+import NodePropsEditor from '../components/NodePropsEditor'
 
 // Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
 // clusters. Two kinds:
@@ -40,6 +41,7 @@ export default function PackBoard({ projectId }) {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const addSelectOption = useGraphStore(s => s.addSelectOption)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewFilter = useGraphStore(s => s.setViewFilter)
@@ -58,6 +60,7 @@ export default function PackBoard({ projectId }) {
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
   const [filterFor, setFilterFor] = useState(null)   // system id whose per-cluster filter panel is open
+  const [editNodeId, setEditNodeId] = useState(null) // node whose properties are being edited (right-click)
 
   const activeView = views.find(v => v.id === activeViewId)
   const colorByDef = activeView?.colorBy ? propertyDefs.find(d => d.id === activeView.colorBy) : null
@@ -253,6 +256,7 @@ export default function PackBoard({ projectId }) {
               clusterFilterKey: JSON.stringify(sys.filter || {}),
               hasFilter: !!(sys.filter?.text || sys.filter?.rules?.length),
               onFilter: () => setFilterFor(f => f === sys.id ? null : sys.id),
+              onEditNode: setEditNodeId,
               onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
               onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
             }
@@ -260,13 +264,22 @@ export default function PackBoard({ projectId }) {
           })}
         </g>
       </svg>
+      {editNodeId && (
+        <NodePropsEditor
+          node={nodes.find(n => n.id === editNodeId)}
+          propertyDefs={propertyDefs}
+          onSet={(propId, value) => { setNodeProp(editNodeId, propId, value); saveAll() }}
+          onAddOption={(propId, name) => addSelectOption(propId, name)}
+          onClose={() => setEditNodeId(null)}
+        />
+      )}
     </div>
   )
 }
 
 // One independent pack cluster, positioned at (sys.x, sys.y) on the shared canvas, running its own
 // force layout in LOCAL coordinates (centered on 0,0). Mirrors the proven single-pack mechanics.
-function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onRetag, onMove, onCommitMove, onRemove }) {
+function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onEditNode, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null), packSimRef = useRef(null)
   const bubblesRef = useRef([]), packsRef = useRef([]), groupsRef = useRef([])
   const heldRef = useRef(new Set())
@@ -413,7 +426,8 @@ function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, filt
           </g>
         )
       })}
-      {bubbles.map(b => <Bubble key={b.key} b={b} held={held.has(b.key)} onDown={e => startDrag(e, b)} />)}
+      {bubbles.map(b => <Bubble key={b.key} b={b} held={held.has(b.key)} onDown={e => startDrag(e, b)}
+        onContext={e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(b.nodeId) }} />)}
     </g>
   )
 }
@@ -421,7 +435,7 @@ function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, filt
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onEditNode, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -612,7 +626,8 @@ function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, fil
         )
       })}
       {/* item leaves (2nd generation) — real graph nodes with their cosmetics; draggable to retag */}
-      {leaves.map(l => <LeafNode key={l.id} b={l} held={held.has(l.id)} onDown={e => startDrag(e, l)} />)}
+      {leaves.map(l => <LeafNode key={l.id} b={l} held={held.has(l.id)} onDown={e => startDrag(e, l)}
+        onContext={e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(l.nodeId) }} />)}
       {/* value-hub context menu — rendered LAST so it paints on top of every node */}
       {vmenu && (() => {
         const v = valuesRef.current.find(x => x.opt === vmenu.opt); if (!v) return null
@@ -659,7 +674,7 @@ function dashArrayB(dash, sw = 1.4) {
 }
 
 // A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
-function LeafNode({ b, held, onDown }) {
+function LeafNode({ b, held, onDown, onContext }) {
   const dec = b.decor || {}
   const shape = b.shape || 'circle'
   const s = b.baseR || b.r
@@ -680,7 +695,7 @@ function LeafNode({ b, held, onDown }) {
   else if (shape === 'diamond') body = <polygon points={`0,${-s * 1.15} ${s * 1.15},0 0,${s * 1.15} ${-s * 1.15},0`} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
   else body = <circle r={s} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
   return (
-    <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown}>
+    <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown} onContextMenu={onContext}>
       {body}
       {emoji && <text textAnchor="middle" dominantBaseline="middle" fontSize={s * 0.7} y={-s * 0.42} pointerEvents="none">{emoji}</text>}
       <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
@@ -692,12 +707,12 @@ function LeafNode({ b, held, onDown }) {
 }
 
 // A draggable item bubble (used by both pack and tree clusters).
-function Bubble({ b, held, onDown }) {
+function Bubble({ b, held, onDown, onContext }) {
   const light = hexLum(b.color) > 0.55, tf = light ? '#0c0c1a' : '#f2f5ff'
   const fs = Math.max(8, b.r * 0.3), maxChars = Math.max(5, Math.floor((1.7 * b.r) / (fs * 0.56)))
   const lines = wrapText(b.label, maxChars).slice(0, 5), lh = fs * 1.05, y0 = -(lines.length - 1) / 2 * lh
   return (
-    <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown}>
+    <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown} onContextMenu={onContext}>
       <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={held ? '#fff' : 'rgba(232,238,255,0.4)'} strokeWidth={held ? 3.5 : 1.2} />
       <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
         style={{ fontWeight: 400, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>

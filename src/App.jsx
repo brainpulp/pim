@@ -209,7 +209,7 @@ const projectRenameInputStyle = {
 }
 const navBtnStyle = {
   padding: '0.25rem 0.75rem', borderRadius: 6, border: '1px solid #2a2a3e',
-  background: 'transparent', color: '#666', cursor: 'pointer', fontSize: '0.82rem', textTransform: 'capitalize',
+  background: 'transparent', color: '#8a94b8', cursor: 'pointer', fontSize: '0.82rem', textTransform: 'capitalize',
 }
 const navBtnActiveStyle = { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' }
 const shareBtnStyle = {
@@ -219,10 +219,10 @@ const shareBtnStyle = {
 }
 const signOutStyle = {
   padding: '0.25rem 0.75rem', borderRadius: 6,
-  border: '1px solid #2a2a3e', background: 'transparent', color: '#555',
+  border: '1px solid #2a2a3e', background: 'transparent', color: '#8090b8',
   cursor: 'pointer', fontSize: '0.78rem',
 }
 const loadingStyle = {
   height: '100vh', display: 'flex', alignItems: 'center',
-  justifyContent: 'center', color: '#555', background: '#0f0f0f',
+  justifyContent: 'center', color: '#8090b8', background: '#0f0f0f',
 }

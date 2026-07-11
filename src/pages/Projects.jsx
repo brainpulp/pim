@@ -229,7 +229,7 @@ const styles = {
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   logo: { fontWeight: 800, fontSize: '1.1rem', color: '#5b6af0', letterSpacing: '0.05em' },
   signOut: {
-    background: 'transparent', border: '1px solid #2a2a3e', color: '#555',
+    background: 'transparent', border: '1px solid #2a2a3e', color: '#8090b8',
     borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: '0.78rem',
   },
   title: { fontSize: '1.1rem', fontWeight: 600, color: '#c7d0f8', margin: 0 },
