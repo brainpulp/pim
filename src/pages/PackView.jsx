@@ -447,6 +447,17 @@ const radiusFor = (label) => {
 // World font size that keeps a label between [minPx, maxPx] on SCREEN regardless of zoom k
 // (content lives inside a scale(k) group, so we counter-scale by 1/k, clamped).
 const zfont = (basePx, k, minPx, maxPx) => Math.max(minPx, Math.min(maxPx, basePx * (k || 1))) / (k || 1)
+// Circular fisheye distortion (Bostock's d3.fisheye.circular). Returns a fn mapping a point near
+// `focus` outward (magnified) within `radius`; z is the local magnification factor.
+const makeFisheye = (focus, radius, distortion) => {
+  let k0 = Math.exp(distortion); k0 = k0 / (k0 - 1) * radius; const k1 = distortion / radius
+  return (x, y) => {
+    const dx = x - focus[0], dy = y - focus[1], dd = Math.hypot(dx, dy)
+    if (!dd || dd >= radius) return { x, y, z: 1 }
+    const k = k0 * (1 - Math.exp(-dd * k1)) / dd * 0.75 + 0.25
+    return { x: focus[0] + dx * k, y: focus[1] + dy * k, z: Math.min(k, 4) }
+  }
+}
 // Relative luminance of a #rrggbb colour → pick legible text (dark on light fills, light on dark).
 const hexLum = (hex) => {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return 0.35
@@ -473,6 +484,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
   const [selected, setSelected] = useState(() => new Set())
   const [anchoredTick, setAnchoredTick] = useState(0)  // re-render when a pack is (un)anchored
   const [ctx, setCtx] = useState(null)   // right-click menu { sx, sy, opt, packName }
+  const [fisheye, setFisheye] = useState(false)   // hover magnifier lens toggle
+  const focusRef = useRef(null)          // current lens focus in world coords, or null
   const setHeldKeys = (s) => { heldKeysRef.current = s; setHeldKeysState(s) }
 
   // Desired bubbles + real packs from the store. One bubble per (node, tag value); multi-tag nodes
@@ -802,9 +815,18 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     setCtx({ sx: e.clientX, sy: e.clientY, opt: g ? g.opt : '__untagged__', packName: g ? g.name : null, nodeId: hit?.nodeId, label: hit?.label })
   }
   void anchoredTick
+  // Active fisheye lens (only while toggled on and the cursor is over the canvas).
+  const fe = (fisheye && focusRef.current) ? makeFisheye(focusRef.current, 300, 3) : null
+  const onCanvasMove = (e) => {
+    if (!fisheye) return
+    focusRef.current = toWorld(e); setTick(t => t + 1)
+  }
+  const onCanvasLeave = () => { if (focusRef.current) { focusRef.current = null; setTick(t => t + 1) } }
 
   return (<>
     {selected.size > 0 && <div style={styles.selBadge}>{selected.size} selected</div>}
+    <button style={{ ...styles.reset, bottom: anchoredAny ? 82 : 48, background: fisheye ? '#1a2f4a' : 'rgba(18,18,42,0.9)', color: fisheye ? '#8ecbff' : '#c5d0ff' }}
+      onClick={() => { setFisheye(o => { if (o) focusRef.current = null; return !o }) }} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
     {anchoredAny && <button style={{ ...styles.reset, bottom: 48 }} onClick={releaseAllPacks}>⊙ Release packs</button>}
     {zoomed && <button style={styles.reset} onClick={fitAll}>⟳ Fit</button>}
     {!bubbles.length && <div style={styles.empty}>No items — tag some nodes with “{def?.name}” in the graph or table.</div>}
@@ -830,7 +852,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
         </div>
       </div>
     </>)}
-    <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg} onContextMenu={onBgContext}>
+    <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg} onContextMenu={onBgContext}
+      onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}>
       <rect x={0} y={0} width={FW} height={FH} fill="transparent" onMouseDown={clearSelection} />
       <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
         {untaggedCount > 0 && (
@@ -860,19 +883,22 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
           const isSel = selected.has(b.key)
           const light = hexLum(b.color) > 0.55
           const textFill = light ? '#0c0c1a' : '#f2f5ff'
-          const fs = Math.max(11, Math.min(13.5, b.r * 0.28))   // near-constant → labels read at one size
-          const maxChars = Math.max(5, Math.floor((1.7 * b.r) / (fs * 0.56)))
+          // Fisheye: displace + magnify near the lens focus. No lens → identity.
+          const disp = fe ? fe(b.x || 0, b.y || 0) : { x: b.x || 0, y: b.y || 0, z: 1 }
+          const er = b.r * disp.z
+          const fsc = Math.max(11, Math.min(13.5 * disp.z, er * 0.28))   // grows with magnified radius
+          const maxChars = Math.max(5, Math.floor((1.7 * er) / (fsc * 0.56)))
           const lines = wrapText(b.label, maxChars).slice(0, 6)
-          const lh = fs * 1.05
+          const lh = fsc * 1.05
           const y0 = -(lines.length - 1) / 2 * lh
           const stroke = held ? '#ffffff' : isSel ? '#ffd34d' : 'rgba(232,238,255,0.4)'
           const sw = held ? 4 : isSel ? 3.5 : 1.25
           return (
-            <g key={b.key} data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`}
+            <g key={b.key} data-bubble="1" transform={`translate(${disp.x},${disp.y})`}
               style={{ cursor: 'grab' }} onMouseDown={e => startPress(e, b)}>
-              <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} />
-              <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={textFill} pointerEvents="none"
-                style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
+              <circle r={er} fill={b.color} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} />
+              <text textAnchor="middle" dominantBaseline="middle" fontSize={fsc} fill={textFill} pointerEvents="none"
+                style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fsc * 0.13 }}>
                 {lines.map((ln, i) => <tspan key={i} x={0} y={y0 + i * lh}>{ln}</tspan>)}
               </text>
             </g>
