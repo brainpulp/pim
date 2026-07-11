@@ -657,7 +657,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const sim = d3.forceSimulation([])
       .force('charge', d3.forceManyBody().strength(-5))
       .force('collide', d3.forceCollide(b => b.r + 2).strength(0.9))
-      .alphaDecay(0.02).velocityDecay(0.55)
+      .alphaDecay(0.05).velocityDecay(0.72)   // cool fast + damp hard → short, calm settles (no long storm)
       .on('tick', () => {
         const packs = packsRef.current, held = heldKeysRef.current
         const bs = bubblesRef.current
@@ -769,11 +769,11 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     if (sel.size !== selectedRef.current.size) { selectedRef.current = sel; setSelected(sel) }
 
     const packSim = packSimRef.current, sim = simRef.current; if (!packSim || !sim) return
-    packSim.nodes(packs); packSim.alpha(0.5).restart()
+    packSim.nodes(packs); packSim.alpha(0.35).restart()
     sim.nodes(next)
     sim.force('x', d3.forceX(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].x : FW / 2).strength(b => b.group >= 0 ? 0.5 : 0.04))
     sim.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.5 : 0.04))
-    sim.alpha(0.7).restart()
+    sim.alpha(0.45).restart()
     setTick(t => t + 1)
   }, [structureKey, filterKey]) // eslint-disable-line
 
@@ -872,8 +872,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     let moved = false
     const onMove = ev => {
       const p = toWorld(ev)
-      if (!moved && Math.hypot(p.x - start.x, p.y - start.y) > 5) {
-        moved = true; setHeldKeys(new Set(keys))   // NO global reheat while dragging → no motion storm; settle only on drop
+      if (!moved && Math.hypot(p.x - start.x, p.y - start.y) > 9) {
+        moved = true; setHeldKeys(new Set(keys))   // bigger threshold so a click doesn't become a drag; no reheat while dragging
       }
       if (moved) {
         offs.forEach(o => { o.b.fx = p.x + o.dx; o.b.fy = p.y + o.dy; o.b.x = o.b.fx; o.b.y = o.b.fy })
@@ -895,7 +895,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
         .map(o => ({ nodeId: o.b.nodeId, sourceOpt: o.b.opt }))
         .filter(it => tg < 0 ? it.sourceOpt !== '__untagged__' : (targetOpt !== it.sourceOpt || additive))
       if (list.length) { onRetagMany(list, targetOpt, additive) }
-      else sim.alpha(0.1).restart()   // tiny settle so it eases back into its pack; no big storm
+      // else: dropped back in the same pack → leave it exactly where placed, no restart (no storm)
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
