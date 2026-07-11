@@ -554,6 +554,11 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, packLayout: { ...(v.packLayout || {}), [propId]: layout } } : v),
   })),
 
+  // "Color by" property for pack/board bubbles (null = by pack value), persisted on the active view.
+  setViewColorBy: (colorBy) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, colorBy } : v),
+  })),
+
   setViewPan: (x, y, k) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, pan: { x, y, k } }),
   })),

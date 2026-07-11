@@ -25,6 +25,14 @@ function wrapText(text, maxChars) {
 const EMPTY = []
 // World font that stays between [minPx,maxPx] on screen despite the zoom scale(k) group.
 const zfont = (basePx, k, minPx, maxPx) => Math.max(minPx, Math.min(maxPx, basePx * (k || 1))) / (k || 1)
+// Colour a node by a chosen "colour by" property's value colour (grey if it has no value there).
+const colorByValue = (def, node) => {
+  if (!def) return null
+  const raw = node?.props?.[def.id]
+  const optId = Array.isArray(raw) ? raw[0] : raw
+  if (optId == null || optId === '') return '#6b7394'
+  return (def.options || []).find(o => o.id === optId)?.color || '#6b7394'
+}
 
 export default function PackBoard({ projectId }) {
   const nodes = useGraphStore(s => s.nodes)
@@ -35,6 +43,7 @@ export default function PackBoard({ projectId }) {
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewFilter = useGraphStore(s => s.setViewFilter)
+  const setViewColorBy = useGraphStore(s => s.setViewColorBy)
   const setActiveView = useGraphStore(s => s.setActiveView)
   const addView = useGraphStore(s => s.addView)
   const renameView = useGraphStore(s => s.renameView)
@@ -50,6 +59,7 @@ export default function PackBoard({ projectId }) {
   const filterKey = JSON.stringify(filter)
 
   const activeView = views.find(v => v.id === activeViewId)
+  const colorByDef = activeView?.colorBy ? propertyDefs.find(d => d.id === activeView.colorBy) : null
 
   // Persisted filter for the active view (shared with the pack view); seed "hide done" the first time.
   const filterInitRef = useRef(null), filterSaveRef = useRef()
@@ -156,6 +166,7 @@ export default function PackBoard({ projectId }) {
   // View management (shared views; persist to DB on change so switches survive reload).
   const saveAll = () => { if (!projectId) return; const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   const switchView = (id) => { setActiveView(id); saveAll() }
+  const setBoardColorBy = (propId) => { setViewColorBy(propId); saveAll() }
 
   // Hide a set of nodes in the active view (used by the parent-hub "Hide items" action).
   const hideNodes = (ids) => {
@@ -186,7 +197,14 @@ export default function PackBoard({ projectId }) {
           </>)}
         </div>
         <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
-        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · add more from the menu · drag a header to move · scroll = zoom</span>
+        {tagDefs.length > 0 && (
+          <select value={activeView?.colorBy || ''} onChange={e => setBoardColorBy(e.target.value || null)} title="Colour nodes by a property"
+            style={{ background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '5px 8px', cursor: 'pointer', fontSize: '0.76rem', maxWidth: 170 }}>
+            <option value="">🎨 colour: value</option>
+            {tagDefs.map(d => <option key={d.id} value={d.id}>🎨 colour: {d.name}</option>)}
+          </select>
+        )}
+        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · drag a header to move · scroll = zoom</span>
       </div>
       {/* Board view manager — switch/create/rename/delete views (shared across tabs; each view keeps its own board layout + filter). */}
       <div style={styles.viewBar}>
@@ -210,7 +228,7 @@ export default function PackBoard({ projectId }) {
             const def = propertyDefs.find(d => d.id === sys.propId)
             if (!def) return null
             const common = {
-              key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
+              key: sys.id, sys, def, colorByDef, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
               onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
               onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
             }
@@ -224,7 +242,7 @@ export default function PackBoard({ projectId }) {
 
 // One independent pack cluster, positioned at (sys.x, sys.y) on the shared canvas, running its own
 // force layout in LOCAL coordinates (centered on 0,0). Mirrors the proven single-pack mechanics.
-function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove, onCommitMove, onRemove }) {
+function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null), packSimRef = useRef(null)
   const bubblesRef = useRef([]), packsRef = useRef([]), groupsRef = useRef([])
   const heldRef = useRef(new Set())
@@ -241,11 +259,12 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove,
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
-      // Colour = the node's own graph fill if set, else its PACK's value colour (not a random hash).
+      // Colour: "colour by" property wins, else node's own graph fill, else its PACK's value colour.
+      const byProp = colorByValue(colorByDef, n)
       const explicit = decorColor?.(n.id) || null
       const label = n.label || '(untitled)'
-      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: explicit || '#6b7394' })
-      else valid.forEach(id => { const gi = idx.get(id); raw.push({ nodeId: n.id, opt: id, group: gi, label, color: explicit || groups[gi].color }) })
+      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: byProp || explicit || '#6b7394' })
+      else valid.forEach(id => { const gi = idx.get(id); raw.push({ nodeId: n.id, opt: id, group: gi, label, color: byProp || explicit || groups[gi].color }) })
     })
     raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
     return { groups, bubbles: raw }
@@ -320,7 +339,7 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove,
     sm.force('x', d3.forceX(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].x : 0).strength(b => b.group >= 0 ? 0.5 : 0.05))
     sm.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : 0).strength(b => b.group >= 0 ? 0.5 : 0.05))
     sm.alpha(0.7).restart(); setTick(t => t + 1)
-  }, [structureKey]) // eslint-disable-line
+  }, [structureKey, colorByDef?.id]) // eslint-disable-line
 
   const setHeldKeys = (s) => { heldRef.current = s; setHeld(s) }
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - sys.x, y: p.y - sys.y } }   // canvas world → cluster-local
@@ -377,7 +396,7 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove,
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -410,8 +429,9 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onHide
       const baseR = radiusFor(label) * 0.7 * scl
       const shape = dec.shape || 'circle'
       const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
-      // Colour = node's own graph fill, else its value's colour (not a random hash).
-      const mk = (opt) => ({ nodeId: n.id, opt, label, color: dec.fill || colorForOpt(opt), decor: dec, shape, baseR, r: bound })
+      // Colour: "colour by" property wins, else node's own graph fill, else its value's colour.
+      const byProp = colorByValue(colorByDef, n)
+      const mk = (opt) => ({ nodeId: n.id, opt, label, color: byProp || dec.fill || colorForOpt(opt), decor: dec, shape, baseR, r: bound })
       if (!valid.length) { hasUntagged = true; leaves.push(mk('__untagged__')) }
       else valid.forEach(id => leaves.push(mk(id)))
     })
@@ -480,7 +500,7 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onHide
     sm.nodes(fns)
     sm.force('link').links(links)
     sm.alpha(0.8).restart(); setTick(t => t + 1)
-  }, [structureKey]) // eslint-disable-line
+  }, [structureKey, colorByDef?.id]) // eslint-disable-line
 
   const setHeldKeys = (s) => { heldRef.current = s; setHeld(s) }
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - sys.x, y: p.y - sys.y } }

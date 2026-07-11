@@ -37,6 +37,19 @@ export default function PackView({ projectId }) {
   const [srcMenu2, setSrcMenu2] = useState(false)
   const [notionSave, setNotionSave] = useState(null)   // null | 'saving' | result string
   const setViewFilter = useGraphStore(s => s.setViewFilter)
+  const setViewColorBy = useGraphStore(s => s.setViewColorBy)
+  const [colorBy, setColorByState] = useState(null)   // null = colour by the pack's own value; else a propId
+  const colorByInitRef = useRef(null)
+  useEffect(() => {
+    if (colorByInitRef.current === activeViewId) return
+    colorByInitRef.current = activeViewId
+    setColorByState(views.find(x => x.id === activeViewId)?.colorBy ?? null)
+  }, [activeViewId, views])
+  const setColorBy = (propId) => {
+    setColorByState(propId); setViewColorBy(propId)
+    if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
+  }
+  const colorByDef = colorBy ? propertyDefs.find(d => d.id === colorBy) : null
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
   const [editNodeId, setEditNodeId] = useState(null)   // node whose properties are being edited
@@ -332,6 +345,12 @@ export default function PackView({ projectId }) {
             </>)}
           </div>
         )}
+        {groupProp && !nested && tagDefs.length > 0 && (
+          <select value={colorBy || ''} onChange={e => setColorBy(e.target.value || null)} style={styles.colorSelect} title="Colour bubbles by a property">
+            <option value="">🎨 colour: pack value</option>
+            {tagDefs.map(d => <option key={d.id} value={d.id}>🎨 colour: {d.name}</option>)}
+          </select>
+        )}
         {notionLinked && (
           <button style={styles.notionSaveBtn} onClick={handleSaveNotion} disabled={notionSave === 'saving'}
             title="Push all tag/field values back to the linked Notion database">
@@ -343,7 +362,7 @@ export default function PackView({ projectId }) {
 
       <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
       {groupProp && !nested ? (
-        <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
+        <TagPackForce key={groupProp} def={groupDef} colorByDef={colorByDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
           savedLayout={views.find(v => v.id === activeViewId)?.packLayout?.[groupProp]}
           onSaveLayout={(layout) => { setViewPackLayout(groupProp, layout); const s = useGraphStore.getState(); if (projectId) saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }}
           onCreateNode={handleCreateNode} onAddValue={handleAddValue} onHideNode={handleHideNode} onEditNode={setEditNodeId}
@@ -561,7 +580,17 @@ const hexLum = (hex) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, onEditNode, savedLayout, onSaveLayout, filterFn, filterKey }) {
+function TagPackForce({ def, colorByDef, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, onEditNode, savedLayout, onSaveLayout, filterFn, filterKey }) {
+  // When "colour by" a property is chosen, a bubble's colour comes from that property's value colour
+  // (grey if the node has no value there) — independent of which property it's packed by.
+  const colorByFor = (nodeId) => {
+    if (!colorByDef) return null
+    const node = nodes.find(n => n.id === nodeId)
+    const raw = node?.props?.[colorByDef.id]
+    const optId = Array.isArray(raw) ? raw[0] : raw
+    if (optId == null || optId === '') return '#6b7394'
+    return (colorByDef.options || []).find(o => o.id === optId)?.color || '#6b7394'
+  }
   const savedLayoutRef = useRef(savedLayout); savedLayoutRef.current = savedLayout
   const saveLayout = () => {
     if (!onSaveLayout) return
@@ -613,11 +642,12 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
-      // Colour is intentional, not random: a node's own graph fill wins; otherwise the bubble takes
-      // its PACK's value colour (so every item in a pack shares a colour). Untagged → neutral grey.
-      const explicit = decorOf?.(n.id)?.color || null
+      // Colour: if "colour by" a property is active it wins; else the node's own graph fill; else the
+      // bubble takes its PACK's value colour. Untagged → neutral grey.
+      const byProp = colorByFor(n.id)
+      const explicit = byProp || decorOf?.(n.id)?.color || null
       const label = n.label || '(untitled)'
-      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: explicit || '#6b7394' })
+      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: byProp || explicit || '#6b7394' })
       else valid.forEach(id => { const gi = idx.get(id); raw.push({ nodeId: n.id, opt: id, group: gi, label, color: explicit || groups[gi].color }) })
     })
     raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
@@ -787,7 +817,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     sim.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : FH / 2).strength(b => b.group >= 0 ? 0.5 : 0.04))
     sim.alpha(0.45).restart()
     setTick(t => t + 1)
-  }, [structureKey, filterKey]) // eslint-disable-line
+  }, [structureKey, filterKey, colorByDef?.id]) // eslint-disable-line
 
   // Pan / zoom (bubble + pack drags fall through the filter; empty-canvas drag pans).
   useEffect(() => {
@@ -1165,6 +1195,7 @@ const styles = {
   reset: { position: 'absolute', bottom: 14, right: 16, zIndex: 5, background: 'rgba(18,18,42,0.9)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '5px 11px', cursor: 'pointer', fontSize: '0.78rem' },
   btn: { background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem' },
   notionSaveBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#8ab4ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, whiteSpace: 'nowrap' },
+  colorSelect: { background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '5px 8px', cursor: 'pointer', fontSize: '0.78rem', maxWidth: 170 },
   backdrop: { position: 'fixed', inset: 0, zIndex: 6 },
   menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 190, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
