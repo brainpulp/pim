@@ -549,6 +549,11 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, filter } : v),
   })),
 
+  // Anchored pack positions per grouping property, persisted on the active view.
+  setViewPackLayout: (propId, layout) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, packLayout: { ...(v.packLayout || {}), [propId]: layout } } : v),
+  })),
+
   setViewPan: (x, y, k) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, pan: { x, y, k } }),
   })),

@@ -22,6 +22,7 @@ export default function PackView({ projectId }) {
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
+  const setViewPackLayout = useGraphStore(s => s.setViewPackLayout)
   const addNode = useGraphStore(s => s.addNode)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
@@ -343,6 +344,8 @@ export default function PackView({ projectId }) {
       <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
       {groupProp && !nested ? (
         <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
+          savedLayout={views.find(v => v.id === activeViewId)?.packLayout?.[groupProp]}
+          onSaveLayout={(layout) => { setViewPackLayout(groupProp, layout); const s = useGraphStore.getState(); if (projectId) saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }}
           onCreateNode={handleCreateNode} onAddValue={handleAddValue} onHideNode={handleHideNode} onEditNode={setEditNodeId}
           filterFn={n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)}
           filterKey={filterKey + '|' + Object.keys(views.find(v => v.id === activeViewId)?.nodeProps || {}).filter(id => (views.find(v => v.id === activeViewId).nodeProps[id]?.visible === false)).length} />
@@ -558,7 +561,14 @@ const hexLum = (hex) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, onEditNode, filterFn, filterKey }) {
+function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, onEditNode, savedLayout, onSaveLayout, filterFn, filterKey }) {
+  const savedLayoutRef = useRef(savedLayout); savedLayoutRef.current = savedLayout
+  const saveLayout = () => {
+    if (!onSaveLayout) return
+    const m = {}
+    packsRef.current.forEach(p => { if (p.anchored && p.fx != null) m[p.opt] = { x: p.fx, y: p.fy } })
+    onSaveLayout(m)
+  }
   const svgRef = useRef(null)
   const gRef = useRef(null)
   const simRef = useRef(null)          // member bubbles sim
@@ -744,6 +754,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const packs = groups.map((g, gi) => {
       const ex = prevPacks.get(g.opt)
       if (ex) { ex.gi = gi; ex.name = g.name; ex.color = g.color; return ex }   // keep measured radius
+      const sv = savedLayoutRef.current?.[g.opt]   // restore a persisted anchored position, if any
+      if (sv) return { gi, opt: g.opt, name: g.name, color: g.color, r: gc[gi].r, x: sv.x, y: sv.y, fx: sv.x, fy: sv.y, anchored: true }
       return { gi, opt: g.opt, name: g.name, color: g.color, r: gc[gi].r,
         x: FW / 2 + (gc[gi].x - enc.x), y: FH / 2 + (gc[gi].y - enc.y), anchored: false }
     })
@@ -852,12 +864,12 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
       pack.anchored = true            // fx/fy retained → stays put under the force layout
       packSimRef.current.alphaTarget(0); simRef.current.alphaTarget(0)
-      setAnchoredTick(t => t + 1)
+      setAnchoredTick(t => t + 1); saveLayout()   // persist the anchored position
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
-  const releasePack = (pack) => { pack.fx = null; pack.fy = null; pack.anchored = false; packSimRef.current.alpha(0.5).restart(); setAnchoredTick(t => t + 1) }
-  const releaseAllPacks = () => { packsRef.current.forEach(p => { p.fx = null; p.fy = null; p.anchored = false }); packSimRef.current.alpha(0.6).restart(); setAnchoredTick(t => t + 1) }
+  const releasePack = (pack) => { pack.fx = null; pack.fy = null; pack.anchored = false; packSimRef.current.alpha(0.5).restart(); setAnchoredTick(t => t + 1); saveLayout() }
+  const releaseAllPacks = () => { packsRef.current.forEach(p => { p.fx = null; p.fy = null; p.anchored = false }); packSimRef.current.alpha(0.6).restart(); setAnchoredTick(t => t + 1); saveLayout() }
 
   // ── Press a bubble → click selects; drag moves it (or the whole selection) and retags on drop.
   const startPress = (e, b) => {
