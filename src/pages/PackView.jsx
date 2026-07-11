@@ -33,6 +33,7 @@ export default function PackView({ projectId }) {
   const [notionSave, setNotionSave] = useState(null)   // null | 'saving' | result string
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
+  const [editNodeId, setEditNodeId] = useState(null)   // node whose properties are being edited
   const notionLinked = views.some(v => v.notionDatabaseId)
 
   const handleSaveNotion = async () => {
@@ -278,7 +279,7 @@ export default function PackView({ projectId }) {
       <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
       {groupProp ? (
         <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
-          onCreateNode={handleCreateNode} onAddValue={handleAddValue} onHideNode={handleHideNode}
+          onCreateNode={handleCreateNode} onAddValue={handleAddValue} onHideNode={handleHideNode} onEditNode={setEditNodeId}
           filterFn={n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)}
           filterKey={filterKey + '|' + Object.keys(views.find(v => v.id === activeViewId)?.nodeProps || {}).filter(id => (views.find(v => v.id === activeViewId).nodeProps[id]?.visible === false)).length} />
       ) : (<>
@@ -343,8 +344,90 @@ export default function PackView({ projectId }) {
         </svg>
         {descendants.length <= 1 && <div style={styles.empty}>Nothing to pack yet — add some nodes in the graph.</div>}
       </>)}
+      {editNodeId && (
+        <NodePropsEditor
+          node={nodes.find(n => n.id === editNodeId)}
+          propertyDefs={propertyDefs}
+          onSet={(propId, value) => { setNodeProp(editNodeId, propId, value); persist() }}
+          onAddOption={(propId, name) => addSelectOption(propId, name)}
+          onClose={() => setEditNodeId(null)}
+        />
+      )}
     </div>
   )
+}
+
+// Modal: edit every property of a node (all types). Writes via onSet → store + persist.
+function NodePropsEditor({ node, propertyDefs, onSet, onAddOption, onClose }) {
+  if (!node) return null
+  const props = node.props || {}
+  return (
+    <div style={npe.backdrop} onMouseDown={onClose}>
+      <div style={npe.panel} onMouseDown={e => e.stopPropagation()}>
+        <div style={npe.head}>
+          <span style={npe.title}>{node.label || '(untitled)'}</span>
+          <button style={npe.close} onClick={onClose}>×</button>
+        </div>
+        {!propertyDefs.length && <div style={{ color: '#8090b8', fontSize: '0.82rem', padding: '8px 2px' }}>This project has no properties yet.</div>}
+        <div style={npe.rows}>
+          {propertyDefs.map(def => (
+            <div key={def.id} style={npe.row}>
+              <div style={npe.key}>{def.name}</div>
+              <div style={npe.val}><PropInput def={def} value={props[def.id]} onSet={v => onSet(def.id, v)} onAddOption={name => onAddOption(def.id, name)} /></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PropInput({ def, value, onSet, onAddOption }) {
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+  if (def.type === 'checkbox') return <input type="checkbox" checked={!!value} onChange={e => onSet(e.target.checked)} />
+  if (def.type === 'number') return <input type="number" value={value ?? ''} onChange={e => onSet(e.target.value === '' ? null : Number(e.target.value))} style={npe.input} />
+  if (def.type === 'date') return <input type="date" value={value ? String(value).slice(0, 10) : ''} onChange={e => onSet(e.target.value || null)} style={npe.input} />
+  if (def.type === 'url' || def.type === 'text') return <input type="text" value={value ?? ''} onChange={e => onSet(e.target.value)} style={npe.input} placeholder="—" />
+  if (def.type === 'select' || def.type === 'multiSelect') {
+    const opts = def.options || []
+    const selected = def.type === 'multiSelect' ? (Array.isArray(value) ? value : (value ? [value] : [])) : (value ? [value] : [])
+    const toggle = (id) => {
+      if (def.type === 'multiSelect') { const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); onSet([...s]) }
+      else onSet(selected[0] === id ? null : id)
+    }
+    return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+        {opts.map(o => {
+          const on = selected.includes(o.id)
+          return <button key={o.id} onClick={() => toggle(o.id)}
+            style={{ ...npe.chip, background: on ? (o.color || '#5b6af0') : 'transparent', borderColor: o.color || '#5b6af0', color: on ? '#0c0c1a' : '#c5d0ff', fontWeight: on ? 700 : 400 }}>{o.name}</button>
+        })}
+        {adding
+          ? <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && draft.trim()) { onAddOption(draft.trim()); setDraft(''); setAdding(false) } if (e.key === 'Escape') { setDraft(''); setAdding(false) } }}
+              onBlur={() => { if (draft.trim()) onAddOption(draft.trim()); setDraft(''); setAdding(false) }}
+              placeholder="new value…" style={{ ...npe.input, width: 90 }} />
+          : <button style={npe.addChip} onClick={() => setAdding(true)}>+ value</button>}
+      </div>
+    )
+  }
+  return <span style={{ color: '#8090b8' }}>—</span>
+}
+
+const npe = {
+  backdrop: { position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(4,5,14,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  panel: { width: 'min(460px, 92vw)', maxHeight: '82vh', overflow: 'auto', background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 12, padding: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.6)' },
+  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  title: { color: '#e8eeff', fontSize: '1rem', fontWeight: 700 },
+  close: { background: 'transparent', border: 'none', color: '#8090b8', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1 },
+  rows: { display: 'flex', flexDirection: 'column', gap: 10 },
+  row: { display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, alignItems: 'start' },
+  key: { color: '#8ab4ff', fontSize: '0.8rem', paddingTop: 5 },
+  val: { minWidth: 0 },
+  input: { width: '100%', background: '#0f0f22', border: '1px solid #2d3a6a', color: '#e8eeff', borderRadius: 6, padding: '5px 8px', fontSize: '0.82rem', outline: 'none' },
+  chip: { border: '1px solid', borderRadius: 100, padding: '3px 10px', fontSize: '0.76rem', cursor: 'pointer' },
+  addChip: { border: '1px dashed #3a4a8a', background: 'transparent', color: '#8ab4ff', borderRadius: 100, padding: '3px 10px', fontSize: '0.76rem', cursor: 'pointer' },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +455,7 @@ const hexLum = (hex) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
-function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, filterFn, filterKey }) {
+function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddValue, onHideNode, onEditNode, filterFn, filterKey }) {
   const svgRef = useRef(null)
   const gRef = useRef(null)
   const simRef = useRef(null)          // member bubbles sim
@@ -728,6 +811,11 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     {ctx && (<>
       <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onMouseDown={() => setCtx(null)} onContextMenu={e => { e.preventDefault(); setCtx(null) }} />
       <div style={{ position: 'fixed', left: ctx.sx, top: ctx.sy, zIndex: 41, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 200, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' }} onMouseDown={e => e.stopPropagation()}>
+        {ctx.nodeId && (
+          <div style={styles.item} onClick={() => { const c = ctx; setCtx(null); onEditNode && onEditNode(c.nodeId) }}>
+            ✎ Edit properties of “{trim(ctx.label, 16)}”
+          </div>
+        )}
         {ctx.nodeId && (
           <div style={styles.item} onClick={() => { const c = ctx; setCtx(null); onHideNode && onHideNode(c.nodeId) }}>
             Hide “{trim(ctx.label, 18)}” in this view
