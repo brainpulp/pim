@@ -2,7 +2,7 @@ import { useRef, useState, useEffect, useMemo } from 'react'
 import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
 import { saveProject } from '../lib/db'
-import { FilterBar, nodeMatchesFilter } from '../lib/filter'
+import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
 
 // Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
 // clusters. Two kinds:
@@ -33,6 +33,7 @@ export default function PackBoard({ projectId }) {
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
+  const setViewFilter = useGraphStore(s => s.setViewFilter)
   const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
 
   const svgRef = useRef(null), gRef = useRef(null), zoomRef = useRef(null)
@@ -43,6 +44,26 @@ export default function PackBoard({ projectId }) {
   const filterKey = JSON.stringify(filter)
 
   const activeView = views.find(v => v.id === activeViewId)
+
+  // Persisted filter for the active view (shared with the pack view); seed "hide done" the first time.
+  const filterInitRef = useRef(null), filterSaveRef = useRef()
+  useEffect(() => {
+    if (filterInitRef.current === activeViewId) return
+    filterInitRef.current = activeViewId
+    if (activeView?.filter) setFilter(activeView.filter)
+    else { const def = defaultDoneFilter(propertyDefs); if (def) { setFilter(def); setViewFilter(def) } else setFilter({ text: '', rules: [] }) }
+  }, [activeViewId, activeView, propertyDefs, setViewFilter])
+  useEffect(() => {
+    if (filterInitRef.current !== activeViewId) return
+    setViewFilter(filter)
+    clearTimeout(filterSaveRef.current)
+    filterSaveRef.current = setTimeout(() => {
+      if (!projectId) return
+      const s = useGraphStore.getState()
+      saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e))
+    }, 700)
+    return () => clearTimeout(filterSaveRef.current)
+  }, [filterKey]) // eslint-disable-line
 
   const decorColor = useMemo(() => {
     const np = activeView?.nodeProps || {}
@@ -278,14 +299,14 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove,
     if (e.button === 2) return
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current; const start = local(e)
-    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.key])); sim.alphaTarget(0.12).restart()
+    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.key]))   // no global reheat while dragging (avoids motion storm)
     const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
       const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
       const groups = groupsRef.current; const targetOpt = tg < 0 ? '__untagged__' : groups[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && (tg < 0 ? b.opt !== '__untagged__' : targetOpt !== b.opt)) onRetag(b.nodeId, b.opt, targetOpt, false)
-      else sim.alpha(0.3).restart()
+      else sim.alpha(0.1).restart()
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
@@ -393,7 +414,7 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove
       const id = 'v:' + v.opt; const ex = prev.get(id)
       const ang = (i / Math.max(1, values.length)) * Math.PI * 2
       const base = ex || { id, kind: 'value', x: Math.cos(ang) * 200, y: Math.sin(ang) * 200, vx: 0, vy: 0 }
-      base.opt = v.opt; base.name = v.name; base.color = v.color; base.r = Math.max(26, Math.min(46, 18 + Math.sqrt(v.name.length) * 4.5))
+      base.opt = v.opt; base.name = v.name; base.color = v.color; base.r = Math.max(52, Math.min(84, 44 + Math.sqrt(v.name.length) * 4.5))   // ~2x a leaf
       return base
     })
     const vById = new Map(vnodes.map(v => [v.opt, v]))
@@ -426,15 +447,25 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove
     if (e.button === 2) return
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current; const start = local(e)
-    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.id])); sim.alphaTarget(0.12).restart()
+    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.id]))   // no global reheat while dragging (avoids motion storm)
     const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
       const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
       const vals = valuesRef.current; const targetOpt = tg < 0 ? '__untagged__' : vals[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && targetOpt !== b.opt) onRetag(b.nodeId, b.opt, targetOpt, false)
-      else sim.alpha(0.3).restart()
+      else sim.alpha(0.1).restart()
     }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  // Drag a value hub (parent) → it stays pinned where dropped; its leaves follow via the link force.
+  const startValueDrag = (e, v) => {
+    if (e.button === 2) return
+    e.preventDefault(); e.stopPropagation()
+    const sim = simRef.current
+    v.fx = v.x; v.fy = v.y; sim.alphaTarget(0.15).restart()
+    const move = ev => { const p = local(ev); v.fx = p.x; v.fy = p.y; v.x = p.x; v.y = p.y; setTick(t => t + 1) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); sim.alphaTarget(0) }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
   const startHeadDrag = (e) => {
@@ -477,13 +508,14 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove
       {/* value nodes (1st generation) */}
       {values.map(v => {
         const isT = dragging && hover != null && values[hover] === v
+        const vf = Math.max(12, Math.min(20, v.r * 0.26))
         return (
-          <g key={v.id} pointerEvents="none" transform={`translate(${v.x},${v.y})`}>
-            <circle r={v.r} fill={v.color + '2a'} stroke={isT ? '#7fd8a8' : v.color} strokeWidth={isT ? 3.5 : 2.4} />
-            <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fontWeight={800} fill={isT ? '#7fd8a8' : '#e8eeff'}
+          <g key={v.id} data-bubble="1" transform={`translate(${v.x},${v.y})`} style={{ cursor: 'grab' }} onMouseDown={e => startValueDrag(e, v)}>
+            <circle r={v.r} fill={v.color + '2a'} stroke={isT ? '#7fd8a8' : v.color} strokeWidth={isT ? 4 : 3} />
+            <text textAnchor="middle" dominantBaseline="middle" fontSize={vf} fontWeight={800} fill={isT ? '#7fd8a8' : '#e8eeff'} pointerEvents="none"
               style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>
-              {wrapText(v.name, 9).slice(0, 2).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * 13 - 4}>{ln}</tspan>)}
-              <tspan x={0} y={12} fontSize={10} fillOpacity={0.85}>· {countByOpt[v.opt] || 0}</tspan>
+              {wrapText(v.name, 11).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * (vf * 1.05) - vf * 0.5}>{ln}</tspan>)}
+              <tspan x={0} y={vf * 1.4} fontSize={vf * 0.75} fillOpacity={0.85}>· {countByOpt[v.opt] || 0}</tspan>
             </text>
           </g>
         )

@@ -2,7 +2,8 @@ import { useMemo, useState, useRef, useEffect } from 'react'
 import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
 import { saveProject, saveProjectToNotion } from '../lib/db'
-import { buildTree } from '../lib/hierarchy'
+import { buildTree, buildNestedTagTree } from '../lib/hierarchy'
+import { defaultDoneFilter } from '../lib/filter'
 
 // Two packing modes share one shell:
 //  • Hierarchy (edges) → deterministic zoomable circle-pack (ref: mbostock/1747543).
@@ -29,12 +30,37 @@ export default function PackView({ projectId }) {
 
   const [sizeBy, setSizeBy] = useState(null)         // null = size by item count, else Number propId
   const [groupProp, setGroupProp] = useState(null)   // null = edge hierarchy, else group-by-tag propId
+  const [groupProp2, setGroupProp2] = useState(null) // optional 2nd-level grouping → nested deterministic pack
   const [menuOpen, setMenuOpen] = useState(false)
   const [srcMenu, setSrcMenu] = useState(false)
+  const [srcMenu2, setSrcMenu2] = useState(false)
   const [notionSave, setNotionSave] = useState(null)   // null | 'saving' | result string
+  const setViewFilter = useGraphStore(s => s.setViewFilter)
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
   const [editNodeId, setEditNodeId] = useState(null)   // node whose properties are being edited
+  // Load the persisted filter for the active view (or seed a "hide done" default the first time).
+  const filterInitRef = useRef(null)
+  useEffect(() => {
+    if (filterInitRef.current === activeViewId) return
+    filterInitRef.current = activeViewId
+    const v = views.find(x => x.id === activeViewId)
+    if (v?.filter) setFilter(v.filter)
+    else { const def = defaultDoneFilter(propertyDefs); if (def) { setFilter(def); setViewFilter(def) } else setFilter({ text: '', rules: [] }) }
+  }, [activeViewId, views, propertyDefs, setViewFilter])
+  // Persist filter edits to the view (store now, DB debounced) so they survive reloads + sync.
+  const filterSaveRef = useRef()
+  useEffect(() => {
+    if (filterInitRef.current !== activeViewId) return   // don't persist during the load above
+    setViewFilter(filter)
+    clearTimeout(filterSaveRef.current)
+    filterSaveRef.current = setTimeout(() => {
+      if (!projectId) return
+      const s = useGraphStore.getState()
+      saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e))
+    }, 700)
+    return () => clearTimeout(filterSaveRef.current)
+  }, [filterKey]) // eslint-disable-line
   const notionLinked = views.some(v => v.notionDatabaseId)
 
   const handleSaveNotion = async () => {
@@ -123,14 +149,23 @@ export default function PackView({ projectId }) {
   const handleHideNode = (nodeId) => { setNodeViewProp(nodeId, 'visible', false); persist() }
   const nodeVisible = (id) => (views.find(v => v.id === activeViewId)?.nodeProps?.[id]?.visible !== false)
 
-  // ── Hierarchy (edges) mode: deterministic zoomable pack ─────────────────────
+  // Nested grouping (project › status): two tag properties → deterministic nested circle pack.
+  const nested = !!(groupProp && groupProp2 && groupProp !== groupProp2 &&
+    rawGroupDef?.type !== 'date' && propertyDefs.find(d => d.id === groupProp2)?.type !== 'date')
+  // ── Hierarchy (edges) mode / nested-tags mode: deterministic zoomable pack ───
   const root = useMemo(() => {
-    if (groupProp) return null
     const fnodes = nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs))
+    if (nested) {
+      const defA = propertyDefs.find(d => d.id === groupProp), defB = propertyDefs.find(d => d.id === groupProp2)
+      const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy })
+      const h = d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => (b.value || 0) - (a.value || 0))
+      return d3.pack().size([D, D]).padding(6)(h)
+    }
+    if (groupProp) return null
     const tree = buildTree(fnodes, edges, { decorOf, sizeBy })
     const h = d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => (b.value || 0) - (a.value || 0))
     return d3.pack().size([D, D]).padding(3)(h)
-  }, [nodes, edges, decorOf, sizeBy, groupProp, filterKey, propertyDefs]) // eslint-disable-line
+  }, [nodes, edges, decorOf, sizeBy, groupProp, groupProp2, nested, filterKey, propertyDefs]) // eslint-disable-line
   const descendants = root ? root.descendants() : []
   const colorFor = (d) => d.data.color || DEPTH_FILL[Math.min(d.depth, DEPTH_FILL.length - 1)]
 
@@ -280,8 +315,21 @@ export default function PackView({ projectId }) {
             </div>
           </>)}
         </div>
-        {false && (
-          <div style={{ position: 'relative' }} />
+        {/* Secondary "then by" grouping → nested circle pack (only for a tag primary, not date/hierarchy). */}
+        {groupProp && rawGroupDef?.type !== 'date' && tagDefs.length > 1 && (
+          <div style={{ position: 'relative' }}>
+            <button style={styles.btn} onClick={() => setSrcMenu2(o => !o)}>then ▸ {trim(groupProp2 ? (propertyDefs.find(d => d.id === groupProp2)?.name || 'tag') : 'none', 12)} ▾</button>
+            {srcMenu2 && (<>
+              <div style={styles.backdrop} onClick={() => setSrcMenu2(false)} />
+              <div style={styles.menu} onClick={e => e.stopPropagation()}>
+                <div style={{ ...styles.item, color: !groupProp2 ? '#fff' : '#c5d0ff' }} onClick={() => { setGroupProp2(null); setSrcMenu2(false) }}>{!groupProp2 && '✓ '}None</div>
+                <div style={styles.mlabel}>Then group by</div>
+                {tagDefs.filter(d => d.id !== groupProp).map(d => (
+                  <div key={d.id} style={{ ...styles.item, color: groupProp2 === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setGroupProp2(d.id); setSrcMenu2(false) }}>{groupProp2 === d.id && '✓ '}{d.name}</div>
+                ))}
+              </div>
+            </>)}
+          </div>
         )}
         {notionLinked && (
           <button style={styles.notionSaveBtn} onClick={handleSaveNotion} disabled={notionSave === 'saving'}
@@ -290,10 +338,10 @@ export default function PackView({ projectId }) {
           </button>
         )}
       </div>
-      <div style={styles.hint}>{groupProp ? 'drag an item onto another pack to retag · Alt-drag to add a 2nd tag · scroll = zoom · drag empty = pan' : 'scroll = zoom · drag = pan · click a circle to zoom'}</div>
+      <div style={styles.hint}>{nested ? 'nested packs (explore view) · click a circle to zoom · scroll = zoom · drag = pan' : groupProp ? 'drag an item onto another pack to retag · Alt-drag to add a 2nd tag · scroll = zoom · drag empty = pan' : 'scroll = zoom · drag = pan · click a circle to zoom'}</div>
 
       <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
-      {groupProp ? (
+      {groupProp && !nested ? (
         <TagPackForce key={groupProp} def={groupDef} nodes={nodes} decorOf={decorOf} onRetagMany={retagMany}
           onCreateNode={handleCreateNode} onAddValue={handleAddValue} onHideNode={handleHideNode} onEditNode={setEditNodeId}
           filterFn={n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)}
@@ -825,7 +873,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const onMove = ev => {
       const p = toWorld(ev)
       if (!moved && Math.hypot(p.x - start.x, p.y - start.y) > 5) {
-        moved = true; sim.alphaTarget(0.12).restart(); setHeldKeys(new Set(keys))   // gentle reheat — no motion storm
+        moved = true; setHeldKeys(new Set(keys))   // NO global reheat while dragging → no motion storm; settle only on drop
       }
       if (moved) {
         offs.forEach(o => { o.b.fx = p.x + o.dx; o.b.fy = p.y + o.dy; o.b.x = o.b.fx; o.b.y = o.b.fy })
@@ -847,7 +895,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
         .map(o => ({ nodeId: o.b.nodeId, sourceOpt: o.b.opt }))
         .filter(it => tg < 0 ? it.sourceOpt !== '__untagged__' : (targetOpt !== it.sourceOpt || additive))
       if (list.length) { onRetagMany(list, targetOpt, additive) }
-      else sim.alpha(0.4).restart()
+      else sim.alpha(0.1).restart()   // tiny settle so it eases back into its pack; no big storm
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)

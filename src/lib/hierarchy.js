@@ -56,3 +56,32 @@ export function buildTagTree(nodes, def, { decorOf, sizeBy } = {}) {
   if (untagged.children.length) children.push(untagged)
   return { id: '__root__', label: '', color: null, children }
 }
+
+// Two-level grouping: root → A options → B options → member nodes. Nodes missing a value fall into
+// an "(untagged)" bucket at that level. Multi-value nodes appear under each combination (mirrors).
+export function buildNestedTagTree(nodes, defA, defB, { decorOf, sizeBy } = {}) {
+  if (!defA) return { id: '__root__', label: '', children: [] }
+  const valueOf = (n) => { if (sizeBy) { const v = Number(n?.props?.[sizeBy]); if (Number.isFinite(v) && v > 0) return v } return 1 }
+  const valsFor = (n, def) => {
+    const raw = n.props?.[def.id]
+    const ids = Array.isArray(raw) ? raw.filter(Boolean) : (raw != null && raw !== '' ? [raw] : [])
+    const valid = ids.filter(id => (def.options || []).some(o => o.id === id))
+    return valid.length ? valid : ['__untagged__']
+  }
+  const nameOf = (def, id) => id === '__untagged__' ? '(untagged)' : ((def.options || []).find(o => o.id === id)?.name || id)
+  const colorOf = (def, id) => id === '__untagged__' ? '#3a4358' : ((def.options || []).find(o => o.id === id)?.color || null)
+  const outer = new Map()
+  nodes.forEach(n => {
+    valsFor(n, defA).forEach(a => {
+      if (!outer.has(a)) outer.set(a, { id: 'a:' + a, label: nameOf(defA, a), color: colorOf(defA, a), _inner: new Map() })
+      const oNode = outer.get(a)
+      valsFor(n, defB).forEach(b => {
+        const key = b
+        if (!oNode._inner.has(key)) oNode._inner.set(key, { id: 'a:' + a + '|b:' + b, label: nameOf(defB, b), color: colorOf(defB, b), children: [] })
+        oNode._inner.get(key).children.push({ id: n.id + '@' + a + '|' + b, label: n.label || '(untitled)', ...(decorOf?.(n.id) || {}), value: valueOf(n) })
+      })
+    })
+  })
+  const children = [...outer.values()].map(o => ({ id: o.id, label: o.label, color: o.color, children: [...o._inner.values()] }))
+  return { id: '__root__', label: '', color: null, children: children.length ? children : [{ id: '__empty__', label: '(empty)', value: 1 }] }
+}

@@ -544,6 +544,11 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, boardSystems: systems } : v),
   })),
 
+  // Pack/board property filter, persisted on the active view (survives reload + syncs across devices).
+  setViewFilter: (filter) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, filter } : v),
+  })),
+
   setViewPan: (x, y, k) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, pan: { x, y, k } }),
   })),

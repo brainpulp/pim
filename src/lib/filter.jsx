@@ -14,6 +14,18 @@ export const OPS = {
 }
 export const needsValue = (op) => !['is empty', 'not empty', 'checked', 'unchecked'].includes(op)
 
+// Default filter when a view has none yet: hide items whose status/select is "done" (any language),
+// if such an option exists. Returns a filter object or null.
+const DONE_RE = /^(done|hecho|hecha|completado|completada|listo|lista|finalizado|finalizada|terminado|terminada|closed|cerrado)$/i
+export function defaultDoneFilter(propertyDefs) {
+  for (const d of propertyDefs || []) {
+    if (d.type !== 'select' && d.type !== 'multiSelect') continue
+    const opt = (d.options || []).find(o => DONE_RE.test((o.name || '').trim()))
+    if (opt) return { text: '', rules: [{ propId: d.id, op: d.type === 'multiSelect' ? 'not contains' : 'is not', value: opt.id }] }
+  }
+  return null
+}
+
 export function ruleMatches(node, rule, def) {
   const v = node.props?.[rule.propId]
   const empty = v == null || v === '' || (Array.isArray(v) && v.length === 0)
