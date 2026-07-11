@@ -559,6 +559,11 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, colorBy } : v),
   })),
 
+  // Board pan/zoom transform, persisted on the active view so it restores on reload.
+  setViewBoardTf: (boardTf) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, boardTf } : v),
+  })),
+
   setViewPan: (x, y, k) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, pan: { x, y, k } }),
   })),

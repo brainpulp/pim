@@ -137,6 +137,17 @@ export default function PackBoard({ projectId }) {
     else setSystems([])
   }, [activeViewId]) // eslint-disable-line
 
+  // Restore the saved pan/zoom for this view (once per view).
+  const tfRestoreRef = useRef(null)
+  useEffect(() => {
+    if (tfRestoreRef.current === activeViewId) return
+    const bt = activeView?.boardTf
+    if (!zoomRef.current || !svgRef.current) return
+    tfRestoreRef.current = activeViewId
+    const t = bt ? d3.zoomIdentity.translate(bt.x, bt.y).scale(bt.k) : d3.zoomIdentity
+    d3.select(svgRef.current).call(zoomRef.current.transform, t); setTf(t)
+  }, [activeViewId, activeView]) // eslint-disable-line
+
   const persist = (next) => {
     if (!projectId) return
     const s = useGraphStore.getState()
@@ -147,12 +158,21 @@ export default function PackBoard({ projectId }) {
   const commit = (next) => { setSystems(next); setBoardSystems(next); persist(next) }
   const systemsRef = useRef(systems); systemsRef.current = systems   // live copy for handlers (avoid stale closures)
 
+  const setViewBoardTf = useGraphStore(s => s.setViewBoardTf)
+  const tfSaveRef = useRef()
   useEffect(() => {
     if (!svgRef.current) return
     const sel = d3.select(svgRef.current)
-    const zoom = d3.zoom().scaleExtent([0.15, 4])
+    const zoom = d3.zoom().scaleExtent([0.06, 4])
       .filter(e => { if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-syshead]')) return false; return !e.ctrlKey && !e.button })
-      .on('zoom', e => setTf(e.transform))
+      .on('zoom', e => {
+        setTf(e.transform)
+        if (e.sourceEvent) {   // only persist real user pans/zooms (not our programmatic restore)
+          setViewBoardTf({ x: e.transform.x, y: e.transform.y, k: e.transform.k })
+          clearTimeout(tfSaveRef.current)
+          tfSaveRef.current = setTimeout(() => { const s = useGraphStore.getState(); if (projectId) saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(() => {}) }, 800)
+        }
+      })
     zoomRef.current = zoom; sel.call(zoom)
     return () => sel.on('.zoom', null)
   }, [])
@@ -406,7 +426,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
       b.fx = null; b.fy = null
       const groups = groupsRef.current; const targetOpt = tg < 0 ? '__untagged__' : groups[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && (tg < 0 ? b.opt !== '__untagged__' : targetOpt !== b.opt)) onRetag(b.nodeId, b.opt, targetOpt, false)
-      else sim.alpha(0.1).restart()
+      // dropped in place, no retag → leave it where dropped, NO sim restart (this was the child-move storm)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
@@ -569,7 +589,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
       const vals = valuesRef.current; const targetOpt = tg < 0 ? '__untagged__' : vals[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && targetOpt !== b.opt) onRetag(b.nodeId, b.opt, targetOpt, false)
-      else sim.alpha(0.1).restart()
+      // dropped in place, no retag → leave it where dropped, NO sim restart (this was the child-move storm)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
