@@ -3,6 +3,7 @@ import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
 import { saveProject } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
+import { buildNestedTagTree } from '../lib/hierarchy'
 import NodePropsEditor from '../components/NodePropsEditor'
 
 // Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
@@ -218,6 +219,14 @@ export default function PackBoard({ projectId }) {
   const switchView = (id) => { setActiveView(id); saveAll() }
   const setBoardColorBy = (propId) => { setViewColorBy(propId); saveAll() }
 
+  // Set several properties on a node at once (used by nested-pack drop → sets outer + inner).
+  const retagMulti = (nodeId, assignments) => {
+    assignments.forEach(({ propId, value }) => {
+      const def = propertyDefs.find(d => d.id === propId); if (!def) return
+      setNodeProp(nodeId, propId, def.type === 'multiSelect' ? (value ? [value] : []) : (value || null))
+    })
+    saveAll()
+  }
   // Hide a set of nodes in the active view (used by the parent-hub "Hide items" action).
   const hideNodes = (ids) => {
     ids.forEach(id => setNodeViewProp(id, 'visible', false))
@@ -267,7 +276,8 @@ export default function PackBoard({ projectId }) {
         <svg ref={svgRef} style={styles.svg}>
           <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
             {systems.map(sys => {
-              const def = propertyDefs.find(d => d.id === sys.propId)
+              const groupBy = (sys.groupBy && sys.groupBy.length) ? sys.groupBy : [sys.propId]
+              const def = propertyDefs.find(d => d.id === groupBy[0])
               if (!def) return null
               const common = {
                 key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
@@ -278,10 +288,15 @@ export default function PackBoard({ projectId }) {
                 colorMode: sys.colorBy !== undefined ? sys.colorBy : (activeView?.colorBy || null),
                 sizeMode: sys.sizeBy || null, propertyDefs,
                 onEditNode: setEditNodeId,
-                onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
                 onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
               }
-              return sys.kind === 'tree' ? <TreeCluster {...common} /> : <Cluster {...common} />
+              // Two+ grouping levels on a pack → deterministic nested circle pack (sub-packs inside packs).
+              const groupDefs = groupBy.map(id => propertyDefs.find(d => d.id === id)).filter(Boolean)
+              if (sys.kind !== 'tree' && groupDefs.length >= 2) {
+                return <NestedPackCluster {...common} groupDefs={groupDefs} onRetagMulti={retagMulti} />
+              }
+              const single = { ...common, onRetag: (nid, so, to, add) => retag(groupBy[0], nid, so, to, add), onHideNodes: hideNodes }
+              return sys.kind === 'tree' ? <TreeCluster {...single} /> : <Cluster {...single} />
             })}
           </g>
         </svg>
@@ -681,6 +696,108 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
   )
 }
 
+// Deterministic NESTED circle pack: outer packs = groupDefs[0] values, inner sub-packs = groupDefs[1]
+// values, then item leaves. Explore + drag-to-retag: dropping a leaf on a sub-pack sets BOTH the
+// outer and inner property to that sub-pack's (a,b); dropping on empty space clears the outer value.
+const NP_D = 1000
+function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, filterFn, clusterFilterKey, selected, onSelect, onEditNode, onRetagMulti, onMove, onCommitMove, onRemove }) {
+  const [, setTick] = useState(0)
+  const [drag, setDrag] = useState(null)   // { id, x, y } in pack-local coords while dragging a leaf
+  const [defA, defB] = groupDefs
+  const structureKey = useMemo(() =>
+    nodes.map(n => n.id + JSON.stringify([n.props?.[defA.id], n.props?.[defB.id]]) + ':' + (n.label || '')).join(';')
+    + '#' + [defA, defB].map(d => d.id + ':' + (d.options || []).length).join('|') + '#' + clusterFilterKey + '#' + (colorMode || '') + '#' + (sizeMode || ''),
+    [nodes, defA, defB, clusterFilterKey, colorMode, sizeMode]) // eslint-disable-line
+  const root = useMemo(() => {
+    const fnodes = nodes.filter(n => !filterFn || filterFn(n))
+    const numDomain = (sizeMode && sizeMode !== 'style') ? domainOf(fnodes, sizeMode) : null
+    const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy: (sizeMode && sizeMode !== 'style') ? sizeMode : undefined })
+    const h = d3.hierarchy(tree).sum(d => d.value || 1).sort((a, b) => (b.value || 0) - (a.value || 0))
+    d3.pack().size([NP_D, NP_D]).padding(10)(h)
+    void numDomain
+    return h
+  }, [structureKey]) // eslint-disable-line
+
+  const off = NP_D / 2
+  const local = (ev) => { const p = toWorld(ev); return { x: p.x - (sys.x - off), y: p.y - (sys.y - off) } }
+  const startHeadDrag = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const p0 = toWorld(e); const ox = sys.x - p0.x, oy = sys.y - p0.y; let moved = false
+    const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 3) moved = true; onMove(sys.id, p.x + ox, p.y + oy) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (moved) onCommitMove(); else onSelect && onSelect() }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const dropTargetAt = (p) => {   // which (a,b) or (a) circle is the point over?
+    let bHit = null, aHit = null
+    root.descendants().forEach(d => {
+      if (d.depth === 2 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) bHit = d
+      else if (d.depth === 1 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) aHit = d
+    })
+    return bHit || aHit || null
+  }
+  const startLeafDrag = (e, leaf) => {
+    if (e.button === 2) return
+    e.preventDefault(); e.stopPropagation()
+    const start = local(e); setDrag({ id: leaf.data.id, x: leaf.x, y: leaf.y })
+    const move = ev => { const p = local(ev); setDrag({ id: leaf.data.id, x: p.x, y: p.y }) }
+    const up = ev => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      const p = local(ev); setDrag(null)
+      if (Math.hypot(p.x - start.x, p.y - start.y) < 4) return
+      const nodeId = leaf.data.id.split('@')[0]
+      const tgt = dropTargetAt(p)
+      if (!tgt) { onRetagMulti(nodeId, [{ propId: defA.id, value: null }]); return }
+      if (tgt.depth === 2) { const m = /^a:(.*)\|b:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1] === '__untagged__' ? null : m[1] }, { propId: defB.id, value: m[2] === '__untagged__' ? null : m[2] }]) }
+      else { const m = /^a:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1] === '__untagged__' ? null : m[1] }]) }
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+
+  const nodes_ = root.descendants()
+  const aNodes = nodes_.filter(d => d.depth === 1)
+  const bNodes = nodes_.filter(d => d.depth === 2)
+  const leaves = nodes_.filter(d => d.depth === 3)
+  const dropB = drag ? dropTargetAt(drag) : null
+  const headY = -20
+
+  return (
+    <g transform={`translate(${sys.x - off},${sys.y - off})`}>
+      <ClusterHeader def={{ name: groupDefs.map(d => d.name).join(' › ') }} kind="pack" cx={off} y={headY} zoomK={zoomK} hasFilter={false} selected={selected} onHead={startHeadDrag} onRemove={onRemove} />
+      {aNodes.map(a => (
+        <g key={a.data.id} pointerEvents="none">
+          <circle cx={a.x} cy={a.y} r={a.r} fill="none" stroke={(a.data.color || '#5b6af0') + '99'} strokeWidth={2} strokeDasharray="6 5" />
+          <text x={a.x} y={a.y - a.r - 6} textAnchor="middle" fontSize={zfont(15, zoomK, 12, 30)} fontWeight={800} fill={a.data.color || '#c5d0ff'}
+            style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 5, strokeLinejoin: 'round' }}>{a.data.label}</text>
+        </g>
+      ))}
+      {bNodes.map(b => {
+        const isT = dropB === b
+        return (
+          <g key={b.data.id} pointerEvents="none">
+            <circle cx={b.x} cy={b.y} r={b.r} fill={(b.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (b.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 1.8} />
+            <text x={b.x} y={b.y - b.r - 3} textAnchor="middle" fontSize={zfont(12, zoomK, 10, 22)} fontWeight={700} fill={isT ? '#7fd8a8' : '#c5d0ff'}
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>{b.data.label}</text>
+          </g>
+        )
+      })}
+      {leaves.map(l => {
+        const nodeId = l.data.id.split('@')[0]
+        const node = nodes.find(n => n.id === nodeId)
+        const dec = l.data
+        const bColor = l.parent?.data?.color || '#6b7394'
+        const isDrag = drag?.id === l.data.id
+        const x = isDrag ? drag.x : l.x, y = isDrag ? drag.y : l.y
+        const shape = dec.shape || 'circle'
+        const baseR = Math.max(9, l.r - 2)
+        const b = { x, y, label: dec.label, color: resolveColor(colorMode, node, dec, bColor, propertyDefs), decor: dec, shape, baseR, r: baseR }
+        return <LeafNode key={l.data.id} b={b} held={isDrag} onDown={e => startLeafDrag(e, l)}
+          onContext={e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(nodeId) }}
+          onDbl={e => { e.stopPropagation(); onEditNode && onEditNode(nodeId) }} />
+      })}
+    </g>
+  )
+}
+
 // Shared draggable header chip for a cluster.
 function ClusterHeader({ def, kind, cx, y, zoomK, hasFilter, selected, onHead, onRemove }) {
   const glyph = kind === 'tree' ? '⌥' : '◎'
@@ -754,6 +871,37 @@ function Bubble({ b, held, onDown, onContext, onDbl }) {
   )
 }
 
+// Drag-to-reorder list of grouping properties (nesting order). Up to 2 levels for now.
+function GroupByList({ groupBy, tagDefs, onChange }) {
+  const [dragIdx, setDragIdx] = useState(null)
+  const list = groupBy.length ? groupBy : []
+  const available = tagDefs.filter(d => !list.includes(d.id))
+  const move = (from, to) => { const a = [...list]; const [x] = a.splice(from, 1); a.splice(to, 0, x); onChange(a) }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {list.map((pid, i) => {
+        const d = tagDefs.find(x => x.id === pid)
+        return (
+          <div key={pid} draggable
+            onDragStart={() => setDragIdx(i)} onDragEnd={() => setDragIdx(null)}
+            onDragOver={e => e.preventDefault()} onDrop={() => { if (dragIdx != null && dragIdx !== i) move(dragIdx, i); setDragIdx(null) }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: dragIdx === i ? '#1b2350' : '#12122a', border: '1px solid #2d3a6a', borderRadius: 6, padding: '5px 8px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'grab' }}>
+            <span style={{ color: '#7080a0' }}>⠿</span>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i === 0 ? '' : '↳ '}{d?.name || pid}</span>
+            {list.length > 1 && <span onClick={() => onChange(list.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: '#f87171' }}>×</span>}
+          </div>
+        )
+      })}
+      {available.length > 0 && list.length < 2 && (
+        <select value="" onChange={e => { if (e.target.value) onChange([...list, e.target.value]) }} style={{ ...insp.sel, borderStyle: 'dashed' }}>
+          <option value="">+ nest by another property…</option>
+          {available.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      )}
+    </div>
+  )
+}
+
 // Right-docked settings panel for the selected cluster — the single home for its grouping, colour,
 // size, and filter. Replaces the old floating margin panels.
 function ClusterInspector({ sys, propertyDefs, tagDefs, numberDefs, dateDefs, onConfig, onFilter, onRemove, onClose }) {
@@ -775,10 +923,13 @@ function ClusterInspector({ sys, propertyDefs, tagDefs, numberDefs, dateDefs, on
       </div>
 
       <div style={insp.section}>
-        <div style={insp.label}>Group by</div>
-        <select value={sys.propId} onChange={e => onConfig({ propId: e.target.value })} style={insp.sel}>
-          {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
+        <div style={insp.label}>Group by{sys.kind !== 'tree' ? ' · drag to nest' : ''}</div>
+        {sys.kind === 'tree'
+          ? <select value={sys.propId} onChange={e => onConfig({ propId: e.target.value, groupBy: [e.target.value] })} style={insp.sel}>
+              {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          : <GroupByList groupBy={(sys.groupBy && sys.groupBy.length) ? sys.groupBy : [sys.propId]} tagDefs={tagDefs}
+              onChange={list => onConfig({ groupBy: list, propId: list[0] })} />}
       </div>
 
       <div style={insp.section}>
