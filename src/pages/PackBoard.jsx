@@ -74,10 +74,10 @@ export default function PackBoard({ projectId }) {
   const [adding, setAdding] = useState(false)
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
-  const [filterFor, setFilterFor] = useState(null)   // system id whose per-cluster filter panel is open
-  const [configFor, setConfigFor] = useState(null)   // system id whose config dropdown is open
+  const [selectedSys, setSelectedSys] = useState(null)   // cluster shown in the right-docked inspector
   const [editNodeId, setEditNodeId] = useState(null) // node whose properties are being edited (right-click)
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
+  const dateDefs = propertyDefs.filter(d => d.type === 'date')
 
   const activeView = views.find(v => v.id === activeViewId)
   const colorByDef = activeView?.colorBy ? propertyDefs.find(d => d.id === activeView.colorBy) : null
@@ -208,115 +208,80 @@ export default function PackBoard({ projectId }) {
     () => nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
     [nodes, activeView, filterKey, propertyDefs]) // eslint-disable-line
 
+  const selSys = systems.find(s => s.id === selectedSys) || null
+
   return (
     <div style={styles.wrap} onContextMenu={e => e.preventDefault()}>
-      <div style={styles.toolbar}>
-        <div style={{ position: 'relative' }}>
-          <button style={styles.addBtn} onClick={() => setAdding(o => !o)} disabled={!tagDefs.length}>+ Add</button>
-          {adding && (<>
-            <div style={styles.backdrop} onClick={() => setAdding(false)} />
-            <div style={styles.menu} onClick={e => e.stopPropagation()}>
-              {!tagDefs.length && <div style={{ ...styles.item, color: '#8090b8' }}>No Select/Tags property</div>}
-              {tagDefs.length > 0 && <>
-                <div style={styles.mlabel}>◎ Circle pack — group by</div>
-                {tagDefs.map(d => (<div key={'p' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
-                <div style={{ ...styles.mlabel, marginTop: 4 }}>⌥ Property tree — branch by</div>
-                {tagDefs.map(d => (<div key={'t' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'tree')}>{d.name}</div>))}
-              </>}
+      <div style={styles.main}>
+        <div style={styles.toolbar}>
+          <div style={{ position: 'relative' }}>
+            <button style={styles.addBtn} onClick={() => setAdding(o => !o)} disabled={!tagDefs.length}>+ Add</button>
+            {adding && (<>
+              <div style={styles.backdrop} onClick={() => setAdding(false)} />
+              <div style={styles.menu} onClick={e => e.stopPropagation()}>
+                {!tagDefs.length && <div style={{ ...styles.item, color: '#8090b8' }}>No Select/Tags property</div>}
+                {tagDefs.length > 0 && <>
+                  <div style={styles.mlabel}>◎ Circle pack — group by</div>
+                  {tagDefs.map(d => (<div key={'p' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
+                  <div style={{ ...styles.mlabel, marginTop: 4 }}>⌥ Property tree — branch by</div>
+                  {tagDefs.map(d => (<div key={'t' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'tree')}>{d.name}</div>))}
+                </>}
+              </div>
+            </>)}
+          </div>
+          <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
+          {views.map(v => (
+            <div key={v.id} title="Click to switch · double-click to rename"
+              style={{ ...styles.viewPill, ...(v.id === activeViewId ? styles.viewPillActive : {}) }}
+              onClick={() => switchView(v.id)}
+              onDoubleClick={() => { const nm = prompt('Rename view', v.name); if (nm && nm.trim()) { renameView(v.id, nm.trim()); saveAll() } }}>
+              <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</span>
+              {views.length > 1 && <span style={styles.viewX} onClick={e => { e.stopPropagation(); if (confirm(`Delete view “${v.name}”?`)) { deleteView(v.id); saveAll() } }}>×</span>}
             </div>
-          </>)}
+          ))}
+          <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate view">⧉</button>
+          <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
+          <span style={{ color: '#8090b8', fontSize: '0.72rem', marginLeft: 'auto' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header to inspect · drag to move</span>
         </div>
-        <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
-        {tagDefs.length > 0 && (
-          <select value={activeView?.colorBy || ''} onChange={e => setBoardColorBy(e.target.value || null)} title="Colour nodes by a property"
-            style={{ background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '5px 8px', cursor: 'pointer', fontSize: '0.76rem', maxWidth: 170 }}>
-            <option value="">🎨 colour: value</option>
-            {tagDefs.map(d => <option key={d.id} value={d.id}>🎨 colour: {d.name}</option>)}
-          </select>
+        {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
+        <svg ref={svgRef} style={styles.svg}>
+          <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
+            {systems.map(sys => {
+              const def = propertyDefs.find(d => d.id === sys.propId)
+              if (!def) return null
+              const common = {
+                key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
+                filterFn: (n) => nodeMatchesFilter(n, sys.filter || { text: '', rules: [] }, propertyDefs),
+                clusterFilterKey: JSON.stringify(sys.filter || {}),
+                hasFilter: !!(sys.filter?.text || sys.filter?.rules?.length),
+                selected: selectedSys === sys.id, onSelect: () => setSelectedSys(sys.id),
+                colorMode: sys.colorBy !== undefined ? sys.colorBy : (activeView?.colorBy || null),
+                sizeMode: sys.sizeBy || null, propertyDefs,
+                onEditNode: setEditNodeId,
+                onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
+                onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
+              }
+              return sys.kind === 'tree' ? <TreeCluster {...common} /> : <Cluster {...common} />
+            })}
+          </g>
+        </svg>
+        {editNodeId && (
+          <NodePropsEditor
+            node={nodes.find(n => n.id === editNodeId)}
+            propertyDefs={propertyDefs}
+            onSet={(propId, value) => { setNodeProp(editNodeId, propId, value); saveAll() }}
+            onAddOption={(propId, name) => addSelectOption(propId, name)}
+            onClose={() => setEditNodeId(null)}
+          />
         )}
-        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · drag a header to move · scroll = zoom</span>
       </div>
-      {/* Board view manager — switch/create/rename/delete views (shared across tabs; each view keeps its own board layout + filter). */}
-      <div style={styles.viewBar}>
-        <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0', marginRight: 2 }}>VIEWS</span>
-        {views.map(v => (
-          <div key={v.id} title="Click to switch · double-click to rename"
-            style={{ ...styles.viewPill, ...(v.id === activeViewId ? styles.viewPillActive : {}) }}
-            onClick={() => switchView(v.id)}
-            onDoubleClick={() => { const nm = prompt('Rename view', v.name); if (nm && nm.trim()) { renameView(v.id, nm.trim()); saveAll() } }}>
-            <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</span>
-            {views.length > 1 && <span style={styles.viewX} onClick={e => { e.stopPropagation(); if (confirm(`Delete view “${v.name}”?`)) { deleteView(v.id); saveAll() } }}>×</span>}
-          </div>
-        ))}
-        <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate this view">⧉</button>
-        <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
-      </div>
-      {filterFor && (() => {
-        const sys = systems.find(s => s.id === filterFor); if (!sys) return null
-        const def = propertyDefs.find(d => d.id === sys.propId)
-        return (
-          <div style={styles.clusterFilterBar}>
-            <span style={{ fontSize: '0.7rem', color: '#8ab4ff', fontWeight: 700 }}>Filter “{def?.name || 'cluster'}”</span>
-            <FilterBar filter={sys.filter || { text: '', rules: [] }} setFilter={upd => setSystemFilter(sys.id, typeof upd === 'function' ? upd(sys.filter || { text: '', rules: [] }) : upd)} propertyDefs={propertyDefs} />
-            <button style={styles.viewAdd} onClick={() => setFilterFor(null)}>done</button>
-          </div>
-        )
-      })()}
-      {configFor && (() => {
-        const sys = systems.find(s => s.id === configFor); if (!sys) return null
-        const def = propertyDefs.find(d => d.id === sys.propId)
-        return (
-          <div style={styles.configPanel}>
-            <div style={{ fontSize: '0.72rem', color: '#8ab4ff', fontWeight: 700, marginBottom: 2 }}>{def?.name || 'Cluster'} settings</div>
-            <label style={styles.cfgRow}><span style={styles.cfgKey}>Colour</span>
-              <select value={sys.colorBy ?? ''} onChange={e => setSystemConfig(sys.id, { colorBy: e.target.value || null })} style={styles.cfgSel}>
-                <option value="">by group value</option>
-                <option value="style">Style (node's own)</option>
-                {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </label>
-            <label style={styles.cfgRow}><span style={styles.cfgKey}>Size</span>
-              <select value={sys.sizeBy || ''} onChange={e => setSystemConfig(sys.id, { sizeBy: e.target.value || null })} style={styles.cfgSel}>
-                <option value="">uniform (by label)</option>
-                <option value="style">Style (node's own scale)</option>
-                {numberDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </label>
-            <div style={{ fontSize: '0.68rem', color: '#7080a0' }}>Nested grouping (generations) coming next.</div>
-            <button style={styles.viewAdd} onClick={() => setConfigFor(null)}>done</button>
-          </div>
-        )
-      })()}
-      {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
-      <svg ref={svgRef} style={styles.svg}>
-        <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
-          {systems.map(sys => {
-            const def = propertyDefs.find(d => d.id === sys.propId)
-            if (!def) return null
-            const common = {
-              key: sys.id, sys, def, colorByDef, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
-              filterFn: (n) => nodeMatchesFilter(n, sys.filter || { text: '', rules: [] }, propertyDefs),
-              clusterFilterKey: JSON.stringify(sys.filter || {}),
-              hasFilter: !!(sys.filter?.text || sys.filter?.rules?.length),
-              onFilter: () => setFilterFor(f => f === sys.id ? null : sys.id),
-              onConfig: () => setConfigFor(c => c === sys.id ? null : sys.id),
-              colorMode: sys.colorBy !== undefined ? sys.colorBy : (activeView?.colorBy || null),
-              sizeMode: sys.sizeBy || null, propertyDefs,
-              onEditNode: setEditNodeId,
-              onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
-              onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
-            }
-            return sys.kind === 'tree' ? <TreeCluster {...common} /> : <Cluster {...common} />
-          })}
-        </g>
-      </svg>
-      {editNodeId && (
-        <NodePropsEditor
-          node={nodes.find(n => n.id === editNodeId)}
-          propertyDefs={propertyDefs}
-          onSet={(propId, value) => { setNodeProp(editNodeId, propId, value); saveAll() }}
-          onAddOption={(propId, name) => addSelectOption(propId, name)}
-          onClose={() => setEditNodeId(null)}
+      {selSys && (
+        <ClusterInspector
+          sys={selSys} propertyDefs={propertyDefs} tagDefs={tagDefs} numberDefs={numberDefs} dateDefs={dateDefs}
+          onConfig={patch => setSystemConfig(selSys.id, patch)}
+          onFilter={f => setSystemFilter(selSys.id, f)}
+          onRemove={() => { removeSystem(selSys.id); setSelectedSys(null) }}
+          onClose={() => setSelectedSys(null)}
         />
       )}
     </div>
@@ -325,7 +290,7 @@ export default function PackBoard({ projectId }) {
 
 // One independent pack cluster, positioned at (sys.x, sys.y) on the shared canvas, running its own
 // force layout in LOCAL coordinates (centered on 0,0). Mirrors the proven single-pack mechanics.
-function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onConfig, onEditNode, onRetag, onMove, onCommitMove, onRemove }) {
+function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, selected, onSelect, onEditNode, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null), packSimRef = useRef(null)
   const bubblesRef = useRef([]), packsRef = useRef([]), groupsRef = useRef([])
   const heldRef = useRef(new Set())
@@ -437,7 +402,8 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
     const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
-      const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
+      const p = local(ev); const tg = dropTarget(p); setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
+      b.fx = null; b.fy = null
       const groups = groupsRef.current; const targetOpt = tg < 0 ? '__untagged__' : groups[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && (tg < 0 ? b.opt !== '__untagged__' : targetOpt !== b.opt)) onRetag(b.nodeId, b.opt, targetOpt, false)
       else sim.alpha(0.1).restart()
@@ -446,9 +412,9 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
   }
   const startHeadDrag = (e) => {
     e.preventDefault(); e.stopPropagation()
-    const p0 = toWorld(e); const ox = sys.x - p0.x, oy = sys.y - p0.y
-    const move = ev => { const p = toWorld(ev); onMove(sys.id, p.x + ox, p.y + oy) }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); onCommitMove() }
+    const p0 = toWorld(e); const ox = sys.x - p0.x, oy = sys.y - p0.y; let moved = false
+    const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 3) moved = true; onMove(sys.id, p.x + ox, p.y + oy) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (moved) onCommitMove(); else onSelect && onSelect() }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
 
@@ -459,7 +425,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} zoomK={zoomK} hasFilter={hasFilter} onFilter={onFilter} onConfig={onConfig} onHead={startHeadDrag} onRemove={onRemove} />
+      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} zoomK={zoomK} hasFilter={hasFilter} selected={selected} onHead={startHeadDrag} onRemove={onRemove} />
       {packs.map(p => {
         const count = bubbles.filter(b => b.group === p.gi).length
         const isT = dragging && hover === p.gi
@@ -482,7 +448,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onConfig, onEditNode, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, selected, onSelect, onEditNode, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -619,9 +585,9 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
   }
   const startHeadDrag = (e) => {
     e.preventDefault(); e.stopPropagation()
-    const p0 = toWorld(e); const ox = sys.x - p0.x, oy = sys.y - p0.y
-    const move = ev => { const p = toWorld(ev); onMove(sys.id, p.x + ox, p.y + oy) }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); onCommitMove() }
+    const p0 = toWorld(e); const ox = sys.x - p0.x, oy = sys.y - p0.y; let moved = false
+    const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 3) moved = true; onMove(sys.id, p.x + ox, p.y + oy) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (moved) onCommitMove(); else onSelect && onSelect() }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
 
@@ -635,7 +601,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      <ClusterHeader def={def} kind="tree" cx={0} y={headY} zoomK={zoomK} hasFilter={hasFilter} onFilter={onFilter} onConfig={onConfig} onHead={startHeadDrag} onRemove={onRemove} />
+      <ClusterHeader def={def} kind="tree" cx={0} y={headY} zoomK={zoomK} hasFilter={hasFilter} selected={selected} onHead={startHeadDrag} onRemove={onRemove} />
       {/* links: root→value then value→leaf */}
       <g pointerEvents="none">
         {root && values.map(v => (
@@ -696,20 +662,17 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
 }
 
 // Shared draggable header chip for a cluster.
-function ClusterHeader({ def, kind, cx, y, zoomK, hasFilter, onFilter, onConfig, onHead, onRemove }) {
+function ClusterHeader({ def, kind, cx, y, zoomK, hasFilter, selected, onHead, onRemove }) {
   const glyph = kind === 'tree' ? '⌥' : '◎'
   // Counter-scale the whole chip so it stays ~constant on screen, clamped to a min/max, at any zoom.
   const s = zfont(15, zoomK, 11, 26) / 15
   return (
     <g data-syshead="1" transform={`translate(${cx},${y}) scale(${s})`} style={{ cursor: 'grab' }} onMouseDown={onHead}>
-      <rect x={-124} y={-16} width={248} height={30} rx={7} fill="#141428" stroke="#2d3a6a" />
-      <text x={-110} y={4} fontSize={13} fill="#8ab4ff">{glyph}</text>
-      <text x={-92} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
-      <text x={60} y={5} fontSize={13} textAnchor="middle" fill="#a6b0d8" style={{ cursor: 'pointer' }}
-        onMouseDown={e => { e.stopPropagation(); onConfig && onConfig() }} title="Colour / size / grouping">⚙ ▾</text>
-      <text x={90} y={5} fontSize={14} textAnchor="middle" fill={hasFilter ? '#8ecbff' : '#7a86b0'} style={{ cursor: 'pointer' }}
-        onMouseDown={e => { e.stopPropagation(); onFilter && onFilter() }} title="Filter this cluster">⛃</text>
-      <text x={110} y={5} fontSize={16} fill="#f87171" textAnchor="middle" style={{ cursor: 'pointer' }}
+      <rect x={-118} y={-16} width={236} height={30} rx={7} fill={selected ? '#1b2350' : '#141428'} stroke={selected ? '#5b6af0' : '#2d3a6a'} strokeWidth={selected ? 2 : 1} />
+      <text x={-104} y={4} fontSize={13} fill="#8ab4ff">{glyph}</text>
+      <text x={-86} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
+      {hasFilter && <circle cx={82} cy={0} r={3.4} fill="#8ecbff" />}
+      <text x={100} y={5} fontSize={16} fill="#f87171" textAnchor="middle" style={{ cursor: 'pointer' }}
         onMouseDown={e => { e.stopPropagation(); if (confirm(`Remove the “${def.name}” ${kind === 'tree' ? 'tree' : 'circle pack'}?`)) onRemove() }}>×</text>
     </g>
   )
@@ -771,6 +734,73 @@ function Bubble({ b, held, onDown, onContext, onDbl }) {
   )
 }
 
+// Right-docked settings panel for the selected cluster — the single home for its grouping, colour,
+// size, and filter. Replaces the old floating margin panels.
+function ClusterInspector({ sys, propertyDefs, tagDefs, numberDefs, dateDefs, onConfig, onFilter, onRemove, onClose }) {
+  const def = propertyDefs.find(d => d.id === sys.propId)
+  const filter = sys.filter || { text: '', rules: [] }
+  return (
+    <div style={insp.panel}>
+      <div style={insp.head}>
+        <span style={insp.title}>{sys.kind === 'tree' ? '⌥' : '◎'} {def?.name || 'Cluster'}</span>
+        <button style={insp.close} onClick={onClose} title="Close">×</button>
+      </div>
+
+      <div style={insp.section}>
+        <div style={insp.label}>Layout</div>
+        <select value={sys.kind} onChange={e => onConfig({ kind: e.target.value })} style={insp.sel}>
+          <option value="pack">◎ Circle pack</option>
+          <option value="tree">⌥ Property tree</option>
+        </select>
+      </div>
+
+      <div style={insp.section}>
+        <div style={insp.label}>Group by</div>
+        <select value={sys.propId} onChange={e => onConfig({ propId: e.target.value })} style={insp.sel}>
+          {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </div>
+
+      <div style={insp.section}>
+        <div style={insp.label}>Colour by</div>
+        <select value={sys.colorBy ?? ''} onChange={e => onConfig({ colorBy: e.target.value || null })} style={insp.sel}>
+          <option value="">Group value</option>
+          <option value="style">Style (node's own)</option>
+          {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </div>
+
+      <div style={insp.section}>
+        <div style={insp.label}>Size by</div>
+        <select value={sys.sizeBy || ''} onChange={e => onConfig({ sizeBy: e.target.value || null })} style={insp.sel}>
+          <option value="">Uniform</option>
+          <option value="style">Style (node's own)</option>
+          {numberDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </div>
+
+      <div style={insp.section}>
+        <div style={insp.label}>Filter this cluster</div>
+        <FilterBar filter={filter} setFilter={upd => onFilter(typeof upd === 'function' ? upd(filter) : upd)} propertyDefs={propertyDefs} />
+      </div>
+
+      <div style={{ flex: 1 }} />
+      <button style={insp.remove} onClick={() => { if (confirm(`Remove the “${def?.name}” cluster?`)) onRemove() }}>Remove cluster</button>
+    </div>
+  )
+}
+
+const insp = {
+  panel: { width: 288, flexShrink: 0, height: '100%', overflowY: 'auto', background: '#0f0f1e', borderLeft: '1px solid #23233e', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 },
+  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  title: { color: '#e8eeff', fontSize: '0.95rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  close: { background: 'transparent', border: 'none', color: '#8090b8', fontSize: '1.2rem', cursor: 'pointer', lineHeight: 1 },
+  section: { display: 'flex', flexDirection: 'column', gap: 5 },
+  label: { fontSize: '0.68rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8090b8' },
+  sel: { width: '100%', background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, padding: '6px 8px', fontSize: '0.82rem', cursor: 'pointer' },
+  remove: { background: 'transparent', border: '1px solid #5a2a2a', color: '#f87171', borderRadius: 7, padding: '7px 10px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 },
+}
+
 const vmStyles = {
   menu: { background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 180, boxShadow: '0 8px 26px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' },
   head: { padding: '4px 12px 5px', fontSize: '0.72rem', color: '#8ab4ff', fontWeight: 700, borderBottom: '1px solid #23233e', marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
@@ -787,9 +817,10 @@ const styles = {
   cfgRow: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' },
   cfgKey: { fontSize: '0.78rem', color: '#c5d0ff' },
   cfgSel: { background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, padding: '4px 6px', fontSize: '0.78rem', maxWidth: 150 },
-  wrap: { position: 'relative', height: '100%', width: '100%', background: '#0c0c1a', overflow: 'hidden' },
+  wrap: { display: 'flex', height: '100%', width: '100%', background: '#0c0c1a', overflow: 'hidden' },
+  main: { position: 'relative', flex: 1, minWidth: 0, height: '100%' },
   svg: { width: '100%', height: '100%', display: 'block', cursor: 'grab' },
-  toolbar: { position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 12, alignItems: 'center' },
+  toolbar: { position: 'absolute', top: 10, left: 12, right: 12, zIndex: 5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   addBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 },
   backdrop: { position: 'fixed', inset: 0, zIndex: 6 },
   menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 210, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
