@@ -114,6 +114,10 @@ export default function PackBoard({ projectId }) {
     return id => {
       const p = np[id] || {}
       const shape = p.shape && !['frame', '3d', 'image', 'none'].includes(p.shape) ? p.shape : null
+      // nodeEmojis entries are objects { id, type, angle, emoji } in the graph — extract the glyph
+      // string (skip image emojis, which LeafNode can't render as text).
+      const e0 = (p.nodeEmojis || [])[0]
+      const emoji = !e0 ? null : (typeof e0 === 'string' ? e0 : (e0.type === 'image' ? null : e0.emoji || null))
       return {
         fill: (p.fillColor && p.fillColor !== 'none' && p.fillColor !== 'transparent') ? p.fillColor : null,
         textColor: p.textColor || null,
@@ -122,7 +126,7 @@ export default function PackBoard({ projectId }) {
         strokeDash: p.strokeDash,
         shape,
         scale: p.scale || 1,
-        emoji: (p.nodeEmojis || [])[0] || null,
+        emoji: typeof emoji === 'string' ? emoji : null,
       }
     }
   }, [activeView])
@@ -833,7 +837,7 @@ function LeafNode({ b, held, onDown, onContext, onDbl }) {
   const sw = held ? 3 : (dec.strokeWidth || 1.2)
   const dash = held ? undefined : dashArrayB(dec.strokeDash, sw)
   const tf = dec.textColor || (light ? '#0c0c1a' : '#f2f5ff')
-  const emoji = dec.emoji
+  const emoji = typeof dec.emoji === 'string' ? dec.emoji : null
   const fs = Math.max(8, s * 0.32), maxChars = Math.max(5, Math.floor((1.7 * s) / (fs * 0.56)))
   const lines = wrapText(b.label, maxChars).slice(0, 4), lh = fs * 1.05
   const yStart = (emoji ? fs * 0.5 : 0) - (lines.length - 1) / 2 * lh
