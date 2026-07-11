@@ -445,7 +445,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
       b.fx = null; b.fy = null
       const groups = groupsRef.current; const targetOpt = tg < 0 ? '__untagged__' : groups[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && (tg < 0 ? b.opt !== '__untagged__' : targetOpt !== b.opt)) onRetag(b.nodeId, b.opt, targetOpt, false)
-      // dropped in place, no retag → leave it where dropped, NO sim restart (this was the child-move storm)
+      else sim.alphaTarget(0.03).restart(), setTimeout(() => sim.alphaTarget(0), 600)   // gentle, brief reintegration (no storm, no stuck-anchor)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
@@ -608,7 +608,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
       const vals = valuesRef.current; const targetOpt = tg < 0 ? '__untagged__' : vals[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && targetOpt !== b.opt) onRetag(b.nodeId, b.opt, targetOpt, false)
-      // dropped in place, no retag → leave it where dropped, NO sim restart (this was the child-move storm)
+      else sim.alphaTarget(0.03).restart(), setTimeout(() => sim.alphaTarget(0), 600)   // gentle, brief reintegration (no storm, no stuck-anchor)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
@@ -779,8 +779,10 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
         return (
           <g key={b.data.id} pointerEvents="none">
             <circle cx={b.x} cy={b.y} r={b.r} fill={(b.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (b.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 1.8} />
-            <text x={b.x} y={b.y - b.r - 3} textAnchor="middle" fontSize={zfont(12, zoomK, 10, 22)} fontWeight={700} fill={isT ? '#7fd8a8' : '#c5d0ff'}
-              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>{b.data.label}</text>
+            {b.r * zoomK > 16 && (
+              <text x={b.x} y={b.y - b.r - 3} textAnchor="middle" fontSize={zfont(12, zoomK, 10, 22)} fontWeight={700} fill={isT ? '#7fd8a8' : '#c5d0ff'}
+                style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>{b.data.label}</text>
+            )}
           </g>
         )
       })}
@@ -792,11 +794,21 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
         const isDrag = drag?.id === l.data.id
         const x = isDrag ? drag.x : l.x, y = isDrag ? drag.y : l.y
         const shape = dec.shape || 'circle'
-        const baseR = Math.max(9, l.r - 2)
-        const b = { x, y, label: dec.label, color: resolveColor(colorMode, node, dec, bColor, propertyDefs), decor: dec, shape, baseR, r: baseR }
-        return <LeafNode key={l.data.id} b={b} held={isDrag} onDown={e => startLeafDrag(e, l)}
-          onContext={e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(nodeId) }}
-          onDbl={e => { e.stopPropagation(); onEditNode && onEditNode(nodeId) }} />
+        const baseR = Math.max(6, l.r - 2)
+        const color = resolveColor(colorMode, node, dec, bColor, propertyDefs)
+        const handlers = {
+          onMouseDown: e => startLeafDrag(e, l),
+          onContextMenu: e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(nodeId) },
+          onDoubleClick: e => { e.stopPropagation(); onEditNode && onEditNode(nodeId) },
+        }
+        // Cull the label when the circle is small on screen (declutters; zoom in to read).
+        if (baseR * zoomK < 13) {
+          return <g key={l.data.id} transform={`translate(${x},${y})`} style={{ cursor: 'grab' }} {...handlers}>
+            <circle r={baseR} fill={color} fillOpacity={0.96} stroke={isDrag ? '#fff' : 'rgba(232,238,255,0.35)'} strokeWidth={isDrag ? 3 : 1} />
+          </g>
+        }
+        const b = { x, y, label: dec.label, color, decor: dec, shape, baseR, r: baseR }
+        return <LeafNode key={l.data.id} b={b} held={isDrag} onDown={handlers.onMouseDown} onContext={handlers.onContextMenu} onDbl={handlers.onDoubleClick} />
       })}
     </g>
   )
