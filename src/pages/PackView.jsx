@@ -361,6 +361,9 @@ const radiusFor = (label) => {
   const len = String(label || '').replace(/\s+/g, ' ').trim().length
   return Math.max(34, Math.min(50, 30 + Math.sqrt(Math.max(len, 4)) * 3.0))
 }
+// World font size that keeps a label between [minPx, maxPx] on SCREEN regardless of zoom k
+// (content lives inside a scale(k) group, so we counter-scale by 1/k, clamped).
+const zfont = (basePx, k, minPx, maxPx) => Math.max(minPx, Math.min(maxPx, basePx * (k || 1))) / (k || 1)
 // Relative luminance of a #rrggbb colour → pick legible text (dark on light fills, light on dark).
 const hexLum = (hex) => {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return 0.35
@@ -791,10 +794,11 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
         {packs.map(p => {
           const count = bubbles.filter(b => b.group === p.gi).length
           const isTarget = dragging && hoverGroup === p.gi
+          const zf = zfont(25, tf.k, 15, 40)   // clamp title to 15–40px on screen
           return (
-            <text key={'t' + p.gi} x={p.x} y={p.y - p.r - 10} textAnchor="middle" fontSize={25} fontWeight={800}
+            <text key={'t' + p.gi} x={p.x} y={p.y - p.r - zf * 0.45} textAnchor="middle" fontSize={zf} fontWeight={800}
               fill={isTarget ? '#7fd8a8' : p.color} pointerEvents="none"
-              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 6, strokeLinejoin: 'round' }}>
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: zf * 0.24, strokeLinejoin: 'round' }}>
               {p.name} · {count}
             </text>
           )

@@ -23,6 +23,8 @@ function wrapText(text, maxChars) {
   if (cur) lines.push(cur); return lines.length ? lines : ['']
 }
 const EMPTY = []
+// World font that stays between [minPx,maxPx] on screen despite the zoom scale(k) group.
+const zfont = (basePx, k, minPx, maxPx) => Math.max(minPx, Math.min(maxPx, basePx * (k || 1))) / (k || 1)
 
 export default function PackBoard({ projectId }) {
   const nodes = useGraphStore(s => s.nodes)
@@ -157,7 +159,7 @@ export default function PackBoard({ projectId }) {
             const def = propertyDefs.find(d => d.id === sys.propId)
             if (!def) return null
             const common = {
-              key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld,
+              key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
               onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add),
               onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
             }
@@ -171,7 +173,7 @@ export default function PackBoard({ projectId }) {
 
 // One independent pack cluster, positioned at (sys.x, sys.y) on the shared canvas, running its own
 // force layout in LOCAL coordinates (centered on 0,0). Mirrors the proven single-pack mechanics.
-function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onCommitMove, onRemove }) {
+function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null), packSimRef = useRef(null)
   const bubblesRef = useRef([]), packsRef = useRef([]), groupsRef = useRef([])
   const heldRef = useRef(new Set())
@@ -302,15 +304,16 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} onHead={startHeadDrag} onRemove={onRemove} />
+      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} zoomK={zoomK} onHead={startHeadDrag} onRemove={onRemove} />
       {packs.map(p => {
         const count = bubbles.filter(b => b.group === p.gi).length
         const isT = dragging && hover === p.gi
+        const zf = zfont(17, zoomK, 12, 30)
         return (
           <g key={'o' + p.gi} pointerEvents="none">
             <circle cx={p.x} cy={p.y} r={p.r} fill={p.color + '1e'} stroke={isT ? '#7fd8a8' : p.color} strokeWidth={isT ? 3.5 : 2} />
-            <text x={p.x} y={p.y - p.r - 7} textAnchor="middle" fontSize={17} fontWeight={800} fill={isT ? '#7fd8a8' : p.color}
-              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 5, strokeLinejoin: 'round' }}>{p.name} · {count}</text>
+            <text x={p.x} y={p.y - p.r - zf * 0.4} textAnchor="middle" fontSize={zf} fontWeight={800} fill={isT ? '#7fd8a8' : p.color}
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: zf * 0.29, strokeLinejoin: 'round' }}>{p.name} · {count}</text>
           </g>
         )
       })}
@@ -322,7 +325,7 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, nodes, decorOf, toWorld, onRetag, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -452,7 +455,7 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, onRetag, onMove, onCom
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      <ClusterHeader def={def} kind="tree" cx={0} y={headY} onHead={startHeadDrag} onRemove={onRemove} />
+      <ClusterHeader def={def} kind="tree" cx={0} y={headY} zoomK={zoomK} onHead={startHeadDrag} onRemove={onRemove} />
       {/* links: root→value then value→leaf */}
       <g pointerEvents="none">
         {root && values.map(v => (
@@ -492,10 +495,12 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, onRetag, onMove, onCom
 }
 
 // Shared draggable header chip for a cluster.
-function ClusterHeader({ def, kind, cx, y, onHead, onRemove }) {
+function ClusterHeader({ def, kind, cx, y, zoomK, onHead, onRemove }) {
   const glyph = kind === 'tree' ? '⌥' : '◎'
+  // Counter-scale the whole chip so it stays ~constant on screen, clamped to a min/max, at any zoom.
+  const s = zfont(15, zoomK, 11, 26) / 15
   return (
-    <g data-syshead="1" transform={`translate(${cx},${y})`} style={{ cursor: 'grab' }} onMouseDown={onHead}>
+    <g data-syshead="1" transform={`translate(${cx},${y}) scale(${s})`} style={{ cursor: 'grab' }} onMouseDown={onHead}>
       <rect x={-118} y={-16} width={236} height={30} rx={7} fill="#141428" stroke="#2d3a6a" />
       <text x={-104} y={4} fontSize={13} fill="#8ab4ff">{glyph}</text>
       <text x={-86} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
