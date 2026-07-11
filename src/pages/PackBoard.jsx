@@ -241,10 +241,11 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove,
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
-      const color = decorColor?.(n.id) || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
+      // Colour = the node's own graph fill if set, else its PACK's value colour (not a random hash).
+      const explicit = decorColor?.(n.id) || null
       const label = n.label || '(untitled)'
-      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color })
-      else valid.forEach(id => raw.push({ nodeId: n.id, opt: id, group: idx.get(id), label, color }))
+      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: explicit || '#6b7394' })
+      else valid.forEach(id => { const gi = idx.get(id); raw.push({ nodeId: n.id, opt: id, group: gi, label, color: explicit || groups[gi].color }) })
     })
     raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
     return { groups, bubbles: raw }
@@ -397,19 +398,20 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onHide
     const idx = new Map(values.map((v, i) => [v.opt, i]))
     const leaves = []
     let hasUntagged = false
+    const colorForOpt = (opt) => (values.find(v => v.opt === opt)?.color) || '#6b7394'
     nodes.forEach(n => {
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
       const dec = decorOf?.(n.id) || {}
-      const color = dec.fill || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
       const label = n.label || '(untitled)'
       // Size and collision radius honour the node's graph-view shape + scale so leaves mirror the graph.
       const scl = Math.min(1.8, Math.max(0.65, dec.scale || 1))
       const baseR = radiusFor(label) * 0.7 * scl
       const shape = dec.shape || 'circle'
       const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
-      const mk = (opt) => ({ nodeId: n.id, opt, label, color, decor: dec, shape, baseR, r: bound })
+      // Colour = node's own graph fill, else its value's colour (not a random hash).
+      const mk = (opt) => ({ nodeId: n.id, opt, label, color: dec.fill || colorForOpt(opt), decor: dec, shape, baseR, r: bound })
       if (!valid.length) { hasUntagged = true; leaves.push(mk('__untagged__')) }
       else valid.forEach(id => leaves.push(mk(id)))
     })
