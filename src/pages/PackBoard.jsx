@@ -57,6 +57,7 @@ export default function PackBoard({ projectId }) {
   const [adding, setAdding] = useState(false)
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
+  const [filterFor, setFilterFor] = useState(null)   // system id whose per-cluster filter panel is open
 
   const activeView = views.find(v => v.id === activeViewId)
   const colorByDef = activeView?.colorBy ? propertyDefs.find(d => d.id === activeView.colorBy) : null
@@ -148,6 +149,14 @@ export default function PackBoard({ projectId }) {
   const removeSystem = (id) => commit(systemsRef.current.filter(s => s.id !== id))
   const moveSystem = (id, x, y) => setSystems(prev => prev.map(s => s.id === id ? { ...s, x, y } : s))
   const commitMove = () => commit(systemsRef.current)   // latest moved positions
+  // Per-cluster filter: update local immediately, persist to the view (debounced).
+  const clFilterSaveRef = useRef()
+  const setSystemFilter = (id, filter) => {
+    const next = systemsRef.current.map(s => s.id === id ? { ...s, filter } : s)
+    setSystems(next); setBoardSystems(next)
+    clearTimeout(clFilterSaveRef.current)
+    clFilterSaveRef.current = setTimeout(() => persist(systemsRef.current), 700)
+  }
 
   const retag = (propId, nodeId, sourceOpt, targetOpt, additive) => {
     const def = propertyDefs.find(d => d.id === propId); if (!def) return
@@ -221,6 +230,17 @@ export default function PackBoard({ projectId }) {
         <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate this view">⧉</button>
         <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
       </div>
+      {filterFor && (() => {
+        const sys = systems.find(s => s.id === filterFor); if (!sys) return null
+        const def = propertyDefs.find(d => d.id === sys.propId)
+        return (
+          <div style={styles.clusterFilterBar}>
+            <span style={{ fontSize: '0.7rem', color: '#8ab4ff', fontWeight: 700 }}>Filter “{def?.name || 'cluster'}”</span>
+            <FilterBar filter={sys.filter || { text: '', rules: [] }} setFilter={upd => setSystemFilter(sys.id, typeof upd === 'function' ? upd(sys.filter || { text: '', rules: [] }) : upd)} propertyDefs={propertyDefs} />
+            <button style={styles.viewAdd} onClick={() => setFilterFor(null)}>done</button>
+          </div>
+        )
+      })()}
       {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
       <svg ref={svgRef} style={styles.svg}>
         <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
@@ -229,6 +249,10 @@ export default function PackBoard({ projectId }) {
             if (!def) return null
             const common = {
               key: sys.id, sys, def, colorByDef, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
+              filterFn: (n) => nodeMatchesFilter(n, sys.filter || { text: '', rules: [] }, propertyDefs),
+              clusterFilterKey: JSON.stringify(sys.filter || {}),
+              hasFilter: !!(sys.filter?.text || sys.filter?.rules?.length),
+              onFilter: () => setFilterFor(f => f === sys.id ? null : sys.id),
               onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
               onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
             }
@@ -242,7 +266,7 @@ export default function PackBoard({ projectId }) {
 
 // One independent pack cluster, positioned at (sys.x, sys.y) on the shared canvas, running its own
 // force layout in LOCAL coordinates (centered on 0,0). Mirrors the proven single-pack mechanics.
-function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, onRetag, onMove, onCommitMove, onRemove }) {
+function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onRetag, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null), packSimRef = useRef(null)
   const bubblesRef = useRef([]), packsRef = useRef([]), groupsRef = useRef([])
   const heldRef = useRef(new Set())
@@ -256,6 +280,7 @@ function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, onRe
     const idx = new Map(groups.map((g, i) => [g.opt, i]))
     const raw = []
     nodes.forEach(n => {
+      if (filterFn && !filterFn(n)) return   // per-cluster filter
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
@@ -339,7 +364,7 @@ function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, onRe
     sm.force('x', d3.forceX(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].x : 0).strength(b => b.group >= 0 ? 0.5 : 0.05))
     sm.force('y', d3.forceY(b => (b.group >= 0 && packsRef.current[b.group]) ? packsRef.current[b.group].y : 0).strength(b => b.group >= 0 ? 0.5 : 0.05))
     sm.alpha(0.7).restart(); setTick(t => t + 1)
-  }, [structureKey, colorByDef?.id]) // eslint-disable-line
+  }, [structureKey, colorByDef?.id, clusterFilterKey]) // eslint-disable-line
 
   const setHeldKeys = (s) => { heldRef.current = s; setHeld(s) }
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - sys.x, y: p.y - sys.y } }   // canvas world → cluster-local
@@ -375,7 +400,7 @@ function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, onRe
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} zoomK={zoomK} onHead={startHeadDrag} onRemove={onRemove} />
+      <ClusterHeader def={def} kind="pack" cx={(bounds.minX + bounds.maxX) / 2} y={headY} zoomK={zoomK} hasFilter={hasFilter} onFilter={onFilter} onHead={startHeadDrag} onRemove={onRemove} />
       {packs.map(p => {
         const count = bubbles.filter(b => b.group === p.gi).length
         const isT = dragging && hover === p.gi
@@ -396,7 +421,7 @@ function Cluster({ sys, def, colorByDef, nodes, decorColor, toWorld, zoomK, onRe
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, filterFn, clusterFilterKey, hasFilter, onFilter, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -419,6 +444,7 @@ function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, onR
     let hasUntagged = false
     const colorForOpt = (opt) => (values.find(v => v.opt === opt)?.color) || '#6b7394'
     nodes.forEach(n => {
+      if (filterFn && !filterFn(n)) return   // per-cluster filter
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
@@ -500,7 +526,7 @@ function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, onR
     sm.nodes(fns)
     sm.force('link').links(links)
     sm.alpha(0.8).restart(); setTick(t => t + 1)
-  }, [structureKey, colorByDef?.id]) // eslint-disable-line
+  }, [structureKey, colorByDef?.id, clusterFilterKey]) // eslint-disable-line
 
   const setHeldKeys = (s) => { heldRef.current = s; setHeld(s) }
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - sys.x, y: p.y - sys.y } }
@@ -549,7 +575,7 @@ function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, onR
 
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
-      <ClusterHeader def={def} kind="tree" cx={0} y={headY} zoomK={zoomK} onHead={startHeadDrag} onRemove={onRemove} />
+      <ClusterHeader def={def} kind="tree" cx={0} y={headY} zoomK={zoomK} hasFilter={hasFilter} onFilter={onFilter} onHead={startHeadDrag} onRemove={onRemove} />
       {/* links: root→value then value→leaf */}
       <g pointerEvents="none">
         {root && values.map(v => (
@@ -582,29 +608,33 @@ function TreeCluster({ sys, def, colorByDef, nodes, decorOf, toWorld, zoomK, onR
               {wrapText(v.name, 11).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * (vf * 1.05) - vf * 0.5}>{ln}</tspan>)}
               <tspan x={0} y={vf * 1.4} fontSize={vf * 0.75} fillOpacity={0.85}>· {countByOpt[v.opt] || 0}</tspan>
             </text>
-            {vmenu?.opt === v.opt && (
-              <foreignObject x={v.r + 6} y={-40} width={190} height={140} style={{ overflow: 'visible' }}>
-                <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
-                  <div style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => { e.preventDefault() }}>
-                    <div style={vmStyles.head}>{v.name}</div>
-                    <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
-                    {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart() }}>Unpin (let it float)</div>}
-                    <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null) }}>Close</div>
-                  </div>
-                </div>
-              </foreignObject>
-            )}
           </g>
         )
       })}
       {/* item leaves (2nd generation) — real graph nodes with their cosmetics; draggable to retag */}
       {leaves.map(l => <LeafNode key={l.id} b={l} held={held.has(l.id)} onDown={e => startDrag(e, l)} />)}
+      {/* value-hub context menu — rendered LAST so it paints on top of every node */}
+      {vmenu && (() => {
+        const v = valuesRef.current.find(x => x.opt === vmenu.opt); if (!v) return null
+        return (
+          <foreignObject x={v.x + v.r + 6} y={v.y - 40} width={210} height={150} style={{ overflow: 'visible' }}>
+            <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
+              <div style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
+                <div style={vmStyles.head}>{v.name}</div>
+                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
+                {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart() }}>Unpin (let it float)</div>}
+                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null) }}>Close</div>
+              </div>
+            </div>
+          </foreignObject>
+        )
+      })()}
     </g>
   )
 }
 
 // Shared draggable header chip for a cluster.
-function ClusterHeader({ def, kind, cx, y, zoomK, onHead, onRemove }) {
+function ClusterHeader({ def, kind, cx, y, zoomK, hasFilter, onFilter, onHead, onRemove }) {
   const glyph = kind === 'tree' ? '⌥' : '◎'
   // Counter-scale the whole chip so it stays ~constant on screen, clamped to a min/max, at any zoom.
   const s = zfont(15, zoomK, 11, 26) / 15
@@ -613,6 +643,8 @@ function ClusterHeader({ def, kind, cx, y, zoomK, onHead, onRemove }) {
       <rect x={-118} y={-16} width={236} height={30} rx={7} fill="#141428" stroke="#2d3a6a" />
       <text x={-104} y={4} fontSize={13} fill="#8ab4ff">{glyph}</text>
       <text x={-86} y={4} fontSize={15} fontWeight={700} fill="#c5d0ff">{def.name}</text>
+      <text x={78} y={5} fontSize={14} textAnchor="middle" fill={hasFilter ? '#8ecbff' : '#5a6a9a'} style={{ cursor: 'pointer' }}
+        onMouseDown={e => { e.stopPropagation(); onFilter && onFilter() }} title="Filter this cluster">⛃</text>
       <text x={100} y={5} fontSize={16} fill="#f87171" textAnchor="middle" style={{ cursor: 'pointer' }}
         onMouseDown={e => { e.stopPropagation(); if (confirm(`Remove the “${def.name}” ${kind === 'tree' ? 'tree' : 'circle pack'}?`)) onRemove() }}>×</text>
     </g>
@@ -686,6 +718,7 @@ const styles = {
   viewPillActive: { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' },
   viewX: { color: '#f87171', fontSize: '0.9rem', lineHeight: 1, marginLeft: 1 },
   viewAdd: { padding: '3px 8px', borderRadius: 6, border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer', fontSize: '0.82rem' },
+  clusterFilterBar: { position: 'absolute', top: 84, left: 12, zIndex: 6, display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(20,20,40,0.96)', border: '1px solid #2d3a6a', borderRadius: 8, padding: '6px 10px', boxShadow: '0 8px 26px rgba(0,0,0,0.5)' },
   wrap: { position: 'relative', height: '100%', width: '100%', background: '#0c0c1a', overflow: 'hidden' },
   svg: { width: '100%', height: '100%', display: 'block', cursor: 'grab' },
   toolbar: { position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 12, alignItems: 'center' },
