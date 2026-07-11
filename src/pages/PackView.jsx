@@ -25,6 +25,7 @@ export default function PackView({ projectId }) {
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const numberDefs = propertyDefs.filter(d => d.type === 'number')
   const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
+  const dateDefs = propertyDefs.filter(d => d.type === 'date')
 
   const [sizeBy, setSizeBy] = useState(null)         // null = size by item count, else Number propId
   const [groupProp, setGroupProp] = useState(null)   // null = edge hierarchy, else group-by-tag propId
@@ -51,7 +52,8 @@ export default function PackView({ projectId }) {
   }
   const sizeLabel = sizeBy ? (propertyDefs.find(d => d.id === sizeBy)?.name || 'property') : 'items'
   const srcLabel = groupProp ? (propertyDefs.find(d => d.id === groupProp)?.name || 'tag') : 'Hierarchy'
-  const groupDef = groupProp ? propertyDefs.find(d => d.id === groupProp) : null
+  const rawGroupDef = groupProp ? propertyDefs.find(d => d.id === groupProp) : null
+  const groupDef = rawGroupDef?.type === 'date' ? dueDefFor(rawGroupDef) : rawGroupDef
 
   const decorOf = useMemo(() => {
     const np = views.find(v => v.id === activeViewId)?.nodeProps || {}
@@ -67,6 +69,13 @@ export default function PackView({ projectId }) {
   // list = [{ nodeId, sourceOpt }]. targetOpt '__untagged__' clears the tag (drop outside packs).
   const retagMany = (list, targetOpt, additive) => {
     const def = propertyDefs.find(d => d.id === groupProp); if (!def || !list.length) return
+    // Due-date grouping: dropping on a bucket sets a representative date; outside → clear.
+    if (def.type === 'date') {
+      const now = startOfDay(new Date())
+      list.forEach(({ nodeId }) => setNodeProp(nodeId, groupProp, targetOpt === '__untagged__' ? null : dueRepDate(targetOpt, now)))
+      persist()
+      return
+    }
     list.forEach(({ nodeId, sourceOpt }) => {
       const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
       const raw = node?.props?.[groupProp]
@@ -97,7 +106,10 @@ export default function PackView({ projectId }) {
   const handleCreateNode = (label, opt) => {
     const def = propertyDefs.find(d => d.id === groupProp)
     const id = addNode((label || '').trim() || 'New item')
-    if (def && opt && opt !== '__untagged__') setNodeProp(id, groupProp, def.type === 'multiSelect' ? [opt] : opt)
+    if (def && opt && opt !== '__untagged__') {
+      if (def.type === 'date') setNodeProp(id, groupProp, dueRepDate(opt, startOfDay(new Date())))
+      else setNodeProp(id, groupProp, def.type === 'multiSelect' ? [opt] : opt)
+    }
     persist()
     return id
   }
@@ -261,6 +273,10 @@ export default function PackView({ projectId }) {
               {tagDefs.length ? tagDefs.map(d => (
                 <div key={d.id} style={{ ...styles.item, color: groupProp === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setGroupProp(d.id); setSrcMenu(false) }}>{groupProp === d.id && '✓ '}{d.name}</div>
               )) : <div style={{ ...styles.item, color: '#8090b8', fontSize: '0.74rem' }}>No Select/Tags property</div>}
+              {dateDefs.length > 0 && <div style={styles.mlabel}>Group by due date</div>}
+              {dateDefs.map(d => (
+                <div key={d.id} style={{ ...styles.item, color: groupProp === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { setGroupProp(d.id); setSrcMenu(false) }}>{groupProp === d.id && '✓ '}{d.name} · buckets</div>
+              ))}
             </div>
           </>)}
         </div>
@@ -447,6 +463,34 @@ const radiusFor = (label) => {
 // World font size that keeps a label between [minPx, maxPx] on SCREEN regardless of zoom k
 // (content lives inside a scale(k) group, so we counter-scale by 1/k, clamped).
 const zfont = (basePx, k, minPx, maxPx) => Math.max(minPx, Math.min(maxPx, basePx * (k || 1))) / (k || 1)
+
+// ── Due-date bucketing: group a date property into relative windows. Past/empty → unpacked. ──
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
+const DUE_BUCKETS = [
+  { id: 'today', name: 'Today', color: '#fc8181' },
+  { id: 'tomorrow', name: 'Tomorrow', color: '#f6ad55' },
+  { id: 'week', name: 'Next 7 days', color: '#f6e05e' },
+  { id: 'month', name: 'Next 30 days', color: '#68d391' },
+  { id: 'later', name: 'Later', color: '#63b3ed' },
+]
+const dueBucketOf = (dateStr, now) => {
+  if (!dateStr) return null
+  const d = startOfDay(dateStr); if (isNaN(d.getTime())) return null
+  const days = Math.round((d.getTime() - now.getTime()) / 86400000)
+  if (days < 0) return null            // overdue / past → unpacked (per spec)
+  if (days === 0) return 'today'
+  if (days === 1) return 'tomorrow'
+  if (days <= 7) return 'week'
+  if (days <= 30) return 'month'
+  return 'later'
+}
+const dueRepDate = (bucketId, now) => {
+  const add = { today: 0, tomorrow: 1, week: 7, month: 30, later: 60 }[bucketId]
+  if (add == null) return null
+  const d = new Date(now); d.setDate(d.getDate() + add)
+  return d.toISOString().slice(0, 10)
+}
+const dueDefFor = (rawDef) => ({ id: rawDef.id, realId: rawDef.id, name: rawDef.name, type: 'dateBucket', options: DUE_BUCKETS })
 // Circular fisheye distortion (Bostock's d3.fisheye.circular). Returns a fn mapping a point near
 // `focus` outward (magnified) within `radius`; z is the local magnification factor.
 const makeFisheye = (focus, radius, distortion) => {
@@ -494,9 +538,20 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const opts = def?.options || []
     const groups = opts.map(o => ({ opt: o.id, name: o.name, color: o.color || '#5b6af0' }))
     const idx = new Map(groups.map((g, i) => [g.opt, i]))
+    const isDate = def?.type === 'dateBucket'
+    const now = isDate ? startOfDay(new Date()) : null
     const raw = []
     nodes.forEach(n => {
       if (filterFn && !filterFn(n)) return   // filtered-out items are removed → packs re-pack around the rest
+      if (isDate) {
+        const bid = dueBucketOf(n.props?.[def.realId], now)   // null = past/empty → unpacked
+        const gi = bid != null ? idx.get(bid) : undefined
+        const explicit = decorOf?.(n.id)?.color || null
+        const label = n.label || '(untitled)'
+        if (gi == null) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: explicit || '#6b7394' })
+        else raw.push({ nodeId: n.id, opt: bid, group: gi, label, color: explicit || groups[gi].color })
+        return
+      }
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
@@ -847,9 +902,11 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
         <div style={styles.item} onClick={() => { const c = ctx; setCtx(null); const nm = prompt(c.packName ? `New item in “${c.packName}”` : 'New item (untagged)'); if (nm != null) onCreateNode && onCreateNode(nm, c.opt) }}>
           + New item{ctx.packName ? ` in “${trim(ctx.packName, 16)}”` : ' (untagged)'}
         </div>
-        <div style={styles.item} onClick={() => { setCtx(null); const nm = prompt(`New “${def?.name}” value`); if (nm) onAddValue && onAddValue(nm) }}>
-          + Add “{trim(def?.name, 16)}” value…
-        </div>
+        {def?.type !== 'dateBucket' && (
+          <div style={styles.item} onClick={() => { setCtx(null); const nm = prompt(`New “${def?.name}” value`); if (nm) onAddValue && onAddValue(nm) }}>
+            + Add “{trim(def?.name, 16)}” value…
+          </div>
+        )}
       </div>
     </>)}
     <svg ref={svgRef} viewBox={`0 0 ${FW} ${FH}`} preserveAspectRatio="xMidYMid meet" style={styles.svg} onContextMenu={onBgContext}
