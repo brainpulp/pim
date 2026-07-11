@@ -32,8 +32,14 @@ export default function PackBoard({ projectId }) {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewFilter = useGraphStore(s => s.setViewFilter)
+  const setActiveView = useGraphStore(s => s.setActiveView)
+  const addView = useGraphStore(s => s.addView)
+  const renameView = useGraphStore(s => s.renameView)
+  const deleteView = useGraphStore(s => s.deleteView)
+  const duplicateView = useGraphStore(s => s.duplicateView)
   const tagDefs = propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect')
 
   const svgRef = useRef(null), gRef = useRef(null), zoomRef = useRef(null)
@@ -147,6 +153,15 @@ export default function PackBoard({ projectId }) {
     setNodeProp(nodeId, propId, value)
     if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   }
+  // View management (shared views; persist to DB on change so switches survive reload).
+  const saveAll = () => { if (!projectId) return; const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
+  const switchView = (id) => { setActiveView(id); saveAll() }
+
+  // Hide a set of nodes in the active view (used by the parent-hub "Hide items" action).
+  const hideNodes = (ids) => {
+    ids.forEach(id => setNodeViewProp(id, 'visible', false))
+    if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
+  }
 
   const visibleNodes = useMemo(
     () => nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
@@ -173,6 +188,21 @@ export default function PackBoard({ projectId }) {
         <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
         <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · add more from the menu · drag a header to move · scroll = zoom</span>
       </div>
+      {/* Board view manager — switch/create/rename/delete views (shared across tabs; each view keeps its own board layout + filter). */}
+      <div style={styles.viewBar}>
+        <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0', marginRight: 2 }}>VIEWS</span>
+        {views.map(v => (
+          <div key={v.id} title="Click to switch · double-click to rename"
+            style={{ ...styles.viewPill, ...(v.id === activeViewId ? styles.viewPillActive : {}) }}
+            onClick={() => switchView(v.id)}
+            onDoubleClick={() => { const nm = prompt('Rename view', v.name); if (nm && nm.trim()) { renameView(v.id, nm.trim()); saveAll() } }}>
+            <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</span>
+            {views.length > 1 && <span style={styles.viewX} onClick={e => { e.stopPropagation(); if (confirm(`Delete view “${v.name}”?`)) { deleteView(v.id); saveAll() } }}>×</span>}
+          </div>
+        ))}
+        <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate this view">⧉</button>
+        <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
+      </div>
       {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
       <svg ref={svgRef} style={styles.svg}>
         <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
@@ -181,7 +211,7 @@ export default function PackBoard({ projectId }) {
             if (!def) return null
             const common = {
               key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k,
-              onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add),
+              onRetag: (nid, so, to, add) => retag(sys.propId, nid, so, to, add), onHideNodes: hideNodes,
               onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
             }
             return sys.kind === 'tree' ? <TreeCluster {...common} /> : <Cluster {...common} />
@@ -346,13 +376,20 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, zoomK, onRetag, onMove,
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
   const [, setTick] = useState(0)
   const [held, setHeld] = useState(() => new Set())
   const [hover, setHover] = useState(null)
+  const [vmenu, setVmenu] = useState(null)   // right-click menu on a value hub: { opt }
+  useEffect(() => {
+    if (!vmenu) return
+    const close = () => setVmenu(null)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [vmenu])
 
   const build = () => {
     const opts = def.options || []
@@ -385,13 +422,15 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove
     return opt + '#' + rows
   }, [nodes, def])
 
+  const ringRef = useRef(280)   // radius the value hubs sit on (grows with the number of values)
   useEffect(() => {
     const sim = d3.forceSimulation([])
-      .force('charge', d3.forceManyBody().strength(d => d.kind === 'leaf' ? -60 : -200))
-      .force('link', d3.forceLink([]).id(d => d.id).distance(l => l.kind === 'rv' ? 190 : 78).strength(l => l.kind === 'rv' ? 0.08 : 0.5))
-      .force('collide', d3.forceCollide(d => d.r + 4).strength(0.9).iterations(2))
-      .force('radial', d3.forceRadial(d => d.kind === 'value' ? 200 : 0, 0, 0).strength(d => d.kind === 'value' ? 0.55 : 0))
-      .alphaDecay(0.025).velocityDecay(0.5)
+      // Strong hub-hub repulsion + tight leaf→hub links → each value + its leaves forms a SEPARATED cluster.
+      .force('charge', d3.forceManyBody().strength(d => d.kind === 'leaf' ? -24 : -1400))
+      .force('link', d3.forceLink([]).id(d => d.id).distance(l => l.kind === 'rv' ? ringRef.current : 52).strength(l => l.kind === 'rv' ? 0.03 : 0.8))
+      .force('collide', d3.forceCollide(d => d.r + (d.kind === 'value' ? 10 : 4)).strength(0.9).iterations(2))
+      .force('radial', d3.forceRadial(d => d.kind === 'value' ? ringRef.current : 0, 0, 0).strength(d => d.kind === 'value' ? 0.28 : 0))
+      .alphaDecay(0.03).velocityDecay(0.6)
       .on('tick', () => {
         const fns = fnodesRef.current, h = heldRef.current
         const root = fns.find(f => f.kind === 'root'); if (root) { root.x = 0; root.y = 0; root.fx = 0; root.fy = 0 }
@@ -410,10 +449,12 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove
     const prev = new Map((fnodesRef.current || []).map(f => [f.id, f]))
     const root = prev.get('__root__') || { id: '__root__', kind: 'root', x: 0, y: 0, fx: 0, fy: 0 }
     root.r = Math.max(34, Math.min(52, 24 + Math.sqrt(def.name.length) * 5)); root.name = def.name
+    // Ring grows with how many value clusters there are, so hubs get room to sit apart.
+    ringRef.current = Math.max(300, values.length * 95)
     const vnodes = values.map((v, i) => {
       const id = 'v:' + v.opt; const ex = prev.get(id)
       const ang = (i / Math.max(1, values.length)) * Math.PI * 2
-      const base = ex || { id, kind: 'value', x: Math.cos(ang) * 200, y: Math.sin(ang) * 200, vx: 0, vy: 0 }
+      const base = ex || { id, kind: 'value', x: Math.cos(ang) * ringRef.current, y: Math.sin(ang) * ringRef.current, vx: 0, vy: 0 }
       base.opt = v.opt; base.name = v.name; base.color = v.color; base.r = Math.max(52, Math.min(84, 44 + Math.sqrt(v.name.length) * 4.5))   // ~2x a leaf
       return base
     })
@@ -510,13 +551,27 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, zoomK, onRetag, onMove
         const isT = dragging && hover != null && values[hover] === v
         const vf = Math.max(12, Math.min(20, v.r * 0.26))
         return (
-          <g key={v.id} data-bubble="1" transform={`translate(${v.x},${v.y})`} style={{ cursor: 'grab' }} onMouseDown={e => startValueDrag(e, v)}>
+          <g key={v.id} data-bubble="1" transform={`translate(${v.x},${v.y})`} style={{ cursor: 'grab' }}
+            onMouseDown={e => startValueDrag(e, v)}
+            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setVmenu({ opt: v.opt }) }}>
             <circle r={v.r} fill={v.color + '2a'} stroke={isT ? '#7fd8a8' : v.color} strokeWidth={isT ? 4 : 3} />
             <text textAnchor="middle" dominantBaseline="middle" fontSize={vf} fontWeight={800} fill={isT ? '#7fd8a8' : '#e8eeff'} pointerEvents="none"
               style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>
               {wrapText(v.name, 11).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * (vf * 1.05) - vf * 0.5}>{ln}</tspan>)}
               <tspan x={0} y={vf * 1.4} fontSize={vf * 0.75} fillOpacity={0.85}>· {countByOpt[v.opt] || 0}</tspan>
             </text>
+            {vmenu?.opt === v.opt && (
+              <foreignObject x={v.r + 6} y={-40} width={190} height={140} style={{ overflow: 'visible' }}>
+                <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
+                  <div style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => { e.preventDefault() }}>
+                    <div style={vmStyles.head}>{v.name}</div>
+                    <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
+                    {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart() }}>Unpin (let it float)</div>}
+                    <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null) }}>Close</div>
+                  </div>
+                </div>
+              </foreignObject>
+            )}
           </g>
         )
       })}
@@ -598,7 +653,17 @@ function Bubble({ b, held, onDown }) {
   )
 }
 
+const vmStyles = {
+  menu: { background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 180, boxShadow: '0 8px 26px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' },
+  head: { padding: '4px 12px 5px', fontSize: '0.72rem', color: '#8ab4ff', fontWeight: 700, borderBottom: '1px solid #23233e', marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
+}
 const styles = {
+  viewBar: { position: 'absolute', top: 48, left: 12, zIndex: 5, display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap', maxWidth: 'calc(100% - 24px)', background: 'rgba(12,12,26,0.6)', padding: '3px 6px', borderRadius: 8 },
+  viewPill: { display: 'flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 100, border: '1px solid #2a2a3e', background: 'transparent', color: '#8090b8', cursor: 'pointer', fontSize: '0.76rem', userSelect: 'none' },
+  viewPillActive: { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' },
+  viewX: { color: '#f87171', fontSize: '0.9rem', lineHeight: 1, marginLeft: 1 },
+  viewAdd: { padding: '3px 8px', borderRadius: 6, border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer', fontSize: '0.82rem' },
   wrap: { position: 'relative', height: '100%', width: '100%', background: '#0c0c1a', overflow: 'hidden' },
   svg: { width: '100%', height: '100%', display: 'block', cursor: 'grab' },
   toolbar: { position: 'absolute', top: 12, left: 12, zIndex: 5, display: 'flex', gap: 12, alignItems: 'center' },
