@@ -85,6 +85,7 @@ export default function PackBoard({ projectId }) {
   }
   // Commit to store + DB (add / remove / move-end). Move-drag itself stays local for smoothness.
   const commit = (next) => { setSystems(next); setBoardSystems(next); persist(next) }
+  const systemsRef = useRef(systems); systemsRef.current = systems   // live copy for handlers (avoid stale closures)
 
   useEffect(() => {
     if (!svgRef.current) return
@@ -99,13 +100,13 @@ export default function PackBoard({ projectId }) {
   const toWorld = (ev) => { const g = gRef.current, svg = svgRef.current; const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const l = pt.matrixTransform(g.getScreenCTM().inverse()); return { x: l.x, y: l.y } }
 
   const addSystem = (propId, kind) => {
-    const n = systems.length
+    const cur = systemsRef.current                     // live list — not the stale render closure
+    const n = cur.length
     const x = 300 + (n % 3) * 640, y = 300 + Math.floor(n / 3) * 580
-    commit([...systems, { id: crypto.randomUUID(), propId, x, y, kind }])
+    commit([...cur, { id: crypto.randomUUID(), propId, x, y, kind }])
     // Leave the menu open so several packs/trees can be added in a row; click away to dismiss.
   }
-  const removeSystem = (id) => commit(systems.filter(s => s.id !== id))
-  const systemsRef = useRef(systems); systemsRef.current = systems
+  const removeSystem = (id) => commit(systemsRef.current.filter(s => s.id !== id))
   const moveSystem = (id, x, y) => setSystems(prev => prev.map(s => s.id === id ? { ...s, x, y } : s))
   const commitMove = () => commit(systemsRef.current)   // latest moved positions
 
@@ -275,7 +276,7 @@ function Cluster({ sys, def, nodes, decorColor, toWorld, onRetag, onMove, onComm
     if (e.button === 2) return
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current; const start = local(e)
-    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.key])); sim.alphaTarget(0.3).restart()
+    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.key])); sim.alphaTarget(0.12).restart()
     const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
@@ -422,7 +423,7 @@ function TreeCluster({ sys, def, nodes, decorOf, toWorld, onRetag, onMove, onCom
     if (e.button === 2) return
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current; const start = local(e)
-    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.id])); sim.alphaTarget(0.3).restart()
+    b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.id])); sim.alphaTarget(0.12).restart()
     const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
@@ -537,7 +538,7 @@ function LeafNode({ b, held, onDown }) {
       {body}
       {emoji && <text textAnchor="middle" dominantBaseline="middle" fontSize={s * 0.7} y={-s * 0.42} pointerEvents="none">{emoji}</text>}
       <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
-        style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
+        style={{ fontWeight: 400, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
         {lines.map((ln, i) => <tspan key={i} x={0} y={yStart + i * lh}>{ln}</tspan>)}
       </text>
     </g>
@@ -553,7 +554,7 @@ function Bubble({ b, held, onDown }) {
     <g data-bubble="1" transform={`translate(${b.x || 0},${b.y || 0})`} style={{ cursor: 'grab' }} onMouseDown={onDown}>
       <circle r={b.r} fill={b.color} fillOpacity={0.96} stroke={held ? '#fff' : 'rgba(232,238,255,0.4)'} strokeWidth={held ? 3.5 : 1.2} />
       <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
-        style={{ fontWeight: 700, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
+        style={{ fontWeight: 400, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
         {lines.map((ln, i) => <tspan key={i} x={0} y={y0 + i * lh}>{ln}</tspan>)}
       </text>
     </g>
