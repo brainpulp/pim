@@ -357,8 +357,9 @@ const FW = 1100, FH = 760
 const NODE_COLORS = ['#7c8cff', '#4fd1c5', '#f6ad55', '#fc8181', '#b794f4', '#68d391', '#f6e05e', '#63b3ed', '#f687b3', '#a0aec0']
 const hashStr = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h) }
 const radiusFor = (label) => {
+  // Tight band so bubbles read as one uniform size (long labels get only a little more room → wrap).
   const len = String(label || '').replace(/\s+/g, ' ').trim().length
-  return Math.max(30, Math.min(66, 24 + Math.sqrt(Math.max(len, 4)) * 6.6))
+  return Math.max(34, Math.min(50, 30 + Math.sqrt(Math.max(len, 4)) * 3.0))
 }
 // Relative luminance of a #rrggbb colour → pick legible text (dark on light fills, light on dark).
 const hexLum = (hex) => {
@@ -400,10 +401,12 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
       const v = n.props?.[def.id]
       const ids = Array.isArray(v) ? v.filter(Boolean) : (v != null && v !== '' ? [v] : [])
       const valid = ids.filter(id => idx.has(id))
-      const color = decorOf?.(n.id)?.color || NODE_COLORS[hashStr(String(n.id)) % NODE_COLORS.length]
+      // Colour is intentional, not random: a node's own graph fill wins; otherwise the bubble takes
+      // its PACK's value colour (so every item in a pack shares a colour). Untagged → neutral grey.
+      const explicit = decorOf?.(n.id)?.color || null
       const label = n.label || '(untitled)'
-      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color })
-      else valid.forEach(id => raw.push({ nodeId: n.id, opt: id, group: idx.get(id), label, color }))
+      if (!valid.length) raw.push({ nodeId: n.id, opt: '__untagged__', group: -1, label, color: explicit || '#6b7394' })
+      else valid.forEach(id => { const gi = idx.get(id); raw.push({ nodeId: n.id, opt: id, group: gi, label, color: explicit || groups[gi].color }) })
     })
     raw.forEach(b => { b.key = b.nodeId + '@' + b.opt; b.r = radiusFor(b.label) })
     return { groups, bubbles: raw }
@@ -426,14 +429,14 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
   // tick (so belonging is unambiguous and packs can't visually overrun each other).
   useEffect(() => {
     const packSim = d3.forceSimulation([])
-      .force('x', d3.forceX(FW / 2).strength(0.035))
-      .force('y', d3.forceY(FH / 2).strength(0.035))
-      .force('collide', d3.forceCollide(p => p.r + 6).strength(1).iterations(3))
-      .alphaDecay(0.03).velocityDecay(0.62)
+      .force('x', d3.forceX(FW / 2).strength(0.09))
+      .force('y', d3.forceY(FH / 2).strength(0.09))
+      .force('collide', d3.forceCollide(p => p.r + 3).strength(1).iterations(3))
+      .alphaDecay(0.03).velocityDecay(0.72)
       .on('tick', () => {
         // Hard no-overlap: separate any pair of packs that still overlaps (collide can lag under
         // drag/anchor). Anchored packs (fx set) stay put; the other one yields.
-        const packs = packsRef.current, GAP = 7
+        const packs = packsRef.current, GAP = 3
         for (let i = 0; i < packs.length; i++) for (let j = i + 1; j < packs.length; j++) {
           const a = packs[i], b = packs[j]
           const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + GAP
@@ -505,7 +508,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
         // above can nudge a pack toward a neighbour after that sim has cooled. Anchored packs win.
         for (let i = 0; i < packs.length; i++) for (let j = i + 1; j < packs.length; j++) {
           const a = packs[i], b = packs[j]
-          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 7
+          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = a.r + b.r + 3
           if (d < min) {
             const dd = d || 1, ux = dx / dd, uy = dy / dd, push = min - d
             const aFix = a.fx != null, bFix = b.fx != null
@@ -576,7 +579,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
   useEffect(() => {
     if (!svgRef.current) return
     const sel = d3.select(svgRef.current)
-    const zoom = d3.zoom().scaleExtent([0.3, 8])
+    const zoom = d3.zoom().scaleExtent([0.06, 8])
       .filter(e => {
         if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-pack]')) return false
         return !e.ctrlKey && !e.button
@@ -588,8 +591,21 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
   }, [])
   const fitAll = () => {
     if (!zoomRef.current || !svgRef.current) return
-    d3.select(svgRef.current).transition().duration(420).call(zoomRef.current.transform, d3.zoomIdentity)
+    const bs = bubblesRef.current || [], ps = packsRef.current || []
+    const all = [...ps.map(p => ({ x: p.x, y: p.y, r: p.r })), ...bs.map(b => ({ x: b.x || 0, y: b.y || 0, r: b.r }))]
+    if (!all.length) { d3.select(svgRef.current).transition().duration(420).call(zoomRef.current.transform, d3.zoomIdentity); return }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    all.forEach(o => { minX = Math.min(minX, o.x - o.r); minY = Math.min(minY, o.y - o.r); maxX = Math.max(maxX, o.x + o.r); maxY = Math.max(maxY, o.y + o.r) })
+    const pad = 60, w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2
+    const k = Math.min(4, Math.max(0.06, Math.min(FW / w, FH / h)))
+    const tx = FW / 2 - k * (minX + maxX) / 2, ty = FH / 2 - k * (minY + maxY) / 2
+    d3.select(svgRef.current).transition().duration(420).call(zoomRef.current.transform, d3.zoomIdentity.translate(tx, ty).scale(k))
   }
+  // Open with everything in view: fit once the layout has settled, and again when the grouping changes.
+  useEffect(() => {
+    const t = setTimeout(fitAll, 700)
+    return () => clearTimeout(t)
+  }, [def?.id]) // eslint-disable-line
 
   const toWorld = (ev) => {
     const g = gRef.current, svg = svgRef.current
@@ -618,8 +634,8 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     if (e.button === 2) return   // let right-click open the context menu, not drag
     e.preventDefault(); e.stopPropagation()
     const p0 = toWorld(e); const ox = pack.x - p0.x, oy = pack.y - p0.y
-    packSimRef.current.alphaTarget(0.3).restart()
-    simRef.current.alphaTarget(0.3).restart()   // keep members warm so they follow + get shoved aside
+    packSimRef.current.alphaTarget(0.2).restart()
+    simRef.current.alphaTarget(0.15).restart()   // keep members warm so they follow + get shoved aside (gentle)
     const move = ev => {
       const p = toWorld(ev); let x = p.x + ox, y = p.y + oy
       // clamp the dragged pack out of every other pack so packs never overlap
@@ -655,7 +671,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
     const onMove = ev => {
       const p = toWorld(ev)
       if (!moved && Math.hypot(p.x - start.x, p.y - start.y) > 5) {
-        moved = true; sim.alphaTarget(0.3).restart(); setHeldKeys(new Set(keys))
+        moved = true; sim.alphaTarget(0.12).restart(); setHeldKeys(new Set(keys))   // gentle reheat — no motion storm
       }
       if (moved) {
         offs.forEach(o => { o.b.fx = p.x + o.dx; o.b.fy = p.y + o.dy; o.b.x = o.b.fx; o.b.y = o.b.fy })
@@ -753,7 +769,7 @@ function TagPackForce({ def, nodes, decorOf, onRetagMany, onCreateNode, onAddVal
           const isSel = selected.has(b.key)
           const light = hexLum(b.color) > 0.55
           const textFill = light ? '#0c0c1a' : '#f2f5ff'
-          const fs = Math.max(9, b.r * 0.3)
+          const fs = Math.max(11, Math.min(13.5, b.r * 0.28))   // near-constant → labels read at one size
           const maxChars = Math.max(5, Math.floor((1.7 * b.r) / (fs * 0.56)))
           const lines = wrapText(b.label, maxChars).slice(0, 6)
           const lh = fs * 1.05

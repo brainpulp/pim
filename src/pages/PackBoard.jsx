@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useMemo } from 'react'
 import * as d3 from 'd3'
 import useGraphStore from '../lib/graphStore'
 import { saveProject } from '../lib/db'
+import { FilterBar, nodeMatchesFilter } from '../lib/filter'
 
 // Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
 // clusters. Two kinds:
@@ -36,6 +37,8 @@ export default function PackBoard({ projectId }) {
   const [tf, setTf] = useState(d3.zoomIdentity)
   const [systems, setSystems] = useState([])   // working copy: [{ id, propId, x, y, kind }]
   const [adding, setAdding] = useState(false)
+  const [filter, setFilter] = useState({ text: '', rules: [] })
+  const filterKey = JSON.stringify(filter)
 
   const activeView = views.find(v => v.id === activeViewId)
 
@@ -121,7 +124,9 @@ export default function PackBoard({ projectId }) {
     if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   }
 
-  const visibleNodes = useMemo(() => nodes.filter(n => nodeVisible(n.id)), [nodes, activeView]) // eslint-disable-line
+  const visibleNodes = useMemo(
+    () => nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
+    [nodes, activeView, filterKey, propertyDefs]) // eslint-disable-line
 
   return (
     <div style={styles.wrap} onContextMenu={e => e.preventDefault()}>
@@ -141,7 +146,8 @@ export default function PackBoard({ projectId }) {
             </div>
           </>)}
         </div>
-        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · pick from the menu repeatedly to add more · drag a header to move · scroll = zoom · drag empty = pan</span>
+        <FilterBar filter={filter} setFilter={setFilter} propertyDefs={propertyDefs} />
+        <span style={{ color: '#8090b8', fontSize: '0.74rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · add more from the menu · drag a header to move · scroll = zoom</span>
       </div>
       {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
       <svg ref={svgRef} style={styles.svg}>
