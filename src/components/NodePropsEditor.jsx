@@ -2,7 +2,8 @@ import { useState } from 'react'
 
 // Modal: edit every property of a node (all types). Writes via onSet(propId, value).
 // onAddOption(propId, name) adds a new select/multiSelect value. Shared by pack view + board.
-export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption, onClose }) {
+// `actions` = optional [{ label, onClick, danger? }] rendered as a footer button row.
+export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption, onClose, actions }) {
   if (!node) return null
   const props = node.props || {}
   return (
@@ -21,6 +22,13 @@ export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption
             </div>
           ))}
         </div>
+        {actions && actions.length > 0 && (
+          <div style={npe.actions}>
+            {actions.map((a, i) => (
+              <button key={i} style={{ ...npe.actionBtn, ...(a.danger ? npe.actionDanger : {}) }} onClick={a.onClick}>{a.label}</button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -72,4 +80,7 @@ const npe = {
   input: { width: '100%', background: '#0f0f22', border: '1px solid #2d3a6a', color: '#e8eeff', borderRadius: 6, padding: '5px 8px', fontSize: '0.82rem', outline: 'none' },
   chip: { border: '1px solid', borderRadius: 100, padding: '3px 10px', fontSize: '0.76rem', cursor: 'pointer' },
   addChip: { border: '1px dashed #3a4a8a', background: 'transparent', color: '#8ab4ff', borderRadius: 100, padding: '3px 10px', fontSize: '0.76rem', cursor: 'pointer' },
+  actions: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, paddingTop: 12, borderTop: '1px solid #23233e' },
+  actionBtn: { background: '#181834', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '6px 11px', fontSize: '0.78rem', cursor: 'pointer' },
+  actionDanger: { borderColor: '#5a2a2a', color: '#f0a0a0' },
 }

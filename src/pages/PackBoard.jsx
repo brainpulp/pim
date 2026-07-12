@@ -125,7 +125,7 @@ export default function PackBoard({ projectId }) {
   const [filter, setFilter] = useState({ text: '', rules: [] })
   const filterKey = JSON.stringify(filter)
   const [selectedSys, setSelectedSys] = useState(null)   // cluster shown in the right-docked inspector
-  const [editNodeId, setEditNodeId] = useState(null) // node whose properties are being edited (right-click)
+  const [edit, setEdit] = useState(null) // { nodeId, sysId } — node being edited + the cluster it opened from
   const [fisheye, setFisheye] = useState(false)      // hover magnifier lens toggle
   const [, setLensTick] = useState(0)                // forces re-render as the lens focus follows the cursor
   const focusRef = useRef(null)                      // lens focus in world coords, or null
@@ -275,13 +275,32 @@ export default function PackBoard({ projectId }) {
   const switchView = (id) => { setActiveView(id); saveAll() }
   const setBoardColorBy = (propId) => { setViewColorBy(propId); saveAll() }
 
-  // Set several properties on a node at once (used by nested-pack drop → sets outer + inner).
+  // Set several properties on a node at once (deterministic pack drop → sets group value(s)).
+  // `from` = the source option the leaf was dragged out of: for multiSelect we remove only that
+  // membership and add the target, so a node's OTHER tags are preserved (moving one, not replacing
+  // all). For a date group the value is a bucket id → written as a representative date.
   const retagMulti = (nodeId, assignments) => {
-    assignments.forEach(({ propId, value }) => {
+    const now = startOfDay(new Date())
+    const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+    assignments.forEach(({ propId, value, from }) => {
       const def = propertyDefs.find(d => d.id === propId); if (!def) return
-      setNodeProp(nodeId, propId, def.type === 'multiSelect' ? (value ? [value] : []) : (value || null))
+      if (def.type === 'date') { setNodeProp(nodeId, propId, value ? dueRepDate(value, now) : null); return }
+      if (def.type === 'multiSelect') {
+        const raw = node?.props?.[propId]
+        let next = Array.isArray(raw) ? [...raw] : (raw ? [raw] : [])
+        if (from && from !== '__untagged__') next = next.filter(x => x !== from)
+        if (value && value !== '__untagged__' && !next.includes(value)) next.push(value)
+        setNodeProp(nodeId, propId, next)
+        return
+      }
+      setNodeProp(nodeId, propId, value && value !== '__untagged__' ? value : null)
     })
     saveAll()
+  }
+  // Group ids a node falls into for a cluster's grouping def (tag values or date buckets), validated.
+  const groupValsOf = (n, def) => {
+    const ids = nodeGroupIds(def, n, startOfDay(new Date())).filter(id => def.type === 'dateBucket' ? true : (def.options || []).some(o => o.id === id))
+    return ids.length ? ids : ['__untagged__']
   }
   // Hide a set of nodes in the active view (used by the parent-hub "Hide items" action).
   const hideNodes = (ids) => {
@@ -362,35 +381,39 @@ export default function PackBoard({ projectId }) {
               const def = isDate ? dueDefFor(rawDef) : rawDef
               const common = {
                 key: sys.id, sys, def, nodes: visibleNodes, decorColor, decorOf, toWorld, zoomK: tf.k, lens,
-                filterFn: (n) => nodeMatchesFilter(n, sys.filter || { text: '', rules: [] }, propertyDefs),
-                clusterFilterKey: JSON.stringify(sys.filter || {}),
+                filterFn: (n) => !(sys.hiddenIds || []).includes(n.id) && nodeMatchesFilter(n, sys.filter || { text: '', rules: [] }, propertyDefs),
+                clusterFilterKey: JSON.stringify({ f: sys.filter || {}, h: sys.hiddenIds || [] }),
                 hasFilter: !!(sys.filter?.text || sys.filter?.rules?.length),
                 selected: selectedSys === sys.id, onSelect: () => setSelectedSys(sys.id),
                 colorMode: sys.colorBy !== undefined ? sys.colorBy : (activeView?.colorBy || null),
                 sizeMode: sys.sizeBy || null, propertyDefs,
-                onEditNode: setEditNodeId, onDrill: zoomToFit,
+                onEditNode: (nodeId, sysId) => setEdit({ nodeId, sysId: sysId || sys.id }), onDrill: zoomToFit,
                 onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
               }
-              // Two+ grouping levels on a (tag) pack → deterministic nested circle pack (sub-packs inside packs).
-              const groupDefs = isDate ? [] : groupBy.map(id => propertyDefs.find(d => d.id === id)).filter(Boolean)
-              if (sys.kind !== 'tree' && groupDefs.length >= 2) {
-                return <NestedPackCluster {...common} groupDefs={groupDefs} onRetagMulti={retagMulti} />
+              if (sys.kind === 'tree') {
+                const onRetag = isDate
+                  ? (nid, _so, to) => { const val = to === '__untagged__' ? null : dueRepDate(to, startOfDay(new Date())); setNodeProp(nid, rawDef.id, val); saveAll() }
+                  : (nid, so, to, add) => retag(groupBy[0], nid, so, to, add)
+                return <TreeCluster {...common} onRetag={onRetag} onHideNodes={hideNodes} onSaveHubs={(map) => setSystemConfig(sys.id, { hubPos: map })} />
               }
-              const onRetag = isDate
-                ? (nid, _so, to) => { const val = to === '__untagged__' ? null : dueRepDate(to, startOfDay(new Date())); setNodeProp(nid, rawDef.id, val); saveAll() }
-                : (nid, so, to, add) => retag(groupBy[0], nid, so, to, add)
-              const single = { ...common, onRetag, onHideNodes: hideNodes }
-              return sys.kind === 'tree' ? <TreeCluster {...single} /> : <Cluster {...single} />
+              // Circle pack — deterministic d3.pack (no overlap, minimal size), 1 or 2 grouping levels.
+              // Date packs are always single-level (bucketed).
+              const packDefs = isDate ? [def] : groupBy.map(id => propertyDefs.find(d => d.id === id)).filter(Boolean).slice(0, 2)
+              return <NestedPackCluster {...common} groupDefs={packDefs.length ? packDefs : [def]} groupValsOf={groupValsOf} onRetagMulti={retagMulti} />
             })}
           </g>
         </svg>
-        {editNodeId && (
+        {edit && (
           <NodePropsEditor
-            node={nodes.find(n => n.id === editNodeId)}
+            node={nodes.find(n => n.id === edit.nodeId)}
             propertyDefs={propertyDefs}
-            onSet={(propId, value) => { setNodeProp(editNodeId, propId, value); saveAll() }}
+            onSet={(propId, value) => { setNodeProp(edit.nodeId, propId, value); saveAll() }}
             onAddOption={(propId, name) => addSelectOption(propId, name)}
-            onClose={() => setEditNodeId(null)}
+            onClose={() => setEdit(null)}
+            actions={[
+              ...(edit.sysId ? [{ label: '⊘ Hide in this cluster', onClick: () => { const s = systemsRef.current.find(x => x.id === edit.sysId); setSystemConfig(edit.sysId, { hiddenIds: [...new Set([...(s?.hiddenIds || []), edit.nodeId])] }); setEdit(null) } }] : []),
+              { label: '🙈 Hide in this view', danger: true, onClick: () => { hideNodes([edit.nodeId]); setEdit(null) } },
+            ]}
           />
         )}
       </div>
@@ -573,7 +596,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onSaveHubs, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -659,6 +682,9 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const ang = (i / Math.max(1, values.length)) * Math.PI * 2
       const base = ex || { id, kind: 'value', x: Math.cos(ang) * ringRef.current, y: Math.sin(ang) * ringRef.current, vx: 0, vy: 0 }
       base.opt = v.opt; base.name = v.name; base.color = v.color; base.r = Math.max(52, Math.min(84, 44 + Math.sqrt(v.name.length) * 4.5))   // ~2x a leaf
+      // Restore a hub the user dragged + pinned in a previous session (persisted on the cluster).
+      const pin = sys.hubPos?.[v.opt]
+      if (pin && base.fx == null) { base.x = pin.x; base.y = pin.y; base.fx = pin.x; base.fy = pin.y }
       return base
     })
     const vById = new Map(vnodes.map(v => [v.opt, v]))
@@ -702,6 +728,12 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
+  // Collect + persist every pinned hub's position so a dragged layout survives view-switch/reload.
+  const saveHubs = () => {
+    if (!onSaveHubs) return
+    const map = {}; valuesRef.current.forEach(h => { if (h.fx != null) map[h.opt] = { x: h.fx, y: h.fy } })
+    onSaveHubs(map)
+  }
   // Drag a value hub (parent) → it stays pinned where dropped; its leaves follow via the link force.
   const startValueDrag = (e, v) => {
     if (e.button === 2) return
@@ -709,7 +741,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
     const sim = simRef.current
     v.fx = v.x; v.fy = v.y; sim.alphaTarget(0.15).restart()
     const move = ev => { const p = local(ev); v.fx = p.x; v.fy = p.y; v.x = p.x; v.y = p.y; setTick(t => t + 1) }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); sim.alphaTarget(0) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); sim.alphaTarget(0); saveHubs() }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
   const startHeadDrag = (e) => {
@@ -785,7 +817,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
               <div ref={vmenuElRef} style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
                 <div style={vmStyles.head}>{v.name}</div>
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
-                {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart() }}>Unpin (let it float)</div>}
+                {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart(); saveHubs() }}>Unpin (let it float)</div>}
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null) }}>Close</div>
               </div>
             </div>
@@ -796,24 +828,27 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
   )
 }
 
-// Deterministic NESTED circle pack: outer packs = groupDefs[0] values, inner sub-packs = groupDefs[1]
-// values, then item leaves. Explore + drag-to-retag: dropping a leaf on a sub-pack sets BOTH the
-// outer and inner property to that sub-pack's (a,b); dropping on empty space clears the outer value.
+// Deterministic circle pack (d3.pack — guarantees NO overlap and minimal enclosing size, unlike a
+// force sim). One grouping level: packs = groupDefs[0] values → item leaves. Two levels: outer packs
+// = groupDefs[0], inner sub-packs = groupDefs[1] → leaves. Drag-to-retag: dropping a leaf on a
+// sub-pack sets both (a,b); on an outer pack sets a; on empty space clears the outer value.
 const NP_D = 1000
-function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, lens, filterFn, clusterFilterKey, selected, onSelect, onEditNode, onDrill, onRetagMulti, onMove, onCommitMove, onRemove }) {
+function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, groupValsOf, selected, onSelect, onEditNode, onDrill, onRetagMulti, onMove, onCommitMove, onRemove }) {
   const [, setTick] = useState(0)
   const [drag, setDrag] = useState(null)   // { id, x, y } in pack-local coords while dragging a leaf
   const [defA, defB] = groupDefs
+  const nLevels = groupDefs.length          // 1 = simple pack, 2 = nested
+  const leafDepth = nLevels + 1             // root(0) → A(1) → [B(2) →] leaf
   const structureKey = useMemo(() =>
-    nodes.map(n => n.id + JSON.stringify([n.props?.[defA.id], n.props?.[defB.id]]) + ':' + (n.label || '')).join(';')
-    + '#' + [defA, defB].map(d => d.id + ':' + (d.options || []).length).join('|') + '#' + clusterFilterKey + '#' + (colorMode || '') + '#' + (sizeMode || ''),
+    nodes.map(n => n.id + JSON.stringify([n.props?.[defA.id], defB ? n.props?.[defB.id] : null]) + ':' + (n.label || '')).join(';')
+    + '#' + groupDefs.map(d => d.id + ':' + (d.options || []).length).join('|') + '#' + clusterFilterKey + '#' + (colorMode || '') + '#' + (sizeMode || ''),
     [nodes, defA, defB, clusterFilterKey, colorMode, sizeMode]) // eslint-disable-line
   const root = useMemo(() => {
     const fnodes = nodes.filter(n => !filterFn || filterFn(n))
     const numDomain = (sizeMode && sizeMode !== 'style') ? domainOf(fnodes, sizeMode) : null
-    const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy: (sizeMode && sizeMode !== 'style') ? sizeMode : undefined })
+    const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy: (sizeMode && sizeMode !== 'style') ? sizeMode : undefined, valsOf: groupValsOf })
     const h = d3.hierarchy(tree).sum(d => d.value || 1).sort((a, b) => (b.value || 0) - (a.value || 0))
-    d3.pack().size([NP_D, NP_D]).padding(10)(h)
+    d3.pack().size([NP_D, NP_D]).padding(nLevels === 2 ? 10 : 6)(h)
     void numDomain
     return h
   }, [structureKey]) // eslint-disable-line
@@ -827,10 +862,10 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
     const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (moved) onCommitMove(); else onSelect && onSelect() }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
-  const dropTargetAt = (p) => {   // which (a,b) or (a) circle is the point over?
+  const dropTargetAt = (p) => {   // deepest group circle the point is inside (sub-pack beats pack)
     let bHit = null, aHit = null
     root.descendants().forEach(d => {
-      if (d.depth === 2 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) bHit = d
+      if (nLevels === 2 && d.depth === 2 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) bHit = d
       else if (d.depth === 1 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) aHit = d
     })
     return bHit || aHit || null
@@ -845,19 +880,24 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
       const p = local(ev); setDrag(null)
       if (Math.hypot(p.x - start.x, p.y - start.y) < 4) return
       const nodeId = leaf.data.id.split('@')[0]
+      // Source group values the leaf was dragged out of (from its ancestor circles) — so a multiSelect
+      // move removes only that membership, not the node's other tags.
+      const anc = leaf.ancestors()
+      const srcA = (/^a:([^|]*)/.exec(anc.find(x => x.depth === 1)?.data.id || '') || [])[1]
+      const srcB = nLevels === 2 ? (/\|b:(.*)$/.exec(anc.find(x => x.depth === 2)?.data.id || '') || [])[1] : undefined
       const tgt = dropTargetAt(p)
-      if (!tgt) { onRetagMulti(nodeId, [{ propId: defA.id, value: null }]); return }
-      if (tgt.depth === 2) { const m = /^a:(.*)\|b:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1] === '__untagged__' ? null : m[1] }, { propId: defB.id, value: m[2] === '__untagged__' ? null : m[2] }]) }
-      else { const m = /^a:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1] === '__untagged__' ? null : m[1] }]) }
+      if (!tgt) { onRetagMulti(nodeId, [{ propId: defA.id, value: null, from: srcA }]); return }
+      if (tgt.depth === 2) { const m = /^a:(.*)\|b:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1], from: srcA }, { propId: defB.id, value: m[2], from: srcB }]) }
+      else { const m = /^a:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1], from: srcA }]) }
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
 
   const nodes_ = root.descendants()
   const aNodes = nodes_.filter(d => d.depth === 1)
-  const bNodes = nodes_.filter(d => d.depth === 2)
-  const leaves = nodes_.filter(d => d.depth === 3)
-  const dropB = drag ? dropTargetAt(drag) : null
+  const bNodes = nLevels === 2 ? nodes_.filter(d => d.depth === 2) : []
+  const leaves = nodes_.filter(d => d.depth === leafDepth)
+  const dropHit = drag ? dropTargetAt(drag) : null
   const headY = -20
   const oxN = sys.x - off, oyN = sys.y - off
   const clusterBBox = () => {
@@ -869,16 +909,31 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
 
   return (
     <g transform={`translate(${oxN},${oyN})`}>
-      <ClusterHeader def={{ name: groupDefs.map(d => d.name).join(' › ') }} kind="pack" cx={off} y={headY} zoomK={zoomK} hasFilter={false} selected={selected} onHead={startHeadDrag} onDrill={() => onDrill && onDrill(clusterBBox())} onRemove={onRemove} />
-      {aNodes.map(a => (
-        <g key={a.data.id} pointerEvents="none">
-          <circle cx={a.x} cy={a.y} r={a.r} fill="none" stroke={(a.data.color || '#5b6af0') + '99'} strokeWidth={2} strokeDasharray="6 5" />
-          <text x={a.x} y={a.y - a.r - 6} textAnchor="middle" fontSize={zfont(15, zoomK, 12, 30)} fontWeight={800} fill={a.data.color || '#c5d0ff'}
-            style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 5, strokeLinejoin: 'round' }}>{a.data.label}</text>
-        </g>
-      ))}
+      <ClusterHeader def={{ name: groupDefs.map(d => d.name).join(' › ') }} kind="pack" cx={off} y={headY} zoomK={zoomK} hasFilter={hasFilter} selected={selected} onHead={startHeadDrag} onDrill={() => onDrill && onDrill(clusterBBox())} onRemove={onRemove} />
+      {aNodes.map(a => {
+        // Single-level: depth-1 circles ARE the packs (filled tint + count). Two-level: they're the
+        // dashed outer containers and depth-2 sub-packs carry the fill.
+        if (nLevels === 1) {
+          const isT = dropHit === a
+          const zf = zfont(16, zoomK, 12, 30), count = a.leaves().length
+          return (
+            <g key={a.data.id} pointerEvents="none">
+              <circle cx={a.x} cy={a.y} r={a.r} fill={(a.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (a.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 2} />
+              <text x={a.x} y={a.y - a.r - zf * 0.4} textAnchor="middle" fontSize={zf} fontWeight={800} fill={isT ? '#7fd8a8' : (a.data.color || '#c5d0ff')}
+                style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: zf * 0.29, strokeLinejoin: 'round' }}>{a.data.label} · {count}</text>
+            </g>
+          )
+        }
+        return (
+          <g key={a.data.id} pointerEvents="none">
+            <circle cx={a.x} cy={a.y} r={a.r} fill="none" stroke={(a.data.color || '#5b6af0') + '99'} strokeWidth={2} strokeDasharray="6 5" />
+            <text x={a.x} y={a.y - a.r - 6} textAnchor="middle" fontSize={zfont(15, zoomK, 12, 30)} fontWeight={800} fill={a.data.color || '#c5d0ff'}
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 5, strokeLinejoin: 'round' }}>{a.data.label}</text>
+          </g>
+        )
+      })}
       {bNodes.map(b => {
-        const isT = dropB === b
+        const isT = dropHit === b
         return (
           <g key={b.data.id} pointerEvents="none">
             <circle cx={b.x} cy={b.y} r={b.r} fill={(b.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (b.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 1.8} />
@@ -1086,6 +1141,13 @@ function ClusterInspector({ sys, propertyDefs, tagDefs, numberDefs, dateDefs, on
         <FilterBar filter={filter} setFilter={upd => onFilter(typeof upd === 'function' ? upd(filter) : upd)} propertyDefs={propertyDefs} />
       </div>
 
+      {(sys.hiddenIds && sys.hiddenIds.length > 0) && (
+        <div style={insp.section}>
+          <div style={insp.label}>Hidden in this cluster</div>
+          <button style={insp.showAll} onClick={() => onConfig({ hiddenIds: [] })}>{sys.hiddenIds.length} hidden · Show all</button>
+        </div>
+      )}
+
       <div style={{ flex: 1 }} />
       <button style={insp.remove} onClick={() => { if (confirm(`Remove the “${def?.name}” cluster?`)) onRemove() }}>Remove cluster</button>
     </div>
@@ -1101,6 +1163,7 @@ const insp = {
   label: { fontSize: '0.68rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8090b8' },
   sel: { width: '100%', background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, padding: '6px 8px', fontSize: '0.82rem', cursor: 'pointer' },
   remove: { background: 'transparent', border: '1px solid #5a2a2a', color: '#f87171', borderRadius: 7, padding: '7px 10px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 },
+  showAll: { background: '#12122a', border: '1px solid #2d3a6a', color: '#8ecbff', borderRadius: 6, padding: '6px 8px', fontSize: '0.78rem', cursor: 'pointer' },
 }
 
 const vmStyles = {
