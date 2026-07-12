@@ -544,6 +544,12 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, boardSystems: systems } : v),
   })),
 
+  // Board-only hidden node ids (per active view). Kept SEPARATE from the shared `visible` flag so
+  // hiding on the board does NOT hide the same node in the graph (modes are independent lenses).
+  setViewBoardHidden: (ids) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, boardHidden: ids } : v),
+  })),
+
   // Pack/board property filter, persisted on the active view (survives reload + syncs across devices).
   setViewFilter: (filter) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, filter } : v),

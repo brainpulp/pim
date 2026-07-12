@@ -110,6 +110,7 @@ export default function PackBoard({ projectId }) {
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
+  const setViewBoardHidden = useGraphStore(s => s.setViewBoardHidden)
   const setViewFilter = useGraphStore(s => s.setViewFilter)
   const setViewColorBy = useGraphStore(s => s.setViewColorBy)
   const setActiveView = useGraphStore(s => s.setActiveView)
@@ -329,15 +330,18 @@ export default function PackBoard({ projectId }) {
     })
     saveAll()
   }
-  // Hide a set of nodes in the active view (used by the parent-hub "Hide items" action).
+  // Board-only hidden set (per view). Independent of the graph's `visible` flag so board hides don't
+  // touch the graph and vice-versa.
+  const boardHiddenSet = useMemo(() => new Set(activeView?.boardHidden || []), [activeView])
   const hideNodes = (ids) => {
-    ids.forEach(id => setNodeViewProp(id, 'visible', false))
-    if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
+    const cur = new Set(activeView?.boardHidden || [])
+    ids.forEach(id => cur.add(id))
+    setViewBoardHidden([...cur]); saveAll()
   }
 
   const visibleNodes = useMemo(
-    () => nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
-    [nodes, activeView, filterKey, propertyDefs]) // eslint-disable-line
+    () => nodes.filter(n => !boardHiddenSet.has(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
+    [nodes, boardHiddenSet, filterKey, propertyDefs]) // eslint-disable-line
 
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
@@ -391,15 +395,12 @@ export default function PackBoard({ projectId }) {
           ))}
           <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate view">⧉</button>
           <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
-          {(() => {
-            const np = activeView?.nodeProps || {}
-            const hidden = nodes.filter(n => np[n.id]?.visible === false)
-            if (!hidden.length) return null
-            return <button style={{ ...styles.lensBtn, marginLeft: 'auto', color: '#f0b090', borderColor: '#5a4030' }}
-              title="These are hidden in this whole view (board + graph). Click to show them again."
-              onClick={() => { hidden.forEach(n => setNodeViewProp(n.id, 'visible', true)); saveAll() }}>🙈 {hidden.length} hidden · Show all</button>
-          })()}
-          <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), ...(activeView?.nodeProps && nodes.some(n => activeView.nodeProps[n.id]?.visible === false) ? {} : { marginLeft: 'auto' }) }}
+          {boardHiddenSet.size > 0 && (
+            <button style={{ ...styles.lensBtn, marginLeft: 'auto', color: '#f0b090', borderColor: '#5a4030' }}
+              title="Hidden on the board only (the graph is unaffected). Click to show them again."
+              onClick={() => { setViewBoardHidden([]); saveAll() }}>🙈 {boardHiddenSet.size} hidden · Show all</button>
+          )}
+          <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), ...(boardHiddenSet.size > 0 ? {} : { marginLeft: 'auto' }) }}
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
           <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header for controls · double-click to zoom · drag to move</span>
         </div>
@@ -455,7 +456,7 @@ export default function PackBoard({ projectId }) {
             onClose={() => setEdit(null)}
             actions={[
               ...(edit.sysId ? [{ label: '⊘ Hide in this cluster', onClick: () => { const s = systemsRef.current.find(x => x.id === edit.sysId); setSystemConfig(edit.sysId, { hiddenIds: [...new Set([...(s?.hiddenIds || []), edit.nodeId])] }); setEdit(null) } }] : []),
-              { label: '🙈 Hide in this view', danger: true, onClick: () => { hideNodes([edit.nodeId]); setEdit(null) } },
+              { label: '🙈 Hide on the board', danger: true, onClick: () => { hideNodes([edit.nodeId]); setEdit(null) } },
             ]}
           />
         )}
@@ -941,7 +942,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
               <div ref={vmenuElRef} style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
                 <div style={vmStyles.head}>{v.name}</div>
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null); onAddNode && onAddNode([{ propId: def.id, value: v.opt }]) }}>+ New item in this value</div>
-                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
+                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items on the board</div>
                 {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart(); saveHubs() }}>Unpin (let it float)</div>}
                 <div style={{ borderTop: '1px solid #23233e', margin: '4px 6px' }} />
                 <div style={{ ...vmStyles.head, borderBottom: 'none', paddingBottom: 2 }}>Group children by</div>
