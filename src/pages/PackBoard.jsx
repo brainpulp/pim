@@ -188,7 +188,7 @@ export default function PackBoard({ projectId }) {
 
   // Load layout from the active view; one-time migrate legacy localStorage layout into the view.
   useEffect(() => {
-    if (!activeView) return
+    if (!activeView) { setSystems([]); setSelectedSys(null); return }   // no view resolved (e.g. mid project-switch) → don't keep stale clusters
     if (Array.isArray(activeView.boardSystems)) { setSystems(activeView.boardSystems); return }
     let legacy = null
     try { const raw = localStorage.getItem(`pim:board:${projectId}`); if (raw) legacy = JSON.parse(raw) } catch { /* ignore */ }
