@@ -373,6 +373,7 @@ export default function PackBoard({ projectId }) {
               </div>
             </>)}
           </div>
+          <button style={styles.addBtn} onClick={() => addNodeWith([])} title="Create a new item">+ Node</button>
           <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
           {views.map(v => (
             <div key={v.id} title="Click to switch · double-click to rename"
@@ -414,7 +415,7 @@ export default function PackBoard({ projectId }) {
                 const onRetag = isDate
                   ? (nid, _so, to) => { const val = to === '__untagged__' ? null : dueRepDate(to, startOfDay(new Date())); setNodeProp(nid, rawDef.id, val); saveAll() }
                   : (nid, so, to, add) => retag(groupBy[0], nid, so, to, add)
-                return <TreeCluster {...common} onRetag={onRetag} onHideNodes={hideNodes} arrange={!!sys.arrange}
+                return <TreeCluster {...common} onRetag={onRetag} onHideNodes={hideNodes} arrange={!!sys.arrange} onAddNode={addNodeWith}
                   onSaveHubs={(map) => setSystemConfig(sys.id, { hubPos: map })}
                   onSaveLeaves={(map) => setSystemConfig(sys.id, { leafPos: map })} />
               }
@@ -619,7 +620,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onSaveHubs, onSaveLeaves, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onSaveHubs, onSaveLeaves, onAddNode, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -860,6 +861,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
             <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
               <div ref={vmenuElRef} style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
                 <div style={vmStyles.head}>{v.name}</div>
+                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null); onAddNode && onAddNode([{ propId: def.id, value: v.opt }]) }}>+ New item in this value</div>
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
                 {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart(); saveHubs() }}>Unpin (let it float)</div>}
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null) }}>Close</div>
