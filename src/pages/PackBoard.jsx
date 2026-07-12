@@ -394,7 +394,9 @@ export default function PackBoard({ projectId }) {
                 const onRetag = isDate
                   ? (nid, _so, to) => { const val = to === '__untagged__' ? null : dueRepDate(to, startOfDay(new Date())); setNodeProp(nid, rawDef.id, val); saveAll() }
                   : (nid, so, to, add) => retag(groupBy[0], nid, so, to, add)
-                return <TreeCluster {...common} onRetag={onRetag} onHideNodes={hideNodes} onSaveHubs={(map) => setSystemConfig(sys.id, { hubPos: map })} />
+                return <TreeCluster {...common} onRetag={onRetag} onHideNodes={hideNodes} arrange={!!sys.arrange}
+                  onSaveHubs={(map) => setSystemConfig(sys.id, { hubPos: map })}
+                  onSaveLeaves={(map) => setSystemConfig(sys.id, { leafPos: map })} />
               }
               // Circle pack — deterministic d3.pack (no overlap, minimal size), 1 or 2 grouping levels.
               // Date packs are always single-level (bucketed).
@@ -596,7 +598,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onSaveHubs, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onSaveHubs, onSaveLeaves, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([])
   const heldRef = useRef(new Set())
@@ -695,6 +697,9 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const base = ex || { id, kind: 'leaf', x: parent.x + j, y: parent.y + j, vx: 0, vy: 0 }
       base.opt = d.opt; base.nodeId = d.nodeId; base.label = d.label; base.color = d.color
       base.decor = d.decor; base.shape = d.shape; base.baseR = d.baseR; base.r = d.r
+      // Restore an item the user free-positioned in Arrange mode (persisted on the cluster).
+      const pin = sys.leafPos?.[id]
+      if (pin && base.fx == null) { base.x = pin.x; base.y = pin.y; base.fx = pin.x; base.fy = pin.y }
       return base
     })
     const fns = [root, ...vnodes, ...lnodes]
@@ -718,16 +723,33 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
     e.preventDefault(); e.stopPropagation()
     const sim = simRef.current; const start = local(e)
     b.fx = b.x; b.fy = b.y; setHeldKeys(new Set([b.id]))   // no global reheat while dragging (avoids motion storm)
-    const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setHover(dropTarget(p)); setTick(t => t + 1) }
+    const move = ev => { const p = local(ev); b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; if (!arrange) setHover(dropTarget(p)); setTick(t => t + 1) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
-      const p = local(ev); const tg = dropTarget(p); b.fx = null; b.fy = null; setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
+      const p = local(ev); setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
+      // Arrange mode: pin the item where dropped (persist) instead of retagging.
+      if (arrange) { b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setTick(t => t + 1); saveLeaves(); return }
+      const tg = dropTarget(p); b.fx = null; b.fy = null
       const vals = valuesRef.current; const targetOpt = tg < 0 ? '__untagged__' : vals[tg].opt
       if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && targetOpt !== b.opt) onRetag(b.nodeId, b.opt, targetOpt, false)
       else sim.alphaTarget(0.03).restart(), setTimeout(() => sim.alphaTarget(0), 600)   // gentle, brief reintegration (no storm, no stuck-anchor)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
+  // Collect + persist every free-positioned item so an arranged layout survives view-switch/reload.
+  const saveLeaves = () => {
+    if (!onSaveLeaves) return
+    const map = {}; fnodesRef.current.forEach(f => { if (f.kind === 'leaf' && f.fx != null) map[f.id] = { x: f.fx, y: f.fy } })
+    onSaveLeaves(map)
+  }
+  // React to an external "Reset arrangement" (Inspector clears sys.leafPos): unpin all items.
+  useEffect(() => {
+    if (sys.leafPos && Object.keys(sys.leafPos).length === 0) {
+      let changed = false
+      fnodesRef.current.forEach(f => { if (f.kind === 'leaf' && f.fx != null) { f.fx = null; f.fy = null; changed = true } })
+      if (changed) { simRef.current?.alpha(0.5).restart(); setTick(t => t + 1) }
+    }
+  }, [JSON.stringify(sys.leafPos || {})]) // eslint-disable-line
   // Collect + persist every pinned hub's position so a dragged layout survives view-switch/reload.
   const saveHubs = () => {
     if (!onSaveHubs) return
@@ -1136,6 +1158,19 @@ function ClusterInspector({ sys, propertyDefs, tagDefs, numberDefs, dateDefs, on
         </select>
       </div>
 
+      {sys.kind === 'tree' && (
+        <div style={insp.section}>
+          <div style={insp.label}>Arrange</div>
+          <label style={insp.toggle}>
+            <input type="checkbox" checked={!!sys.arrange} onChange={e => onConfig({ arrange: e.target.checked })} />
+            <span>Free-position items — drag to place &amp; pin. Off = drag to retag.</span>
+          </label>
+          {sys.leafPos && Object.keys(sys.leafPos).length > 0 && (
+            <button style={insp.showAll} onClick={() => onConfig({ leafPos: {} })}>Reset arrangement ({Object.keys(sys.leafPos).length})</button>
+          )}
+        </div>
+      )}
+
       <div style={insp.section}>
         <div style={insp.label}>Filter this cluster</div>
         <FilterBar filter={filter} setFilter={upd => onFilter(typeof upd === 'function' ? upd(filter) : upd)} propertyDefs={propertyDefs} />
@@ -1164,6 +1199,7 @@ const insp = {
   sel: { width: '100%', background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, padding: '6px 8px', fontSize: '0.82rem', cursor: 'pointer' },
   remove: { background: 'transparent', border: '1px solid #5a2a2a', color: '#f87171', borderRadius: 7, padding: '7px 10px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 },
   showAll: { background: '#12122a', border: '1px solid #2d3a6a', color: '#8ecbff', borderRadius: 6, padding: '6px 8px', fontSize: '0.78rem', cursor: 'pointer' },
+  toggle: { display: 'flex', gap: 8, alignItems: 'flex-start', color: '#c5d0ff', fontSize: '0.78rem', lineHeight: 1.35, cursor: 'pointer' },
 }
 
 const vmStyles = {
