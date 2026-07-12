@@ -412,10 +412,8 @@ export default function PackBoard({ projectId }) {
                 onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
               }
               if (sys.kind === 'tree') {
-                const onRetag = isDate
-                  ? (nid, _so, to) => { const val = to === '__untagged__' ? null : dueRepDate(to, startOfDay(new Date())); setNodeProp(nid, rawDef.id, val); saveAll() }
-                  : (nid, so, to, add) => retag(groupBy[0], nid, so, to, add)
-                return <TreeCluster {...common} onRetag={onRetag} onHideNodes={hideNodes} arrange={!!sys.arrange} onAddNode={addNodeWith}
+                return <TreeCluster {...common} groupValsOf={groupValsOf} onRetagMulti={retagMulti} onHideNodes={hideNodes} arrange={!!sys.arrange} onAddNode={addNodeWith}
+                  onSetGroupOverride={(opt, val) => setGroupOverride(sys.id, opt, val)}
                   onSaveHubs={(map) => setSystemConfig(sys.id, { hubPos: map })}
                   onSaveLeaves={(map) => setSystemConfig(sys.id, { leafPos: map })} />
               }
@@ -620,9 +618,13 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, selected, onSelect, onEditNode, onDrill, onRetag, onHideNodes, onSaveHubs, onSaveLeaves, onAddNode, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, groupValsOf, selected, onSelect, onEditNode, onDrill, onRetagMulti, onHideNodes, onSaveHubs, onSaveLeaves, onAddNode, onSetGroupOverride, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
-  const fnodesRef = useRef([]), valuesRef = useRef([])
+  const fnodesRef = useRef([]), valuesRef = useRef([]), subsRef = useRef([])
+  const overrides = sys.groupOverrides || {}
+  // Per-hub "group children by" override: a propId sub-groups that hub's items into sub-hubs.
+  const resolveDef = (id) => { const d = propertyDefs.find(x => x.id === id); return d ? (d.type === 'date' ? dueDefFor(d) : d) : null }
+  const subDefOf = (opt) => { const ov = overrides[opt]; return ov ? resolveDef(ov) : null }
   const heldRef = useRef(new Set())
   const [, setTick] = useState(0)
   const [held, setHeld] = useState(() => new Set())
@@ -645,9 +647,13 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
     const values = opts.map(o => ({ opt: o.id, name: o.name, color: o.color || '#5b6af0' }))
     const idx = new Map(values.map((v, i) => [v.opt, i]))
     const leaves = []
+    const subMap = new Map()   // subId → { id, opt, subVal, name, color, subProp }
     let hasUntagged = false
     const colorForOpt = (opt) => (values.find(v => v.opt === opt)?.color) || '#6b7394'
+    const subName = (sd, sv) => sv === '__untagged__' ? '(untagged)' : ((sd.options || []).find(o => o.id === sv)?.name || sv)
+    const subColor = (sd, sv) => sv === '__untagged__' ? '#3a4358' : ((sd.options || []).find(o => o.id === sv)?.color || '#6b7394')
     const numDomain = (sizeMode && sizeMode !== 'style') ? domainOf(nodes, sizeMode) : null
+    const vals = groupValsOf || ((n, d) => { const ids = nodeGroupIds(d, n, now); return ids.length ? ids : ['__untagged__'] })
     nodes.forEach(n => {
       if (filterFn && !filterFn(n)) return   // per-cluster filter
       const ids = nodeGroupIds(def, n, now)
@@ -660,26 +666,38 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const baseR = 34 * scl
       const shape = dec.shape || 'circle'
       const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
-      const mk = (opt) => ({ nodeId: n.id, opt, label, color: resolveColor(colorMode, n, dec, colorForOpt(opt), propertyDefs), decor: dec, shape, baseR, r: bound })
-      if (!valid.length) { hasUntagged = true; leaves.push(mk('__untagged__')) }
-      else valid.forEach(id => leaves.push(mk(id)))
+      const opl = valid.length ? valid : ['__untagged__']
+      if (!valid.length) hasUntagged = true
+      opl.forEach(opt => {
+        const sd = subDefOf(opt)   // this hub's "group children by" override (or null = flat)
+        if (sd) {
+          vals(n, sd).forEach(sv => {
+            const subId = 'sub:' + opt + '|' + sv
+            if (!subMap.has(subId)) subMap.set(subId, { id: subId, opt, subVal: sv, name: subName(sd, sv), color: subColor(sd, sv), subProp: sd.id })
+            leaves.push({ nodeId: n.id, opt, sub: sv, subId, subProp: sd.id, label, color: resolveColor(colorMode, n, dec, subMap.get(subId).color, propertyDefs), decor: dec, shape, baseR, r: bound })
+          })
+        } else {
+          leaves.push({ nodeId: n.id, opt, sub: null, subId: null, label, color: resolveColor(colorMode, n, dec, colorForOpt(opt), propertyDefs), decor: dec, shape, baseR, r: bound })
+        }
+      })
     })
     if (hasUntagged) values.push({ opt: '__untagged__', name: '(untagged)', color: '#6b7394' })
-    return { values, leaves }
+    return { values, subs: [...subMap.values()], leaves }
   }
   const structureKey = useMemo(() => {
     const opt = (def.options || []).map(o => o.id + ':' + o.name).join('|')
     const rows = nodes.map(n => n.id + '=' + JSON.stringify(n.props?.[def.id] ?? null) + ':' + (n.label || '')).join(';')
-    return opt + '#' + rows
-  }, [nodes, def])
+    return opt + '#' + rows + '#' + JSON.stringify(overrides) + '#' + (colorMode || '') + '#' + (sizeMode || '')
+  }, [nodes, def, JSON.stringify(overrides), colorMode, sizeMode]) // eslint-disable-line
 
   const ringRef = useRef(280)   // radius the value hubs sit on (grows with the number of values)
   useEffect(() => {
     const sim = d3.forceSimulation([])
       // Strong hub-hub repulsion + tight leaf→hub links → each value + its leaves forms a SEPARATED cluster.
-      .force('charge', d3.forceManyBody().strength(d => d.kind === 'leaf' ? -24 : -1400))
-      .force('link', d3.forceLink([]).id(d => d.id).distance(l => l.kind === 'rv' ? ringRef.current : 52).strength(l => l.kind === 'rv' ? 0.03 : 0.8))
-      .force('collide', d3.forceCollide(d => d.r + (d.kind === 'value' ? 10 : 4)).strength(0.9).iterations(2))
+      // Sub-hubs repel moderately and orbit their parent hub; leaves link to their sub-hub (or hub).
+      .force('charge', d3.forceManyBody().strength(d => d.kind === 'leaf' ? -24 : d.kind === 'sub' ? -320 : -1400))
+      .force('link', d3.forceLink([]).id(d => d.id).distance(l => l.kind === 'rv' ? ringRef.current : l.kind === 'vs' ? 130 : 52).strength(l => l.kind === 'rv' ? 0.03 : l.kind === 'vs' ? 0.35 : 0.8))
+      .force('collide', d3.forceCollide(d => d.r + (d.kind === 'value' ? 10 : d.kind === 'sub' ? 7 : 4)).strength(0.9).iterations(2))
       .force('radial', d3.forceRadial(d => d.kind === 'value' ? ringRef.current : 0, 0, 0).strength(d => d.kind === 'value' ? 0.28 : 0))
       .alphaDecay(0.03).velocityDecay(0.6)
       .on('tick', () => {
@@ -696,7 +714,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
   }, [])
 
   useEffect(() => {
-    const { values, leaves } = build()
+    const { values, subs, leaves } = build()
     const prev = new Map((fnodesRef.current || []).map(f => [f.id, f]))
     const root = prev.get('__root__') || { id: '__root__', kind: 'root', x: 0, y: 0, fx: 0, fy: 0 }
     root.r = Math.max(34, Math.min(52, 24 + Math.sqrt(def.name.length) * 5)); root.name = def.name
@@ -713,23 +731,34 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       return base
     })
     const vById = new Map(vnodes.map(v => [v.opt, v]))
+    // Sub-hubs (2nd-level grouping within a hub that has a "group children by" override).
+    const snodes = subs.map(s => {
+      const ex = prev.get(s.id); const parent = vById.get(s.opt) || root
+      const j = (hashStr(s.id) % 80) - 40
+      const base = ex || { id: s.id, kind: 'sub', x: parent.x + j, y: parent.y + j, vx: 0, vy: 0 }
+      base.opt = s.opt; base.subVal = s.subVal; base.subProp = s.subProp; base.name = s.name; base.color = s.color
+      base.r = Math.max(30, Math.min(58, 26 + Math.sqrt((s.name || '').length) * 3.4))
+      return base
+    })
+    const sById = new Map(snodes.map(s => [s.id, s]))
     const lnodes = leaves.map(d => {
-      const id = 'l:' + d.nodeId + '@' + d.opt; const ex = prev.get(id)
-      const parent = vById.get(d.opt) || root
+      const id = 'l:' + d.nodeId + '@' + d.opt + (d.sub ? '|' + d.sub : ''); const ex = prev.get(id)
+      const parent = d.subId ? (sById.get(d.subId) || vById.get(d.opt) || root) : (vById.get(d.opt) || root)
       const j = (hashStr(id) % 40) - 20
       const base = ex || { id, kind: 'leaf', x: parent.x + j, y: parent.y + j, vx: 0, vy: 0 }
-      base.opt = d.opt; base.nodeId = d.nodeId; base.label = d.label; base.color = d.color
+      base.opt = d.opt; base.sub = d.sub; base.subId = d.subId; base.subProp = d.subProp; base.nodeId = d.nodeId; base.label = d.label; base.color = d.color
       base.decor = d.decor; base.shape = d.shape; base.baseR = d.baseR; base.r = d.r
       // Restore an item the user free-positioned in Arrange mode (persisted on the cluster).
       const pin = sys.leafPos?.[id]
       if (pin && base.fx == null) { base.x = pin.x; base.y = pin.y; base.fx = pin.x; base.fy = pin.y }
       return base
     })
-    const fns = [root, ...vnodes, ...lnodes]
-    fnodesRef.current = fns; valuesRef.current = vnodes
+    const fns = [root, ...vnodes, ...snodes, ...lnodes]
+    fnodesRef.current = fns; valuesRef.current = vnodes; subsRef.current = snodes
     const links = [
       ...vnodes.map(v => ({ source: root.id, target: v.id, kind: 'rv' })),
-      ...lnodes.map(l => ({ source: 'v:' + l.opt, target: l.id, kind: 'vl' })),
+      ...snodes.map(s => ({ source: 'v:' + s.opt, target: s.id, kind: 'vs' })),
+      ...lnodes.map(l => ({ source: l.subId || ('v:' + l.opt), target: l.id, kind: 'vl' })),
     ]
     const sm = simRef.current; if (!sm) return
     sm.nodes(fns)
@@ -739,7 +768,17 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
 
   const setHeldKeys = (s) => { heldRef.current = s; setHeld(s) }
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - sys.x, y: p.y - sys.y } }
-  const dropTarget = (p) => { let best = null, bd = Infinity; valuesRef.current.forEach((c, i) => { const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (d < bd) { bd = d; best = i } }); const c = valuesRef.current[best]; if (best == null || !c) return -1; return Math.hypot(p.x - c.x, p.y - c.y) > c.r + 40 ? -1 : best }
+  // Which target is the point over? A sub-hub (deeper) wins over its parent hub. Returns a descriptor
+  // { kind:'sub', opt, subVal, subProp } | { kind:'value', opt } | null.
+  const dropTarget = (p) => {
+    let sub = null, sd = Infinity
+    subsRef.current.forEach(s => { const d = Math.hypot(p.x - s.x, p.y - s.y); if (d <= s.r + 26 && d < sd) { sd = d; sub = s } })
+    if (sub) return { kind: 'sub', opt: sub.opt, subVal: sub.subVal, subProp: sub.subProp }
+    let best = null, bd = Infinity
+    valuesRef.current.forEach(c => { const d = Math.hypot(p.x - c.x, p.y - c.y); if (d < bd) { bd = d; best = c } })
+    if (best && bd <= best.r + 40) return { kind: 'value', opt: best.opt }
+    return null
+  }
 
   const startDrag = (e, b) => {
     if (e.button === 2) return
@@ -752,10 +791,17 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const p = local(ev); setHeldKeys(new Set()); setHover(null); sim.alphaTarget(0)
       // Arrange mode: pin the item where dropped (persist) instead of retagging.
       if (arrange) { b.fx = p.x; b.fy = p.y; b.x = p.x; b.y = p.y; setTick(t => t + 1); saveLeaves(); return }
-      const tg = dropTarget(p); b.fx = null; b.fy = null
-      const vals = valuesRef.current; const targetOpt = tg < 0 ? '__untagged__' : vals[tg].opt
-      if (Math.hypot(p.x - start.x, p.y - start.y) > 4 && targetOpt !== b.opt) onRetag(b.nodeId, b.opt, targetOpt, false)
-      else sim.alphaTarget(0.03).restart(), setTimeout(() => sim.alphaTarget(0), 600)   // gentle, brief reintegration (no storm, no stuck-anchor)
+      const t = dropTarget(p); b.fx = null; b.fy = null
+      const reheat = () => { sim.alphaTarget(0.03).restart(); setTimeout(() => sim.alphaTarget(0), 600) }
+      if (Math.hypot(p.x - start.x, p.y - start.y) <= 4) { reheat(); return }
+      if (!t) { onRetagMulti(b.nodeId, [{ propId: def.id, value: null, from: b.opt }]); return }
+      if (t.kind === 'sub') {
+        const assigns = [{ propId: def.id, value: t.opt, from: b.opt }]
+        // Set the sub-property; only pass `from` when the source item sub-grouped by the SAME prop.
+        assigns.push({ propId: t.subProp, value: t.subVal, from: (b.subProp && b.subProp === t.subProp) ? b.sub : undefined })
+        onRetagMulti(b.nodeId, assigns)
+      } else if (t.opt !== b.opt) onRetagMulti(b.nodeId, [{ propId: def.id, value: t.opt, from: b.opt }])
+      else reheat()
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
@@ -797,13 +843,14 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
 
-  const fns = fnodesRef.current, values = valuesRef.current
+  const fns = fnodesRef.current, values = valuesRef.current, subs = subsRef.current
   const root = fns.find(f => f.kind === 'root')
   const leaves = fns.filter(f => f.kind === 'leaf')
   const dragging = held.size > 0
   const minY = fns.reduce((m, f) => Math.min(m, f.y - f.r), 0)
   const headY = minY - 44
   const countByOpt = {}; leaves.forEach(l => { countByOpt[l.opt] = (countByOpt[l.opt] || 0) + 1 })
+  const countBySub = {}; leaves.forEach(l => { if (l.subId) countBySub[l.subId] = (countBySub[l.subId] || 0) + 1 })
   const clusterBBox = () => {
     if (!fns.length) return { x0: sys.x - 200, y0: sys.y - 200, x1: sys.x + 200, y1: sys.y + 200 }
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
@@ -814,13 +861,15 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
   return (
     <g transform={`translate(${sys.x},${sys.y})`}>
       <ClusterHeader def={def} kind="tree" cx={0} y={headY} zoomK={zoomK} hasFilter={hasFilter} selected={selected} onHead={startHeadDrag} onDrill={() => onDrill && onDrill(clusterBBox())} onRemove={onRemove} />
-      {/* links: root→value then value→leaf */}
+      {/* links: root→value, value→sub-hub, then sub-hub|value→leaf */}
       <g pointerEvents="none">
         {root && values.map(v => (
           <line key={'e' + v.id} x1={root.x} y1={root.y} x2={v.x} y2={v.y} stroke={v.color} strokeOpacity={0.5} strokeWidth={2} />
         ))}
-        {leaves.map(l => { const v = values.find(x => x.opt === l.opt); if (!v) return null
-          return <line key={'e' + l.id} x1={v.x} y1={v.y} x2={l.x} y2={l.y} stroke={l.color} strokeOpacity={0.28} strokeWidth={1.4} /> })}
+        {subs.map(s => { const v = values.find(x => x.opt === s.opt); if (!v) return null
+          return <line key={'es' + s.id} x1={v.x} y1={v.y} x2={s.x} y2={s.y} stroke={s.color} strokeOpacity={0.45} strokeWidth={1.8} strokeDasharray="4 3" /> })}
+        {leaves.map(l => { const parent = l.subId ? subs.find(s => s.id === l.subId) : values.find(x => x.opt === l.opt); if (!parent) return null
+          return <line key={'e' + l.id} x1={parent.x} y1={parent.y} x2={l.x} y2={l.y} stroke={l.color} strokeOpacity={0.28} strokeWidth={1.4} /> })}
       </g>
       {/* root */}
       {root && (
@@ -834,17 +883,33 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       )}
       {/* value nodes (1st generation) */}
       {values.map(v => {
-        const isT = dragging && hover != null && values[hover] === v
+        const isT = dragging && hover?.kind === 'value' && hover.opt === v.opt
         const vf = Math.max(12, Math.min(20, v.r * 0.26))
+        const overridden = overrides[v.opt] !== undefined && overrides[v.opt] !== ''
         return (
           <g key={v.id} data-bubble="1" transform={`translate(${v.x},${v.y})`} style={{ cursor: 'grab' }}
             onMouseDown={e => startValueDrag(e, v)}
             onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setVmenu({ opt: v.opt }) }}>
-            <circle r={v.r} fill={v.color + '2a'} stroke={isT ? '#7fd8a8' : v.color} strokeWidth={isT ? 4 : 3} />
+            <circle r={v.r} fill={v.color + '2a'} stroke={isT ? '#7fd8a8' : v.color} strokeWidth={isT ? 4 : 3} strokeDasharray={overridden ? '7 5' : undefined} />
             <text textAnchor="middle" dominantBaseline="middle" fontSize={vf} fontWeight={800} fill={isT ? '#7fd8a8' : '#e8eeff'} pointerEvents="none"
               style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>
               {wrapText(v.name, 11).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * (vf * 1.05) - vf * 0.5}>{ln}</tspan>)}
               <tspan x={0} y={vf * 1.4} fontSize={vf * 0.75} fillOpacity={0.85}>· {countByOpt[v.opt] || 0}</tspan>
+            </text>
+          </g>
+        )
+      })}
+      {/* sub-hubs (per-hub "group children by" override) */}
+      {subs.map(s => {
+        const isT = dragging && hover?.kind === 'sub' && hover.opt === s.opt && hover.subVal === s.subVal
+        const sf = Math.max(10, Math.min(16, s.r * 0.26))
+        return (
+          <g key={s.id} pointerEvents="none" transform={`translate(${s.x},${s.y})`}>
+            <circle r={s.r} fill={(s.color || '#5b6af0') + '22'} stroke={isT ? '#7fd8a8' : (s.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 2} strokeDasharray="4 3" />
+            <text textAnchor="middle" dominantBaseline="middle" fontSize={sf} fontWeight={800} fill={isT ? '#7fd8a8' : '#dbe4ff'} pointerEvents="none"
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 3.5, strokeLinejoin: 'round' }}>
+              {wrapText(s.name, 10).slice(0, 2).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * (sf * 1.05) - sf * 0.4}>{ln}</tspan>)}
+              <tspan x={0} y={sf * 1.3} fontSize={sf * 0.72} fillOpacity={0.85}>· {countBySub[s.id] || 0}</tspan>
             </text>
           </g>
         )
@@ -856,14 +921,23 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       {/* value-hub context menu — rendered LAST so it paints on top of every node */}
       {vmenu && (() => {
         const v = valuesRef.current.find(x => x.opt === vmenu.opt); if (!v) return null
+        const curOv = overrides[v.opt]
+        const subOpts = propertyDefs.filter(d => (d.type === 'select' || d.type === 'multiSelect' || d.type === 'date') && d.id !== def.id)
         return (
-          <foreignObject x={v.x + v.r + 6} y={v.y - 40} width={210} height={150} style={{ overflow: 'visible' }}>
+          <foreignObject x={v.x + v.r + 6} y={v.y - 40} width={230} height={400} style={{ overflow: 'visible' }}>
             <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
               <div ref={vmenuElRef} style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
                 <div style={vmStyles.head}>{v.name}</div>
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null); onAddNode && onAddNode([{ propId: def.id, value: v.opt }]) }}>+ New item in this value</div>
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); const ids = fnodesRef.current.filter(f => f.kind === 'leaf' && f.opt === v.opt).map(f => f.nodeId); setVmenu(null); if (ids.length && onHideNodes) onHideNodes([...new Set(ids)]) }}>Hide these items in this view</div>
                 {v.fx != null && <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); v.fx = null; v.fy = null; setVmenu(null); simRef.current.alpha(0.3).restart(); saveHubs() }}>Unpin (let it float)</div>}
+                <div style={{ borderTop: '1px solid #23233e', margin: '4px 6px' }} />
+                <div style={{ ...vmStyles.head, borderBottom: 'none', paddingBottom: 2 }}>Group children by</div>
+                <div style={{ ...vmStyles.item, color: !curOv ? '#8ecbff' : '#c5d0ff' }} onMouseDown={e => { e.stopPropagation(); setVmenu(null); onSetGroupOverride && onSetGroupOverride(v.opt, undefined) }}>None (flat)</div>
+                {subOpts.map(d => (
+                  <div key={d.id} style={{ ...vmStyles.item, color: curOv === d.id ? '#8ecbff' : '#c5d0ff' }}
+                    onMouseDown={e => { e.stopPropagation(); setVmenu(null); onSetGroupOverride && onSetGroupOverride(v.opt, d.id) }}>{d.name}{d.type === 'date' ? ' (due)' : ''}</div>
+                ))}
                 <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setVmenu(null) }}>Close</div>
               </div>
             </div>
