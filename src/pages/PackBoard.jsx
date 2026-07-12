@@ -332,8 +332,6 @@ export default function PackBoard({ projectId }) {
     () => nodes.filter(n => nodeVisible(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
     [nodes, activeView, filterKey, propertyDefs]) // eslint-disable-line
 
-  const selSys = systems.find(s => s.id === selectedSys) || null
-
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
     const svg = svgRef.current; if (!svg || !zoomRef.current || !bbox) return
@@ -388,7 +386,7 @@ export default function PackBoard({ projectId }) {
           <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
           <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), marginLeft: 'auto' }}
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
-          <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · double-click a header to zoom in · drag to move</span>
+          <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header for controls · double-click to zoom · drag to move</span>
         </div>
         {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
         <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}>
@@ -410,6 +408,14 @@ export default function PackBoard({ projectId }) {
                 sizeMode: sys.sizeBy || null, propertyDefs,
                 onEditNode: (nodeId, sysId) => setEdit({ nodeId, sysId: sysId || sys.id }), onDrill: zoomToFit,
                 onMove: moveSystem, onCommitMove: commitMove, onRemove: () => removeSystem(sys.id),
+                // Proximal config bar (shown when the cluster is selected).
+                cfgBar: {
+                  tagDefs, numberDefs, dateDefs,
+                  onConfig: (patch) => setSystemConfig(sys.id, patch),
+                  onFilter: (f) => setSystemFilter(sys.id, f),
+                  onRemove: () => { removeSystem(sys.id); setSelectedSys(null) },
+                  onClose: () => setSelectedSys(null),
+                },
               }
               if (sys.kind === 'tree') {
                 return <TreeCluster {...common} groupValsOf={groupValsOf} onRetagMulti={retagMulti} onHideNodes={hideNodes} arrange={!!sys.arrange} onAddNode={addNodeWith}
@@ -439,15 +445,6 @@ export default function PackBoard({ projectId }) {
           />
         )}
       </div>
-      {selSys && (
-        <ClusterInspector
-          sys={selSys} propertyDefs={propertyDefs} tagDefs={tagDefs} numberDefs={numberDefs} dateDefs={dateDefs}
-          onConfig={patch => setSystemConfig(selSys.id, patch)}
-          onFilter={f => setSystemFilter(selSys.id, f)}
-          onRemove={() => { removeSystem(selSys.id); setSelectedSys(null) }}
-          onClose={() => setSelectedSys(null)}
-        />
-      )}
     </div>
   )
 }
@@ -618,7 +615,7 @@ function Cluster({ sys, def, colorMode, sizeMode, propertyDefs, decorOf, nodes, 
 // Property tree: root (property) → value nodes (1st gen) → item leaves (2nd gen). Force-directed in
 // LOCAL coordinates with the root pinned at 0,0; values held on a ring; leaves pulled to their value.
 // Drag a leaf onto another value node to retag (same semantics as the pack cluster).
-function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, groupValsOf, selected, onSelect, onEditNode, onDrill, onRetagMulti, onHideNodes, onSaveHubs, onSaveLeaves, onAddNode, onSetGroupOverride, onMove, onCommitMove, onRemove }) {
+function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decorOf, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, arrange, groupValsOf, selected, cfgBar, onSelect, onEditNode, onDrill, onRetagMulti, onHideNodes, onSaveHubs, onSaveLeaves, onAddNode, onSetGroupOverride, onMove, onCommitMove, onRemove }) {
   const simRef = useRef(null)
   const fnodesRef = useRef([]), valuesRef = useRef([]), subsRef = useRef([])
   const overrides = sys.groupOverrides || {}
@@ -944,6 +941,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
           </foreignObject>
         )
       })()}
+      {selected && cfgBar && <ClusterConfigBar sys={sys} x={-150} y={headY + 22} zoomK={zoomK} propertyDefs={propertyDefs} {...cfgBar} />}
     </g>
   )
 }
@@ -953,7 +951,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
 // = groupDefs[0], inner sub-packs = groupDefs[1] → leaves. Drag-to-retag: dropping a leaf on a
 // sub-pack sets both (a,b); on an outer pack sets a; on empty space clears the outer value.
 const NP_D = 1000
-function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, groupValsOf, selected, onSelect, onEditNode, onDrill, onRetagMulti, onSetGroupOverride, onAddNode, onMove, onCommitMove, onRemove }) {
+function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, groupValsOf, selected, cfgBar, onSelect, onEditNode, onDrill, onRetagMulti, onSetGroupOverride, onAddNode, onMove, onCommitMove, onRemove }) {
   const [, setTick] = useState(0)
   const [drag, setDrag] = useState(null)   // { id, x, y } in pack-local coords while dragging a leaf
   const [pmenu, setPmenu] = useState(null)  // "group children by" menu on an outer pack: { opt, x, y }
@@ -1142,6 +1140,7 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
           </foreignObject>
         )
       })()}
+      {selected && cfgBar && <ClusterConfigBar sys={sys} x={off - 150} y={headY + 22} zoomK={zoomK} propertyDefs={propertyDefs} {...cfgBar} />}
     </g>
   )
 }
@@ -1257,98 +1256,85 @@ function GroupByList({ groupBy, tagDefs, onChange }) {
   )
 }
 
-// Right-docked settings panel for the selected cluster — the single home for its grouping, colour,
-// size, and filter. Replaces the old floating margin panels.
-function ClusterInspector({ sys, propertyDefs, tagDefs, numberDefs, dateDefs, onConfig, onFilter, onRemove, onClose }) {
+const trimStr = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s)
+
+// PROXIMAL cluster config — a pill row anchored under the selected cluster's header (not a docked
+// sidebar). Each pill opens a small popover below it. Config actions mutate the cluster on the view.
+function ClusterConfigBar({ sys, x, y, zoomK, propertyDefs, tagDefs, numberDefs, dateDefs, onConfig, onFilter, onRemove, onClose }) {
+  const [open, setOpen] = useState(null)
   const def = propertyDefs.find(d => d.id === sys.propId)
-  const isDate = def?.type === 'date'   // grouped into relative due buckets, not nested
+  const isDate = def?.type === 'date'
   const filter = sys.filter || { text: '', rules: [] }
+  const hasFilter = !!(filter.text || (filter.rules && filter.rules.length))
+  const groupName = (sys.groupBy && sys.groupBy.length ? sys.groupBy : [sys.propId]).map(id => propertyDefs.find(d => d.id === id)?.name || '?').join(' › ')
+  const colourName = (sys.colorBy == null) ? 'Group' : sys.colorBy === 'style' ? 'Style' : (propertyDefs.find(d => d.id === sys.colorBy)?.name || 'Group')
+  const sizeName = !sys.sizeBy ? 'Uniform' : sys.sizeBy === 'style' ? 'Style' : (numberDefs.find(d => d.id === sys.sizeBy)?.name || 'Uniform')
+  const toggle = (k) => setOpen(o => o === k ? null : k)
+  const pill = (k, label, active) => (
+    <button style={{ ...cbar.pill, ...(open === k ? cbar.pillOpen : {}), ...(active ? cbar.pillActive : {}) }}
+      onMouseDown={e => { e.stopPropagation(); toggle(k) }}>{label} ▾</button>
+  )
   return (
-    <div style={insp.panel}>
-      <div style={insp.head}>
-        <span style={insp.title}>{sys.kind === 'tree' ? '⌥' : '◎'} {def?.name || 'Cluster'}</span>
-        <button style={insp.close} onClick={onClose} title="Close">×</button>
-      </div>
-
-      <div style={insp.section}>
-        <div style={insp.label}>Layout</div>
-        <select value={sys.kind} onChange={e => onConfig({ kind: e.target.value })} style={insp.sel}>
-          <option value="pack">◎ Circle pack</option>
-          <option value="tree">⌥ Property tree</option>
-        </select>
-      </div>
-
-      <div style={insp.section}>
-        <div style={insp.label}>Group by{(sys.kind !== 'tree' && !isDate) ? ' · drag to nest' : ''}</div>
-        {(sys.kind === 'tree' || isDate)
-          ? <select value={sys.propId} onChange={e => onConfig({ propId: e.target.value, groupBy: [e.target.value] })} style={insp.sel}>
+    <foreignObject x={x} y={y} width={680} height={480} style={{ overflow: 'visible' }}>
+      <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
+        <div style={cbar.bar} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
+          <button style={cbar.pill} title="Toggle layout" onMouseDown={e => { e.stopPropagation(); onConfig({ kind: sys.kind === 'tree' ? 'pack' : 'tree' }) }}>{sys.kind === 'tree' ? '⌥ Tree' : '◎ Pack'}</button>
+          {pill('group', `Group: ${trimStr(groupName, 16)}`)}
+          {pill('colour', `Colour: ${trimStr(colourName, 10)}`)}
+          {pill('size', `Size: ${trimStr(sizeName, 10)}`)}
+          {sys.kind === 'tree' && <button style={{ ...cbar.pill, ...(sys.arrange ? cbar.pillActive : {}) }} title="Free-position items (drag to pin) instead of retag" onMouseDown={e => { e.stopPropagation(); onConfig({ arrange: !sys.arrange }) }}>{sys.arrange ? '✓ ' : ''}Arrange</button>}
+          {pill('filter', 'Filter', hasFilter)}
+          <button style={cbar.pillX} title="Remove cluster" onMouseDown={e => { e.stopPropagation(); if (confirm(`Remove the “${def?.name}” cluster?`)) onRemove() }}>Remove</button>
+          <button style={cbar.pillX} title="Done" onMouseDown={e => { e.stopPropagation(); onClose && onClose() }}>Done</button>
+        </div>
+        {open && (
+          <div style={cbar.pop} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
+            {open === 'group' && ((sys.kind === 'tree' || isDate)
+              ? <select value={sys.propId} onChange={e => onConfig({ propId: e.target.value, groupBy: [e.target.value] })} style={insp.sel} autoFocus>
+                  {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  {dateDefs.map(d => <option key={d.id} value={d.id}>{d.name} (due)</option>)}
+                </select>
+              : <><div style={cbar.hint}>Drag to nest (up to 2 levels).</div>
+                  <GroupByList groupBy={(sys.groupBy && sys.groupBy.length) ? sys.groupBy : [sys.propId]} tagDefs={tagDefs} onChange={list => onConfig({ groupBy: list, propId: list[0] })} /></>)}
+            {open === 'colour' && <select value={sys.colorBy ?? ''} onChange={e => onConfig({ colorBy: e.target.value || null })} style={insp.sel} autoFocus>
+              <option value="">Group value</option><option value="style">Style (node's own)</option>
               {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              {dateDefs.map(d => <option key={d.id} value={d.id}>{d.name} (due)</option>)}
-            </select>
-          : <GroupByList groupBy={(sys.groupBy && sys.groupBy.length) ? sys.groupBy : [sys.propId]} tagDefs={tagDefs}
-              onChange={list => onConfig({ groupBy: list, propId: list[0] })} />}
+            </select>}
+            {open === 'size' && <select value={sys.sizeBy || ''} onChange={e => onConfig({ sizeBy: e.target.value || null })} style={insp.sel} autoFocus>
+              <option value="">Uniform</option><option value="style">Style (node's own)</option>
+              {numberDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>}
+            {open === 'filter' && <FilterBar filter={filter} setFilter={upd => onFilter(typeof upd === 'function' ? upd(filter) : upd)} propertyDefs={propertyDefs} />}
+          </div>
+        )}
+        {sys.kind === 'tree' && sys.leafPos && Object.keys(sys.leafPos).length > 0 && (
+          <div style={cbar.miniRow} onMouseDown={e => e.stopPropagation()}>
+            <span style={{ color: '#8090b8' }}>{Object.keys(sys.leafPos).length} arranged</span>
+            <button style={cbar.mini} onMouseDown={e => { e.stopPropagation(); onConfig({ leafPos: {} }) }}>Reset</button>
+          </div>
+        )}
+        {sys.hiddenIds && sys.hiddenIds.length > 0 && (
+          <div style={cbar.miniRow} onMouseDown={e => e.stopPropagation()}>
+            <span style={{ color: '#8090b8' }}>{sys.hiddenIds.length} hidden</span>
+            <button style={cbar.mini} onMouseDown={e => { e.stopPropagation(); onConfig({ hiddenIds: [] }) }}>Show all</button>
+          </div>
+        )}
       </div>
-
-      <div style={insp.section}>
-        <div style={insp.label}>Colour by</div>
-        <select value={sys.colorBy ?? ''} onChange={e => onConfig({ colorBy: e.target.value || null })} style={insp.sel}>
-          <option value="">Group value</option>
-          <option value="style">Style (node's own)</option>
-          {tagDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-      </div>
-
-      <div style={insp.section}>
-        <div style={insp.label}>Size by</div>
-        <select value={sys.sizeBy || ''} onChange={e => onConfig({ sizeBy: e.target.value || null })} style={insp.sel}>
-          <option value="">Uniform</option>
-          <option value="style">Style (node's own)</option>
-          {numberDefs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-      </div>
-
-      {sys.kind === 'tree' && (
-        <div style={insp.section}>
-          <div style={insp.label}>Arrange</div>
-          <label style={insp.toggle}>
-            <input type="checkbox" checked={!!sys.arrange} onChange={e => onConfig({ arrange: e.target.checked })} />
-            <span>Free-position items — drag to place &amp; pin. Off = drag to retag.</span>
-          </label>
-          {sys.leafPos && Object.keys(sys.leafPos).length > 0 && (
-            <button style={insp.showAll} onClick={() => onConfig({ leafPos: {} })}>Reset arrangement ({Object.keys(sys.leafPos).length})</button>
-          )}
-        </div>
-      )}
-
-      <div style={insp.section}>
-        <div style={insp.label}>Filter this cluster</div>
-        <FilterBar filter={filter} setFilter={upd => onFilter(typeof upd === 'function' ? upd(filter) : upd)} propertyDefs={propertyDefs} />
-      </div>
-
-      {(sys.hiddenIds && sys.hiddenIds.length > 0) && (
-        <div style={insp.section}>
-          <div style={insp.label}>Hidden in this cluster</div>
-          <button style={insp.showAll} onClick={() => onConfig({ hiddenIds: [] })}>{sys.hiddenIds.length} hidden · Show all</button>
-        </div>
-      )}
-
-      <div style={{ flex: 1 }} />
-      <button style={insp.remove} onClick={() => { if (confirm(`Remove the “${def?.name}” cluster?`)) onRemove() }}>Remove cluster</button>
-    </div>
+    </foreignObject>
   )
 }
 
-const insp = {
-  panel: { width: 288, flexShrink: 0, height: '100%', overflowY: 'auto', background: '#0f0f1e', borderLeft: '1px solid #23233e', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 },
-  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  title: { color: '#e8eeff', fontSize: '0.95rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  close: { background: 'transparent', border: 'none', color: '#8090b8', fontSize: '1.2rem', cursor: 'pointer', lineHeight: 1 },
-  section: { display: 'flex', flexDirection: 'column', gap: 5 },
-  label: { fontSize: '0.68rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8090b8' },
-  sel: { width: '100%', background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, padding: '6px 8px', fontSize: '0.82rem', cursor: 'pointer' },
-  remove: { background: 'transparent', border: '1px solid #5a2a2a', color: '#f87171', borderRadius: 7, padding: '7px 10px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 },
-  showAll: { background: '#12122a', border: '1px solid #2d3a6a', color: '#8ecbff', borderRadius: 6, padding: '6px 8px', fontSize: '0.78rem', cursor: 'pointer' },
-  toggle: { display: 'flex', gap: 8, alignItems: 'flex-start', color: '#c5d0ff', fontSize: '0.78rem', lineHeight: 1.35, cursor: 'pointer' },
+const insp = { sel: { width: '100%', background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 6, padding: '6px 8px', fontSize: '0.82rem', cursor: 'pointer' } }
+const cbar = {
+  bar: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', background: 'rgba(16,16,32,0.96)', border: '1px solid #2d3a6a', borderRadius: 10, padding: '6px 8px', boxShadow: '0 10px 30px rgba(0,0,0,0.55)', width: 'max-content', maxWidth: 560, fontFamily: '-apple-system, sans-serif' },
+  pill: { background: '#1a1f3a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 100, padding: '4px 10px', fontSize: '0.76rem', cursor: 'pointer', whiteSpace: 'nowrap' },
+  pillOpen: { background: '#26306a', borderColor: '#5b6af0', color: '#fff' },
+  pillActive: { borderColor: '#3a5a8a', color: '#8ecbff' },
+  pillX: { background: 'transparent', border: '1px solid #3a3050', color: '#c5b0d0', borderRadius: 100, padding: '4px 10px', fontSize: '0.76rem', cursor: 'pointer' },
+  pop: { marginTop: 6, background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 9, padding: 10, width: 280, boxShadow: '0 10px 30px rgba(0,0,0,0.55)' },
+  hint: { fontSize: '0.68rem', color: '#8090b8', marginBottom: 6 },
+  miniRow: { marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(16,16,32,0.96)', border: '1px solid #2d3a6a', borderRadius: 8, padding: '4px 8px', width: 'max-content', fontSize: '0.74rem' },
+  mini: { background: '#12122a', border: '1px solid #2d3a6a', color: '#8ecbff', borderRadius: 6, padding: '2px 8px', fontSize: '0.72rem', cursor: 'pointer' },
 }
 
 const vmStyles = {
