@@ -135,17 +135,21 @@ export default function PackBoard({ projectId }) {
 
   const activeView = views.find(v => v.id === activeViewId)
   const colorByDef = activeView?.colorBy ? propertyDefs.find(d => d.id === activeView.colorBy) : null
+  // Per-view effects must key on project+view, NOT view id alone: view ids are only unique WITHIN a
+  // project (many projects share "view-default"), so switching between two such projects left this
+  // key unchanged and the board kept the previous project's clusters/pan/filter. (bug)
+  const viewKey = (projectId || '') + '::' + (activeViewId || '')
 
   // Persisted filter for the active view (shared with the pack view); seed "hide done" the first time.
   const filterInitRef = useRef(null), filterSaveRef = useRef()
   useEffect(() => {
-    if (filterInitRef.current === activeViewId) return
-    filterInitRef.current = activeViewId
+    if (filterInitRef.current === viewKey) return
+    filterInitRef.current = viewKey
     if (activeView?.filter) setFilter(activeView.filter)
     else { const def = defaultDoneFilter(propertyDefs); if (def) { setFilter(def); setViewFilter(def) } else setFilter({ text: '', rules: [] }) }
-  }, [activeViewId, activeView, propertyDefs, setViewFilter])
+  }, [viewKey, activeView, propertyDefs, setViewFilter])
   useEffect(() => {
-    if (filterInitRef.current !== activeViewId) return
+    if (filterInitRef.current !== viewKey) return
     setViewFilter(filter)
     clearTimeout(filterSaveRef.current)
     filterSaveRef.current = setTimeout(() => {
@@ -189,23 +193,24 @@ export default function PackBoard({ projectId }) {
   // Load layout from the active view; one-time migrate legacy localStorage layout into the view.
   useEffect(() => {
     if (!activeView) { setSystems([]); setSelectedSys(null); return }   // no view resolved (e.g. mid project-switch) → don't keep stale clusters
+    setSelectedSys(null)   // a different project/view → drop any open config bar
     if (Array.isArray(activeView.boardSystems)) { setSystems(activeView.boardSystems); return }
     let legacy = null
     try { const raw = localStorage.getItem(`pim:board:${projectId}`); if (raw) legacy = JSON.parse(raw) } catch { /* ignore */ }
     if (legacy && legacy.length) { setSystems(legacy); setBoardSystems(legacy); persist(legacy) }
     else setSystems([])
-  }, [activeViewId]) // eslint-disable-line
+  }, [viewKey]) // eslint-disable-line
 
-  // Restore the saved pan/zoom for this view (once per view).
+  // Restore the saved pan/zoom for this view (once per project+view).
   const tfRestoreRef = useRef(null)
   useEffect(() => {
-    if (tfRestoreRef.current === activeViewId) return
+    if (tfRestoreRef.current === viewKey) return
     const bt = activeView?.boardTf
     if (!zoomRef.current || !svgRef.current) return
-    tfRestoreRef.current = activeViewId
+    tfRestoreRef.current = viewKey
     const t = bt ? d3.zoomIdentity.translate(bt.x, bt.y).scale(bt.k) : d3.zoomIdentity
     d3.select(svgRef.current).call(zoomRef.current.transform, t); setTf(t)
-  }, [activeViewId, activeView]) // eslint-disable-line
+  }, [viewKey, activeView]) // eslint-disable-line
 
   const persist = (next) => {
     if (!projectId) return

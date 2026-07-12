@@ -167,18 +167,22 @@ export default function App() {
           Couldn’t load this project: {projectLoadErr}
         </div>
       )}
+      {/* key={project.id} → remount views on project switch so no per-project state leaks (view ids
+          like "view-default" are shared across projects, so keying effects on the view id alone was
+          not enough — a fresh mount guarantees clusters, pan/zoom, and refs reset). */}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {view === 'graph' && (
           <AppErrorBoundary>
           <Graph
+            key={project.id}
             projectId={project.id}
             projectName={project.name}
             onBack={() => setProject(null)}
           />
           </AppErrorBoundary>
         )}
-        {view === 'table' && <Table projectId={project.id} />}
-        {view === 'board' && <AppErrorBoundary><PackBoard projectId={project.id} /></AppErrorBoundary>}
+        {view === 'table' && <Table key={project.id} projectId={project.id} />}
+        {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} /></AppErrorBoundary>}
         {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
       </div>
     </div>
