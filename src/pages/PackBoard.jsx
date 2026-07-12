@@ -151,6 +151,7 @@ export default function PackBoard({ projectId }) {
     filterSaveRef.current = setTimeout(() => {
       if (!projectId) return
       const s = useGraphStore.getState()
+      if (s.loadedProjectId !== projectId) return
       saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e))
     }, 700)
     return () => clearTimeout(filterSaveRef.current)
@@ -209,6 +210,7 @@ export default function PackBoard({ projectId }) {
   const persist = (next) => {
     if (!projectId) return
     const s = useGraphStore.getState()
+    if (s.loadedProjectId !== projectId) return   // don't write if the store holds a different project (mid-switch)
     const views2 = s.views.map(v => v.id === s.activeViewId ? { ...v, boardSystems: next } : v)
     saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: views2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e))
   }
@@ -228,7 +230,7 @@ export default function PackBoard({ projectId }) {
         if (e.sourceEvent) {   // only persist real user pans/zooms (not our programmatic restore)
           setViewBoardTf({ x: e.transform.x, y: e.transform.y, k: e.transform.k })
           clearTimeout(tfSaveRef.current)
-          tfSaveRef.current = setTimeout(() => { const s = useGraphStore.getState(); if (projectId) saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(() => {}) }, 800)
+          tfSaveRef.current = setTimeout(() => { const s = useGraphStore.getState(); if (projectId && s.loadedProjectId === projectId) saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(() => {}) }, 800)
         }
       })
     zoomRef.current = zoom; sel.call(zoom)
@@ -272,7 +274,7 @@ export default function PackBoard({ projectId }) {
     if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   }
   // View management (shared views; persist to DB on change so switches survive reload).
-  const saveAll = () => { if (!projectId) return; const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
+  const saveAll = () => { if (!projectId) return; const s = useGraphStore.getState(); if (s.loadedProjectId !== projectId) return; saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   const switchView = (id) => { setActiveView(id); saveAll() }
   const setBoardColorBy = (propId) => { setViewColorBy(propId); saveAll() }
 
@@ -384,7 +386,15 @@ export default function PackBoard({ projectId }) {
           ))}
           <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate view">⧉</button>
           <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
-          <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), marginLeft: 'auto' }}
+          {(() => {
+            const np = activeView?.nodeProps || {}
+            const hidden = nodes.filter(n => np[n.id]?.visible === false)
+            if (!hidden.length) return null
+            return <button style={{ ...styles.lensBtn, marginLeft: 'auto', color: '#f0b090', borderColor: '#5a4030' }}
+              title="These are hidden in this whole view (board + graph). Click to show them again."
+              onClick={() => { hidden.forEach(n => setNodeViewProp(n.id, 'visible', true)); saveAll() }}>🙈 {hidden.length} hidden · Show all</button>
+          })()}
+          <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), ...(activeView?.nodeProps && nodes.some(n => activeView.nodeProps[n.id]?.visible === false) ? {} : { marginLeft: 'auto' }) }}
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
           <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header for controls · double-click to zoom · drag to move</span>
         </div>
@@ -979,7 +989,9 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
     const anyOverride = Object.keys(overrides).length > 0
     const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy: (sizeMode && sizeMode !== 'style') ? sizeMode : undefined, valsOf: groupValsOf, innerDefOf: anyOverride ? innerDefOf : undefined })
     const h = d3.hierarchy(tree).sum(d => d.value || 1).sort((a, b) => (b.value || 0) - (a.value || 0))
-    d3.pack().size([NP_D, NP_D]).padding((defB || Object.keys(overrides).length) ? 10 : 6)(h)
+    const nested = !!(defB || Object.keys(overrides).length)
+    // Big gaps BETWEEN groups (so each reads as a distinct cluster), tighter inside. Uniform packs stay compact.
+    d3.pack().size([NP_D, NP_D]).padding(d => nested ? (d.depth === 0 ? 46 : d.depth === 1 ? 12 : 5) : 6)(h)
     void numDomain
     return h
   }, [structureKey]) // eslint-disable-line
