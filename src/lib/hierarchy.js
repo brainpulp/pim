@@ -62,7 +62,9 @@ export function buildTagTree(nodes, def, { decorOf, sizeBy } = {}) {
 // fall into an "(untagged)" bucket at that level; multi-value nodes appear under each combination
 // (mirrors). `valsOf(node, def) → string[]` overrides how a node's group ids are read (e.g. date
 // buckets); it must return ['__untagged__'] when the node has no value for that level.
-export function buildNestedTagTree(nodes, defA, defB, { decorOf, sizeBy, valsOf } = {}) {
+// `innerDefOf(outerOptId) → def | null | undefined` overrides the inner (2nd-level) grouping per
+// outer group: a def sub-groups that group by it, null = no sub-grouping, undefined = inherit `defB`.
+export function buildNestedTagTree(nodes, defA, defB, { decorOf, sizeBy, valsOf, innerDefOf } = {}) {
   if (!defA) return { id: '__root__', label: '', children: [] }
   const valueOf = (n) => { if (sizeBy) { const v = Number(n?.props?.[sizeBy]); if (Number.isFinite(v) && v > 0) return v } return 1 }
   const defaultVals = (n, def) => {
@@ -74,14 +76,16 @@ export function buildNestedTagTree(nodes, defA, defB, { decorOf, sizeBy, valsOf 
   const vals = valsOf || defaultVals
   const nameOf = (def, id) => id === '__untagged__' ? '(untagged)' : ((def.options || []).find(o => o.id === id)?.name || id)
   const colorOf = (def, id) => id === '__untagged__' ? '#3a4358' : ((def.options || []).find(o => o.id === id)?.color || null)
+  const innerFor = (a) => { if (!innerDefOf) return defB; const r = innerDefOf(a); return r === undefined ? defB : r }
   const outer = new Map()
   nodes.forEach(n => {
     vals(n, defA).forEach(a => {
       if (!outer.has(a)) outer.set(a, { id: 'a:' + a, label: nameOf(defA, a), color: colorOf(defA, a), _inner: new Map(), _items: [] })
       const oNode = outer.get(a)
-      if (defB) {
-        vals(n, defB).forEach(b => {
-          if (!oNode._inner.has(b)) oNode._inner.set(b, { id: 'a:' + a + '|b:' + b, label: nameOf(defB, b), color: colorOf(defB, b), children: [] })
+      const inner = innerFor(a)
+      if (inner) {
+        vals(n, inner).forEach(b => {
+          if (!oNode._inner.has(b)) oNode._inner.set(b, { id: 'a:' + a + '|b:' + b, label: nameOf(inner, b), color: colorOf(inner, b), children: [] })
           oNode._inner.get(b).children.push({ id: n.id + '@' + a + '|' + b, label: n.label || '(untitled)', ...(decorOf?.(n.id) || {}), value: valueOf(n) })
         })
       } else {
@@ -89,6 +93,6 @@ export function buildNestedTagTree(nodes, defA, defB, { decorOf, sizeBy, valsOf 
       }
     })
   })
-  const children = [...outer.values()].map(o => ({ id: o.id, label: o.label, color: o.color, children: defB ? [...o._inner.values()] : o._items }))
+  const children = [...outer.values()].map(o => ({ id: o.id, label: o.label, color: o.color, children: o._inner.size ? [...o._inner.values()] : o._items }))
   return { id: '__root__', label: '', color: null, children: children.length ? children : [{ id: '__empty__', label: '(empty)', value: 1 }] }
 }

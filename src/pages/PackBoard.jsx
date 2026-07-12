@@ -106,6 +106,7 @@ export default function PackBoard({ projectId }) {
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const addNode = useGraphStore(s => s.addNode)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
@@ -302,6 +303,25 @@ export default function PackBoard({ projectId }) {
     const ids = nodeGroupIds(def, n, startOfDay(new Date())).filter(id => def.type === 'dateBucket' ? true : (def.options || []).some(o => o.id === id))
     return ids.length ? ids : ['__untagged__']
   }
+  // Per-outer-group "group children by" override on a cluster. undefined value = clear (inherit).
+  const setGroupOverride = (sysId, opt, val) => {
+    const s = systemsRef.current.find(x => x.id === sysId)
+    const cur = { ...(s?.groupOverrides || {}) }
+    if (val === undefined) delete cur[opt]; else cur[opt] = val
+    setSystemConfig(sysId, { groupOverrides: cur })
+  }
+  // Create a new node from the board and apply group assignments (so it lands in the right group).
+  const addNodeWith = (assignments) => {
+    const label = prompt('New item name'); if (label == null) return
+    const id = addNode(label.trim() || 'New item')
+    const now = startOfDay(new Date())
+    assignments.forEach(({ propId, value }) => {
+      const def = propertyDefs.find(d => d.id === propId); if (!def || value === '__untagged__' || value == null) return
+      if (def.type === 'date') setNodeProp(id, propId, dueRepDate(value, now))
+      else setNodeProp(id, propId, def.type === 'multiSelect' ? [value] : value)
+    })
+    saveAll()
+  }
   // Hide a set of nodes in the active view (used by the parent-hub "Hide items" action).
   const hideNodes = (ids) => {
     ids.forEach(id => setNodeViewProp(id, 'visible', false))
@@ -401,7 +421,8 @@ export default function PackBoard({ projectId }) {
               // Circle pack — deterministic d3.pack (no overlap, minimal size), 1 or 2 grouping levels.
               // Date packs are always single-level (bucketed).
               const packDefs = isDate ? [def] : groupBy.map(id => propertyDefs.find(d => d.id === id)).filter(Boolean).slice(0, 2)
-              return <NestedPackCluster {...common} groupDefs={packDefs.length ? packDefs : [def]} groupValsOf={groupValsOf} onRetagMulti={retagMulti} />
+              return <NestedPackCluster {...common} groupDefs={packDefs.length ? packDefs : [def]} groupValsOf={groupValsOf} onRetagMulti={retagMulti}
+                onSetGroupOverride={(opt, val) => setGroupOverride(sys.id, opt, val)} onAddNode={addNodeWith} />
             })}
           </g>
         </svg>
@@ -632,9 +653,10 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       const valid = ids.filter(id => idx.has(id))
       const dec = decorOf?.(n.id) || {}
       const label = n.label || '(untitled)'
-      // Size honours the cluster's size mode (default = the node's own scale, mirroring the graph).
-      const scl = sizeMode ? sizeScaleFor(sizeMode, n, dec, numDomain) : Math.min(1.8, Math.max(0.65, dec.scale || 1))
-      const baseR = radiusFor(label) * 0.7 * scl
+      // Uniform = identical radius for every item (NOT scaled by label length or the node's own
+      // scale — that was the bug). Style = node's own scale; a number property = scale by value.
+      const scl = sizeScaleFor(sizeMode, n, dec, numDomain)   // 1 when Uniform
+      const baseR = 34 * scl
       const shape = dec.shape || 'circle'
       const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
       const mk = (opt) => ({ nodeId: n.id, opt, label, color: resolveColor(colorMode, n, dec, colorForOpt(opt), propertyDefs), decor: dec, shape, baseR, r: bound })
@@ -855,22 +877,35 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
 // = groupDefs[0], inner sub-packs = groupDefs[1] → leaves. Drag-to-retag: dropping a leaf on a
 // sub-pack sets both (a,b); on an outer pack sets a; on empty space clears the outer value.
 const NP_D = 1000
-function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, groupValsOf, selected, onSelect, onEditNode, onDrill, onRetagMulti, onMove, onCommitMove, onRemove }) {
+function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, decorOf, nodes, toWorld, zoomK, lens, filterFn, clusterFilterKey, hasFilter, groupValsOf, selected, onSelect, onEditNode, onDrill, onRetagMulti, onSetGroupOverride, onAddNode, onMove, onCommitMove, onRemove }) {
   const [, setTick] = useState(0)
   const [drag, setDrag] = useState(null)   // { id, x, y } in pack-local coords while dragging a leaf
+  const [pmenu, setPmenu] = useState(null)  // "group children by" menu on an outer pack: { opt, x, y }
+  const pmenuElRef = useRef(null)
+  useEffect(() => {
+    if (!pmenu) return
+    const close = (e) => { if (pmenuElRef.current && pmenuElRef.current.contains(e.target)) return; setPmenu(null) }
+    document.addEventListener('mousedown', close, true)
+    return () => document.removeEventListener('mousedown', close, true)
+  }, [pmenu])
   const [defA, defB] = groupDefs
-  const nLevels = groupDefs.length          // 1 = simple pack, 2 = nested
-  const leafDepth = nLevels + 1             // root(0) → A(1) → [B(2) →] leaf
+  const overrides = sys.groupOverrides || {}
+  // Resolve the inner (sub-group) def for an outer value: '' = none, a propId = that property
+  // (date-wrapped), absent = inherit the cluster default (defB). null tells the builder "no sub-group".
+  const resolveDef = (id) => { const d = propertyDefs.find(x => x.id === id); return d ? (d.type === 'date' ? dueDefFor(d) : d) : null }
+  const innerDefOf = (a) => { const ov = overrides[a]; if (ov === undefined) return undefined; if (ov === '' || ov == null) return null; return resolveDef(ov) }
   const structureKey = useMemo(() =>
     nodes.map(n => n.id + JSON.stringify([n.props?.[defA.id], defB ? n.props?.[defB.id] : null]) + ':' + (n.label || '')).join(';')
-    + '#' + groupDefs.map(d => d.id + ':' + (d.options || []).length).join('|') + '#' + clusterFilterKey + '#' + (colorMode || '') + '#' + (sizeMode || ''),
-    [nodes, defA, defB, clusterFilterKey, colorMode, sizeMode]) // eslint-disable-line
+    + '#' + groupDefs.map(d => d.id + ':' + (d.options || []).length).join('|') + '#' + clusterFilterKey + '#' + (colorMode || '') + '#' + (sizeMode || '') + '#' + JSON.stringify(overrides),
+    [nodes, defA, defB, clusterFilterKey, colorMode, sizeMode, JSON.stringify(overrides)]) // eslint-disable-line
   const root = useMemo(() => {
     const fnodes = nodes.filter(n => !filterFn || filterFn(n))
     const numDomain = (sizeMode && sizeMode !== 'style') ? domainOf(fnodes, sizeMode) : null
-    const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy: (sizeMode && sizeMode !== 'style') ? sizeMode : undefined, valsOf: groupValsOf })
+    // Any per-group override means heterogeneous inner grouping → pass the resolver.
+    const anyOverride = Object.keys(overrides).length > 0
+    const tree = buildNestedTagTree(fnodes, defA, defB, { decorOf, sizeBy: (sizeMode && sizeMode !== 'style') ? sizeMode : undefined, valsOf: groupValsOf, innerDefOf: anyOverride ? innerDefOf : undefined })
     const h = d3.hierarchy(tree).sum(d => d.value || 1).sort((a, b) => (b.value || 0) - (a.value || 0))
-    d3.pack().size([NP_D, NP_D]).padding(nLevels === 2 ? 10 : 6)(h)
+    d3.pack().size([NP_D, NP_D]).padding((defB || Object.keys(overrides).length) ? 10 : 6)(h)
     void numDomain
     return h
   }, [structureKey]) // eslint-disable-line
@@ -887,7 +922,7 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
   const dropTargetAt = (p) => {   // deepest group circle the point is inside (sub-pack beats pack)
     let bHit = null, aHit = null
     root.descendants().forEach(d => {
-      if (nLevels === 2 && d.depth === 2 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) bHit = d
+      if (d.depth === 2 && d.children && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) bHit = d
       else if (d.depth === 1 && Math.hypot(p.x - d.x, p.y - d.y) <= d.r) aHit = d
     })
     return bHit || aHit || null
@@ -906,20 +941,32 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
       // move removes only that membership, not the node's other tags.
       const anc = leaf.ancestors()
       const srcA = (/^a:([^|]*)/.exec(anc.find(x => x.depth === 1)?.data.id || '') || [])[1]
-      const srcB = nLevels === 2 ? (/\|b:(.*)$/.exec(anc.find(x => x.depth === 2)?.data.id || '') || [])[1] : undefined
+      const srcInner = innerDefOf(srcA); const srcInnerDef = srcInner === undefined ? defB : srcInner
+      const srcB = srcInnerDef ? (/\|b:(.*)$/.exec(anc.find(x => x.depth === 2)?.data.id || '') || [])[1] : undefined
       const tgt = dropTargetAt(p)
       if (!tgt) { onRetagMulti(nodeId, [{ propId: defA.id, value: null, from: srcA }]); return }
-      if (tgt.depth === 2) { const m = /^a:(.*)\|b:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1], from: srcA }, { propId: defB.id, value: m[2], from: srcB }]) }
-      else { const m = /^a:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1], from: srcA }]) }
+      if (tgt.depth === 2) {
+        const m = /^a:(.*)\|b:(.*)$/.exec(tgt.data.id) || []
+        const tgtInner = innerDefOf(m[1]); const tgtInnerDef = tgtInner === undefined ? defB : tgtInner
+        const assigns = [{ propId: defA.id, value: m[1], from: srcA }]
+        // Only pass `from` for the inner prop when source & target sub-group by the SAME property.
+        if (tgtInnerDef) assigns.push({ propId: tgtInnerDef.id, value: m[2], from: (srcInnerDef && srcInnerDef.id === tgtInnerDef.id) ? srcB : undefined })
+        onRetagMulti(nodeId, assigns)
+      } else { const m = /^a:(.*)$/.exec(tgt.data.id) || []; onRetagMulti(nodeId, [{ propId: defA.id, value: m[1], from: srcA }]) }
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
 
   const nodes_ = root.descendants()
   const aNodes = nodes_.filter(d => d.depth === 1)
-  const bNodes = nLevels === 2 ? nodes_.filter(d => d.depth === 2) : []
-  const leaves = nodes_.filter(d => d.depth === leafDepth)
+  const bNodes = nodes_.filter(d => d.depth === 2 && d.children)   // sub-packs (depth-2 groups)
+  const leaves = nodes_.filter(d => !d.children && d.data.id.includes('@'))   // real item leaves (any depth)
   const dropHit = drag ? dropTargetAt(drag) : null
+  // Glide circles to their new packed spots after a retag instead of snapping. Off during a drag
+  // (dragged item must track the cursor) and while the lens is active (it must follow instantly).
+  const smooth = !drag && !lens
+  const trans = smooth ? { transition: 'transform 0.35s ease' } : undefined
+  const circTrans = smooth ? { transition: 'r 0.35s ease' } : undefined
   const headY = -20
   const oxN = sys.x - off, oyN = sys.y - off
   const clusterBBox = () => {
@@ -933,34 +980,35 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
     <g transform={`translate(${oxN},${oyN})`}>
       <ClusterHeader def={{ name: groupDefs.map(d => d.name).join(' › ') }} kind="pack" cx={off} y={headY} zoomK={zoomK} hasFilter={hasFilter} selected={selected} onHead={startHeadDrag} onDrill={() => onDrill && onDrill(clusterBBox())} onRemove={onRemove} />
       {aNodes.map(a => {
-        // Single-level: depth-1 circles ARE the packs (filled tint + count). Two-level: they're the
-        // dashed outer containers and depth-2 sub-packs carry the fill.
-        if (nLevels === 1) {
-          const isT = dropHit === a
-          const zf = zfont(16, zoomK, 12, 30), count = a.leaves().length
-          return (
-            <g key={a.data.id} pointerEvents="none">
-              <circle cx={a.x} cy={a.y} r={a.r} fill={(a.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (a.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 2} />
-              <text x={a.x} y={a.y - a.r - zf * 0.4} textAnchor="middle" fontSize={zf} fontWeight={800} fill={isT ? '#7fd8a8' : (a.data.color || '#c5d0ff')}
-                style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: zf * 0.29, strokeLinejoin: 'round' }}>{a.data.label} · {count}</text>
-            </g>
-          )
-        }
+        // A group with sub-packs (its children are groups) is a dashed CONTAINER; a group whose
+        // children are leaves is a filled PACK. The "⋯" opens its "group children by" menu.
+        const hasSub = !!(a.children && a.children.some(c => c.children))
+        const isT = dropHit === a
+        const zf = zfont(16, zoomK, 12, 30), count = a.leaves().length
+        const col = a.data.color || '#5b6af0'
+        const gearFs = zfont(15, zoomK, 12, 26)
+        const overridden = overrides[a.data.id.slice(2)] !== undefined
         return (
-          <g key={a.data.id} pointerEvents="none">
-            <circle cx={a.x} cy={a.y} r={a.r} fill="none" stroke={(a.data.color || '#5b6af0') + '99'} strokeWidth={2} strokeDasharray="6 5" />
-            <text x={a.x} y={a.y - a.r - 6} textAnchor="middle" fontSize={zfont(15, zoomK, 12, 30)} fontWeight={800} fill={a.data.color || '#c5d0ff'}
-              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 5, strokeLinejoin: 'round' }}>{a.data.label}</text>
+          <g key={a.data.id} transform={`translate(${a.x},${a.y})`} style={trans}>
+            {hasSub
+              ? <circle r={a.r} fill="none" stroke={col + '99'} strokeWidth={2} strokeDasharray="6 5" pointerEvents="none" style={circTrans} />
+              : <circle r={a.r} fill={col + '1e'} stroke={isT ? '#7fd8a8' : col} strokeWidth={isT ? 3.5 : 2} pointerEvents="none" style={circTrans} />}
+            <text x={0} y={-a.r - zf * 0.4} textAnchor="middle" fontSize={zf} fontWeight={800} fill={isT ? '#7fd8a8' : (a.data.color || '#c5d0ff')} pointerEvents="none"
+              style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: zf * 0.29, strokeLinejoin: 'round' }}>{a.data.label} · {count}</text>
+            {/* ⋯ button: choose how THIS group sub-groups its children (overrides the cluster). */}
+            <text x={a.r - gearFs * 0.7} y={-a.r + gearFs} textAnchor="middle" fontSize={gearFs} fill={overridden ? '#8ecbff' : '#7080a0'}
+              style={{ cursor: 'pointer', paintOrder: 'stroke', stroke: '#05060f', strokeWidth: gearFs * 0.28, strokeLinejoin: 'round' }}
+              onMouseDown={e => { e.stopPropagation(); setPmenu({ opt: a.data.id.slice(2), x: a.x, y: a.y - a.r }) }}>⋯</text>
           </g>
         )
       })}
       {bNodes.map(b => {
         const isT = dropHit === b
         return (
-          <g key={b.data.id} pointerEvents="none">
-            <circle cx={b.x} cy={b.y} r={b.r} fill={(b.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (b.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 1.8} />
+          <g key={b.data.id} pointerEvents="none" transform={`translate(${b.x},${b.y})`} style={trans}>
+            <circle r={b.r} fill={(b.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (b.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 1.8} style={circTrans} />
             {b.r * zoomK > 16 && (
-              <text x={b.x} y={b.y - b.r - 3} textAnchor="middle" fontSize={zfont(12, zoomK, 10, 22)} fontWeight={700} fill={isT ? '#7fd8a8' : '#c5d0ff'}
+              <text x={0} y={-b.r - 3} textAnchor="middle" fontSize={zfont(12, zoomK, 10, 22)} fontWeight={700} fill={isT ? '#7fd8a8' : '#c5d0ff'}
                 style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>{b.data.label}</text>
             )}
           </g>
@@ -986,13 +1034,38 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
         }
         // Cull the label when the circle is small on screen (declutters; zoom in to read).
         if (baseR * zoomK < 13) {
-          return <g key={l.data.id} transform={`translate(${x},${y})`} style={{ cursor: 'grab' }} {...handlers}>
+          return <g key={l.data.id} transform={`translate(${x},${y})`} style={{ cursor: 'grab', ...(smooth && !isDrag ? { transition: 'transform 0.35s ease' } : {}) }} {...handlers}>
             <circle r={baseR} fill={color} fillOpacity={0.96} stroke={isDrag ? '#fff' : 'rgba(232,238,255,0.35)'} strokeWidth={isDrag ? 3 : 1} />
           </g>
         }
         const b = { x, y, label: dec.label, color, decor: dec, shape, baseR, r: baseR }
-        return <LeafNode key={l.data.id} b={b} held={isDrag} onDown={handlers.onMouseDown} onContext={handlers.onContextMenu} onDbl={handlers.onDoubleClick} />
+        return <LeafNode key={l.data.id} b={b} held={isDrag} smooth={smooth && !isDrag} onDown={handlers.onMouseDown} onContext={handlers.onContextMenu} onDbl={handlers.onDoubleClick} />
       })}
+      {/* per-group menu: add an item into this group + choose how it sub-groups its children */}
+      {pmenu && (() => {
+        const a = aNodes.find(x => x.data.id.slice(2) === pmenu.opt)
+        const cur = overrides[pmenu.opt]
+        const subOpts = propertyDefs.filter(d => (d.type === 'select' || d.type === 'multiSelect' || d.type === 'date') && d.id !== defA.id)
+        return (
+          <foreignObject x={pmenu.x} y={pmenu.y} width={260} height={380} style={{ overflow: 'visible' }}>
+            <div style={{ transform: `scale(${1 / (zoomK || 1)})`, transformOrigin: 'top left' }}>
+              <div ref={pmenuElRef} style={vmStyles.menu} onMouseDown={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}>
+                <div style={vmStyles.head}>{a?.data.label || 'Group'}</div>
+                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setPmenu(null); onAddNode && onAddNode([{ propId: defA.id, value: pmenu.opt }]) }}>+ New item in this group</div>
+                <div style={{ borderTop: '1px solid #23233e', margin: '4px 6px' }} />
+                <div style={{ ...vmStyles.head, borderBottom: 'none', paddingBottom: 2 }}>Group children by</div>
+                <div style={{ ...vmStyles.item, color: cur === undefined ? '#8ecbff' : '#c5d0ff' }} onMouseDown={e => { e.stopPropagation(); setPmenu(null); onSetGroupOverride && onSetGroupOverride(pmenu.opt, undefined) }}>Inherit from cluster{defB ? ` · ${defB.name}` : ' · none'}</div>
+                <div style={{ ...vmStyles.item, color: cur === '' ? '#8ecbff' : '#c5d0ff' }} onMouseDown={e => { e.stopPropagation(); setPmenu(null); onSetGroupOverride && onSetGroupOverride(pmenu.opt, '') }}>None (flat)</div>
+                {subOpts.map(d => (
+                  <div key={d.id} style={{ ...vmStyles.item, color: cur === d.id ? '#8ecbff' : '#c5d0ff' }}
+                    onMouseDown={e => { e.stopPropagation(); setPmenu(null); onSetGroupOverride && onSetGroupOverride(pmenu.opt, d.id) }}>{d.name}{d.type === 'date' ? ' (due)' : ''}</div>
+                ))}
+                <div style={vmStyles.item} onMouseDown={e => { e.stopPropagation(); setPmenu(null) }}>Close</div>
+              </div>
+            </div>
+          </foreignObject>
+        )
+      })()}
     </g>
   )
 }
@@ -1023,7 +1096,7 @@ function dashArrayB(dash, sw = 1.4) {
 }
 
 // A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
-function LeafNode({ b, held, lens, ox = 0, oy = 0, onDown, onContext, onDbl }) {
+function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl }) {
   const dec = b.decor || {}
   const shape = b.shape || 'circle'
   const disp = lens ? lens(ox + (b.x || 0), oy + (b.y || 0)) : null
@@ -1046,7 +1119,7 @@ function LeafNode({ b, held, lens, ox = 0, oy = 0, onDown, onContext, onDbl }) {
   else if (shape === 'diamond') body = <polygon points={`0,${-s * 1.15} ${s * 1.15},0 0,${s * 1.15} ${-s * 1.15},0`} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
   else body = <circle r={s} fill={fill} fillOpacity={0.96} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} />
   return (
-    <g data-bubble="1" transform={`translate(${dx},${dy})`} style={{ cursor: 'grab' }} onMouseDown={onDown} onContextMenu={onContext} onDoubleClick={onDbl}>
+    <g data-bubble="1" transform={`translate(${dx},${dy})`} style={{ cursor: 'grab', ...(smooth ? { transition: 'transform 0.35s ease' } : {}) }} onMouseDown={onDown} onContextMenu={onContext} onDoubleClick={onDbl}>
       {body}
       {emoji && <text textAnchor="middle" dominantBaseline="middle" fontSize={s * 0.7} y={-s * 0.42} pointerEvents="none">{emoji}</text>}
       <text textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill={tf} pointerEvents="none"
