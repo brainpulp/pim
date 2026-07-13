@@ -885,19 +885,21 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
           return <line key={'e' + l.id} x1={parent.x} y1={parent.y} x2={l.x} y2={l.y} stroke={l.color} strokeOpacity={0.28} strokeWidth={1.4} /> })}
       </g>
       {/* root */}
-      {root && (
-        <g pointerEvents="none" transform={`translate(${root.x},${root.y})`}>
+      {root && (() => {
+        const rf = zfont(14, zoomK, 11, 22)   // clamp to screen px
+        return <g pointerEvents="none" transform={`translate(${root.x},${root.y})`}>
           <circle r={root.r} fill="#141428" stroke="#7c8cff" strokeWidth={2.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={13} fontWeight={800} fill="#c5d0ff"
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={rf} fontWeight={800} fill="#c5d0ff"
             style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>
-            {wrapText(root.name, 9).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * 14}>{ln}</tspan>)}
+            {wrapText(root.name, 9).slice(0, 3).map((ln, i, a) => <tspan key={i} x={0} y={(i - (a.length - 1) / 2) * (rf * 1.08)}>{ln}</tspan>)}
           </text>
         </g>
+      })()}
       )}
       {/* value nodes (1st generation) */}
       {values.map(v => {
         const isT = dragging && hover?.kind === 'value' && hover.opt === v.opt
-        const vf = Math.max(12, Math.min(20, v.r * 0.26))
+        const vf = zfont(16, zoomK, 12, 24)   // clamp to screen px so it stays legible when zoomed out
         const overridden = overrides[v.opt] !== undefined && overrides[v.opt] !== ''
         return (
           <g key={v.id} data-bubble="1" transform={`translate(${v.x},${v.y})`} style={{ cursor: 'grab' }}
@@ -915,7 +917,7 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
       {/* sub-hubs (per-hub "group children by" override) */}
       {subs.map(s => {
         const isT = dragging && hover?.kind === 'sub' && hover.opt === s.opt && hover.subVal === s.subVal
-        const sf = Math.max(10, Math.min(16, s.r * 0.26))
+        const sf = zfont(13, zoomK, 10, 20)   // clamp to screen px
         return (
           <g key={s.id} pointerEvents="none" transform={`translate(${s.x},${s.y})`}>
             <circle r={s.r} fill={(s.color || '#5b6af0') + '22'} stroke={isT ? '#7fd8a8' : (s.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 2} strokeDasharray="4 3" />
@@ -1021,19 +1023,30 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
     leafSimRef.current = sim
     return () => sim.stop()
   }, [])
+  // Which groups are collapsed to a summary bubble at the current zoom (same rule as the render).
+  // A stable string so the leaf sim only re-seeds when a group actually crosses the threshold, not on
+  // every zoom tick.
+  const collapsedKey = useMemo(() => {
+    const ids = []
+    root.descendants().forEach(d => {
+      if (d.children && d.children.length > 12 && d.children.every(c => !c.children) && (d.children[0].r * (zoomK || 1)) < 15) ids.push(d.data.id)
+    })
+    return ids.sort().join(',')
+  }, [root, zoomK])
   useEffect(() => {
     const sim = leafSimRef.current; if (!sim) return
-    const leaves = root.leaves().filter(l => l.data.id.includes('@'))
-    // Cap: past this many items the force settle would jank (and the view is aggregated anyway) — keep
-    // the deterministic pack positions there.
-    if (!leaves.length || leaves.length > 300) { sim.nodes([]); sim.stop(); return }
+    // Only scatter the leaves actually SHOWN (their group isn't collapsed). This is what lets a
+    // 1000-item cluster be organic when you zoom into a group, without simulating all 1000 at once.
+    const coll = new Set(collapsedKey ? collapsedKey.split(',') : [])
+    const leaves = root.leaves().filter(l => l.data.id.includes('@') && !coll.has(l.parent?.data.id))
+    if (!leaves.length || leaves.length > 400) { sim.nodes([]); sim.stop(); return }
     leaves.forEach(l => { if (l.tx == null) { l.tx = l.x; l.ty = l.y } })   // remember pack target
     sim.nodes(leaves)
     sim.force('x', d3.forceX(d => d.tx).strength(0.09))
     sim.force('y', d3.forceY(d => d.ty).strength(0.09))
     sim.force('collide', d3.forceCollide(d => (d.r || 6) + 1).strength(0.9).iterations(2))
     sim.alpha(0.9).restart()
-  }, [root])
+  }, [root, collapsedKey])
 
   const off = NP_D / 2
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - (sys.x - off), y: p.y - (sys.y - off) } }
