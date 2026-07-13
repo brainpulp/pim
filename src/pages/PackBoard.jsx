@@ -895,7 +895,6 @@ function TreeCluster({ sys, def, colorMode, sizeMode, propertyDefs, nodes, decor
           </text>
         </g>
       })()}
-      )}
       {/* value nodes (1st generation) */}
       {values.map(v => {
         const isT = dragging && hover?.kind === 'value' && hover.opt === v.opt
