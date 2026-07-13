@@ -8,7 +8,7 @@ export const DEFAULT_NODE_PROPS = {
   scale: 1,
   fillColor: '#12122a',
   textColor: '#ffffff',
-  strokeColor: '#2d3a6a',
+  strokeColor: null,   // no outline by default (selection/anchor draw their own rings)
   visible: true,
   fx: null,
   fy: null,
