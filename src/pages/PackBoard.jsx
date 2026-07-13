@@ -1052,7 +1052,16 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
   const nodes_ = root.descendants()
   const aNodes = nodes_.filter(d => d.depth === 1)
   const bNodes = nodes_.filter(d => d.depth === 2 && d.children)   // sub-packs (depth-2 groups)
-  const leaves = nodes_.filter(d => !d.children && d.data.id.includes('@'))   // real item leaves (any depth)
+  // Aggregate: a big group whose items would be tiny on screen renders as ONE summary bubble (count in
+  // its label) instead of hundreds of dots. Items reveal as you zoom in (rep item ≥ ~10px). This is
+  // what makes a 500-item group legible instead of a blob of dots.
+  const collapsed = new Set()
+  nodes_.forEach(d => {
+    if (d.children && d.children.length > 12 && d.children.every(c => !c.children)) {
+      if ((d.children[0].r * (zoomK || 1)) < 10) collapsed.add(d)
+    }
+  })
+  const leaves = nodes_.filter(d => !d.children && d.data.id.includes('@') && !collapsed.has(d.parent))
   const dropHit = drag ? dropTargetAt(drag) : null
   // Glide circles to their new packed spots after a retag instead of snapping. Off during a drag
   // (dragged item must track the cursor) and while the lens is active (it must follow instantly).
@@ -1084,7 +1093,7 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
           <g key={a.data.id} transform={`translate(${a.x},${a.y})`} style={trans}>
             {hasSub
               ? <circle r={a.r} fill="none" stroke={col + '99'} strokeWidth={2} strokeDasharray="6 5" pointerEvents="none" style={circTrans} />
-              : <circle r={a.r} fill={col + '1e'} stroke={isT ? '#7fd8a8' : col} strokeWidth={isT ? 3.5 : 2} pointerEvents="none" style={circTrans} />}
+              : <circle r={a.r} fill={col + (collapsed.has(a) ? '4d' : '1e')} stroke={isT ? '#7fd8a8' : col} strokeWidth={isT ? 3.5 : 2} pointerEvents="none" style={circTrans} />}
             <text x={0} y={-a.r - zf * 0.4} textAnchor="middle" fontSize={zf} fontWeight={800} fill={isT ? '#7fd8a8' : (a.data.color || '#c5d0ff')} pointerEvents="none"
               style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: zf * 0.29, strokeLinejoin: 'round' }}>{a.data.label} · {count}</text>
             {/* ⋯ button: choose how THIS group sub-groups its children (overrides the cluster). */}
@@ -1096,12 +1105,13 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
       })}
       {bNodes.map(b => {
         const isT = dropHit === b
+        const bCol = b.data.color || '#5b6af0', bColl = collapsed.has(b)
         return (
           <g key={b.data.id} pointerEvents="none" transform={`translate(${b.x},${b.y})`} style={trans}>
-            <circle r={b.r} fill={(b.data.color || '#5b6af0') + '1e'} stroke={isT ? '#7fd8a8' : (b.data.color || '#5b6af0')} strokeWidth={isT ? 3.5 : 1.8} style={circTrans} />
+            <circle r={b.r} fill={bCol + (bColl ? '4d' : '1e')} stroke={isT ? '#7fd8a8' : bCol} strokeWidth={isT ? 3.5 : 1.8} style={circTrans} />
             {b.r * zoomK > 16 && (
               <text x={0} y={-b.r - 3} textAnchor="middle" fontSize={zfont(12, zoomK, 10, 22)} fontWeight={700} fill={isT ? '#7fd8a8' : '#c5d0ff'}
-                style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>{b.data.label}</text>
+                style={{ paintOrder: 'stroke', stroke: '#05060f', strokeWidth: 4, strokeLinejoin: 'round' }}>{b.data.label} · {b.leaves().length}</text>
             )}
           </g>
         )
