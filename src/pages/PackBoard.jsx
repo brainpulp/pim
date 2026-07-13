@@ -1058,7 +1058,7 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
   const collapsed = new Set()
   nodes_.forEach(d => {
     if (d.children && d.children.length > 12 && d.children.every(c => !c.children)) {
-      if ((d.children[0].r * (zoomK || 1)) < 10) collapsed.add(d)
+      if ((d.children[0].r * (zoomK || 1)) < 15) collapsed.add(d)
     }
   })
   const leaves = nodes_.filter(d => !d.children && d.data.id.includes('@') && !collapsed.has(d.parent))
@@ -1134,10 +1134,10 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
           onContextMenu: e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(nodeId) },
           onDoubleClick: e => { e.stopPropagation(); onEditNode && onEditNode(nodeId) },
         }
-        // Cull the label until the circle is big enough on screen to actually READ it — otherwise a
-        // dense pack (hundreds of items) turns into overlapping micro-text mush. Below the threshold
-        // we show a clean colored dot; zoom in (or use the 🔍 lens) to reveal labels.
-        if (baseR * zoomK < 26) {
+        // Label whenever an item is actually shown (dense groups already collapsed to a summary bubble
+        // above, so there's no mush risk) — this matches the tree, where every visible leaf is labeled.
+        // Only the smallest slivers stay as bare dots.
+        if (baseR * zoomK < 13) {
           return <g key={l.data.id} transform={`translate(${x},${y})`} style={{ cursor: 'grab', ...(smooth && !isDrag ? { transition: 'transform 0.35s ease' } : {}) }} {...handlers}>
             <circle r={baseR} fill={color} fillOpacity={0.96} stroke={isDrag ? '#fff' : 'rgba(232,238,255,0.35)'} strokeWidth={isDrag ? 3 : 1} />
           </g>
