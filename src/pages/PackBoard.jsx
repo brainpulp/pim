@@ -1124,8 +1124,10 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
           onContextMenu: e => { e.preventDefault(); e.stopPropagation(); onEditNode && onEditNode(nodeId) },
           onDoubleClick: e => { e.stopPropagation(); onEditNode && onEditNode(nodeId) },
         }
-        // Cull the label when the circle is small on screen (declutters; zoom in to read).
-        if (baseR * zoomK < 13) {
+        // Cull the label until the circle is big enough on screen to actually READ it — otherwise a
+        // dense pack (hundreds of items) turns into overlapping micro-text mush. Below the threshold
+        // we show a clean colored dot; zoom in (or use the 🔍 lens) to reveal labels.
+        if (baseR * zoomK < 26) {
           return <g key={l.data.id} transform={`translate(${x},${y})`} style={{ cursor: 'grab', ...(smooth && !isDrag ? { transition: 'transform 0.35s ease' } : {}) }} {...handlers}>
             <circle r={baseR} fill={color} fillOpacity={0.96} stroke={isDrag ? '#fff' : 'rgba(232,238,255,0.35)'} strokeWidth={isDrag ? 3 : 1} />
           </g>
