@@ -972,6 +972,7 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
   const [drag, setDrag] = useState(null)   // { id, x, y } in pack-local coords while dragging a leaf
   const [pmenu, setPmenu] = useState(null)  // "group children by" menu on an outer pack: { opt, x, y }
   const pmenuElRef = useRef(null)
+  const leafSimRef = useRef(null)   // force sim that scatters leaves organically inside their group circle
   useEffect(() => {
     if (!pmenu) return
     const close = (e) => { if (pmenuElRef.current && pmenuElRef.current.contains(e.target)) return; setPmenu(null) }
@@ -1002,6 +1003,38 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
     return h
   }, [structureKey]) // eslint-disable-line
 
+  // Organic leaf layout: d3.pack gives non-overlapping GROUP circles + each leaf a target position;
+  // this force sim then scatters the leaves inside their group (collide + pull-to-target + containment)
+  // so they read as an organic cluster, not a grid — while the groups themselves never overlap.
+  useEffect(() => {
+    const sim = d3.forceSimulation([]).alphaDecay(0.04).velocityDecay(0.62)
+      .on('tick', () => {
+        const ls = leafSimRef.current?.nodes() || []
+        for (const l of ls) {   // keep each leaf inside its parent group circle
+          const par = l.parent; if (!par) continue
+          const dx = l.x - par.x, dy = l.y - par.y, d = Math.hypot(dx, dy)
+          const max = Math.max(0, par.r - (l.r || 6) - 1)
+          if (d > max) { const dd = d || 1; l.x = par.x + dx / dd * max; l.y = par.y + dy / dd * max; l.vx *= 0.5; l.vy *= 0.5 }
+        }
+        setTick(t => t + 1)
+      })
+    leafSimRef.current = sim
+    return () => sim.stop()
+  }, [])
+  useEffect(() => {
+    const sim = leafSimRef.current; if (!sim) return
+    const leaves = root.leaves().filter(l => l.data.id.includes('@'))
+    // Cap: past this many items the force settle would jank (and the view is aggregated anyway) — keep
+    // the deterministic pack positions there.
+    if (!leaves.length || leaves.length > 300) { sim.nodes([]); sim.stop(); return }
+    leaves.forEach(l => { if (l.tx == null) { l.tx = l.x; l.ty = l.y } })   // remember pack target
+    sim.nodes(leaves)
+    sim.force('x', d3.forceX(d => d.tx).strength(0.09))
+    sim.force('y', d3.forceY(d => d.ty).strength(0.09))
+    sim.force('collide', d3.forceCollide(d => (d.r || 6) + 1).strength(0.9).iterations(2))
+    sim.alpha(0.9).restart()
+  }, [root])
+
   const off = NP_D / 2
   const local = (ev) => { const p = toWorld(ev); return { x: p.x - (sys.x - off), y: p.y - (sys.y - off) } }
   const startHeadDrag = (e) => {
@@ -1022,11 +1055,14 @@ function NestedPackCluster({ sys, groupDefs, colorMode, sizeMode, propertyDefs, 
   const startLeafDrag = (e, leaf) => {
     if (e.button === 2) return
     e.preventDefault(); e.stopPropagation()
+    const sim = leafSimRef.current
     const start = local(e); setDrag({ id: leaf.data.id, x: leaf.x, y: leaf.y })
-    const move = ev => { const p = local(ev); setDrag({ id: leaf.data.id, x: p.x, y: p.y }) }
+    if (sim) { leaf.fx = leaf.x; leaf.fy = leaf.y; sim.alphaTarget(0.25).restart() }   // pin it; let neighbors give way
+    const move = ev => { const p = local(ev); if (sim) { leaf.fx = p.x; leaf.fy = p.y } setDrag({ id: leaf.data.id, x: p.x, y: p.y }) }
     const up = ev => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
       const p = local(ev); setDrag(null)
+      if (sim) { leaf.fx = null; leaf.fy = null; sim.alphaTarget(0) }
       if (Math.hypot(p.x - start.x, p.y - start.y) < 4) return
       const nodeId = leaf.data.id.split('@')[0]
       // Source group values the leaf was dragged out of (from its ancestor circles) — so a multiSelect
