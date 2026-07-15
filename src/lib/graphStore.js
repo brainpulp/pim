@@ -550,6 +550,22 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, boardHidden: ids } : v),
   })),
 
+  // Free nodes placed directly on the board canvas (per active view). `boardNodes` is a map
+  // { [nodeId]: {x, y} } of world coords. A node here is a standalone piece on the board (NOT part
+  // of any cluster); clusters exclude these ids so a node is EITHER free OR clustered, never both.
+  setViewBoardNode: (nodeId, pos) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId
+      ? { ...v, boardNodes: { ...(v.boardNodes || {}), [nodeId]: pos } } : v),
+  })),
+  removeViewBoardNode: (nodeId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const next = { ...(v.boardNodes || {}) }
+      delete next[nodeId]
+      return { ...v, boardNodes: next }
+    }),
+  })),
+
   // Pack/board property filter, persisted on the active view (survives reload + syncs across devices).
   setViewFilter: (filter) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, filter } : v),

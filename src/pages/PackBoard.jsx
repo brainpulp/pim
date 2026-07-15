@@ -111,6 +111,8 @@ export default function PackBoard({ projectId }) {
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewBoardHidden = useGraphStore(s => s.setViewBoardHidden)
+  const setViewBoardNode = useGraphStore(s => s.setViewBoardNode)
+  const removeViewBoardNode = useGraphStore(s => s.removeViewBoardNode)
   const setViewFilter = useGraphStore(s => s.setViewFilter)
   const setViewColorBy = useGraphStore(s => s.setViewColorBy)
   const setActiveView = useGraphStore(s => s.setActiveView)
@@ -339,9 +341,30 @@ export default function PackBoard({ projectId }) {
     setViewBoardHidden([...cur]); saveAll()
   }
 
+  // Free nodes: standalone items placed directly on the board canvas (per view), NOT part of any
+  // cluster. A node is EITHER free OR clustered, so clusters exclude these ids.
+  const boardFreeMap = useMemo(() => activeView?.boardNodes || {}, [activeView])
+  const freeIds = useMemo(() => new Set(Object.keys(boardFreeMap)), [boardFreeMap])
+  const freeNodes = useMemo(
+    () => nodes.filter(n => freeIds.has(n.id) && !boardHiddenSet.has(n.id)),
+    [nodes, freeIds, boardHiddenSet])
+
   const visibleNodes = useMemo(
-    () => nodes.filter(n => !boardHiddenSet.has(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
-    [nodes, boardHiddenSet, filterKey, propertyDefs]) // eslint-disable-line
+    () => nodes.filter(n => !boardHiddenSet.has(n.id) && !freeIds.has(n.id) && nodeMatchesFilter(n, filter, propertyDefs)),
+    [nodes, boardHiddenSet, freeIds, filterKey, propertyDefs]) // eslint-disable-line
+
+  // Create a node and drop it onto the board as a free item at the current viewport center.
+  const addFreeNode = () => {
+    const label = prompt('New item name'); if (label == null) return
+    const id = addNode(label.trim() || 'New item')
+    const rect = svgRef.current?.getBoundingClientRect()
+    const cx = rect ? rect.width / 2 : 400, cy = rect ? rect.height / 2 : 300
+    const k = tf.k || 1
+    setViewBoardNode(id, { x: (cx - tf.x) / k, y: (cy - tf.y) / k })
+    saveAll()
+  }
+  const moveFreeNode = (id, x, y) => { setViewBoardNode(id, { x, y }); saveAll() }
+  const unFreeNode = (id) => { removeViewBoardNode(id); saveAll() }
 
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
@@ -382,7 +405,7 @@ export default function PackBoard({ projectId }) {
               </div>
             </>)}
           </div>
-          <button style={styles.addBtn} onClick={() => addNodeWith([])} title="Create a new item">+ Node</button>
+          <button style={styles.addBtn} onClick={addFreeNode} title="Create a free item on the board">+ Node</button>
           <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
           {views.map(v => (
             <div key={v.id} title="Click to switch · double-click to rename"
@@ -404,7 +427,7 @@ export default function PackBoard({ projectId }) {
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
           <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header for controls · double-click to zoom · drag to move</span>
         </div>
-        {!systems.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> and pick a circle pack or a property tree.</div>}
+        {!systems.length && !freeNodes.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> for a circle pack or tree, or <b style={{ color: '#8ab4ff' }}>+ Node</b> for a free item.</div>}
         <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}>
           <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
             {systems.map(sys => {
@@ -445,6 +468,12 @@ export default function PackBoard({ projectId }) {
               return <NestedPackCluster {...common} groupDefs={packDefs.length ? packDefs : [def]} groupValsOf={groupValsOf} onRetagMulti={retagMulti}
                 onSetGroupOverride={(opt, val) => setGroupOverride(sys.id, opt, val)} onAddNode={addNodeWith} />
             })}
+            {/* Free nodes — standalone items placed directly on the canvas (paint on top of clusters). */}
+            {freeNodes.map(n => (
+              <FreeNode key={'free:' + n.id} node={n} pos={boardFreeMap[n.id]} decor={decorOf(n.id)}
+                lens={lens} toWorld={toWorld} onDragEnd={moveFreeNode}
+                onEdit={(id) => setEdit({ nodeId: id, free: true })} />
+            ))}
           </g>
         </svg>
         {edit && (
@@ -455,6 +484,7 @@ export default function PackBoard({ projectId }) {
             onAddOption={(propId, name) => addSelectOption(propId, name)}
             onClose={() => setEdit(null)}
             actions={[
+              ...(edit.free ? [{ label: '↩ Remove from board (return to clusters)', onClick: () => { unFreeNode(edit.nodeId); setEdit(null) } }] : []),
               ...(edit.sysId ? [{ label: '⊘ Hide in this cluster', onClick: () => { const s = systemsRef.current.find(x => x.id === edit.sysId); setSystemConfig(edit.sysId, { hiddenIds: [...new Set([...(s?.hiddenIds || []), edit.nodeId])] }); setEdit(null) } }] : []),
               { label: '🙈 Hide on the board', danger: true, onClick: () => { hideNodes([edit.nodeId]); setEdit(null) } },
             ]}
@@ -1246,6 +1276,38 @@ function dashArrayB(dash, sw = 1.4) {
   if (dash === 'dashed') return `${Math.max(3, sw * 2.6)},${Math.max(2, sw * 1.8)}`
   if (dash === 'dotted') return `${Math.max(0.4, sw * 0.55)},${Math.max(2, sw * 1.9)}`
   return undefined
+}
+
+// A free node — a real graph node placed directly on the board canvas (not in any cluster). Drag to
+// reposition (persisted per view); right-click / double-click to edit. Renders with the node's own
+// graph-view cosmetics via LeafNode. `pos` is world coords; drag stays local until drop.
+function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit }) {
+  const [drag, setDrag] = useState(null)
+  const x = drag ? drag.x : (pos?.x || 0), y = drag ? drag.y : (pos?.y || 0)
+  const dec = decor || {}
+  const label = node.label || '(untitled)'
+  const scl = Math.min(2, Math.max(0.6, dec.scale || 1))
+  const baseR = 34 * scl
+  const shape = dec.shape || 'circle'
+  const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
+  const color = dec.fill || '#6b7394'
+  const startDrag = (e) => {
+    if (e.button === 2) return
+    e.preventDefault(); e.stopPropagation()
+    const p0 = toWorld(e); const ox = x - p0.x, oy = y - p0.y; let moved = false
+    const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 3) moved = true; setDrag({ x: p.x + ox, y: p.y + oy }) }
+    const up = ev => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      const p = toWorld(ev)
+      if (moved) onDragEnd(node.id, p.x + ox, p.y + oy)
+      setDrag(null)
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const b = { x, y, label, color, decor: dec, shape, baseR, r: bound }
+  return <LeafNode b={b} held={!!drag} lens={lens} smooth={false} onDown={startDrag}
+    onContext={e => { e.preventDefault(); e.stopPropagation(); onEdit(node.id) }}
+    onDbl={e => { e.stopPropagation(); onEdit(node.id) }} />
 }
 
 // A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
