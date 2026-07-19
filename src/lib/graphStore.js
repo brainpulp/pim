@@ -175,6 +175,12 @@ const useGraphStore = create((set, get) => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, imageUrl } : n),
   })),
 
+  // Cross-project link (view-independent, on the node): { projectId, projectName, nodeId? } | null.
+  // Clicking such a node navigates to the other project (App handles the back-stack).
+  setNodeLink: (id, linkTo) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, linkTo: linkTo || undefined } : n),
+  })),
+
   set3DModel: (id, modelData, modelType) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, modelData, modelType, modelThumb: null } : n),
   })),

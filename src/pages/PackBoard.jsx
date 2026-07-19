@@ -100,7 +100,7 @@ const makeFisheye = (focus, radius, distortion) => {
   }
 }
 
-export default function PackBoard({ projectId }) {
+export default function PackBoard({ projectId, projectList = [], onNavigateProject }) {
   const nodes = useGraphStore(s => s.nodes)
   const views = useGraphStore(s => s.views)
   const activeViewId = useGraphStore(s => s.activeViewId)
@@ -109,6 +109,7 @@ export default function PackBoard({ projectId }) {
   const addNode = useGraphStore(s => s.addNode)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
+  const setNodeLink = useGraphStore(s => s.setNodeLink)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewBoardHidden = useGraphStore(s => s.setViewBoardHidden)
   const setViewBoardNode = useGraphStore(s => s.setViewBoardNode)
@@ -365,6 +366,7 @@ export default function PackBoard({ projectId }) {
   }
   const moveFreeNode = (id, x, y) => { setViewBoardNode(id, { x, y }); saveAll() }
   const unFreeNode = (id) => { removeViewBoardNode(id); saveAll() }
+  const followLink = (lt) => { if (lt?.projectId && onNavigateProject) onNavigateProject(lt.projectId, lt.projectName) }
 
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
@@ -472,24 +474,29 @@ export default function PackBoard({ projectId }) {
             {freeNodes.map(n => (
               <FreeNode key={'free:' + n.id} node={n} pos={boardFreeMap[n.id]} decor={decorOf(n.id)}
                 lens={lens} toWorld={toWorld} onDragEnd={moveFreeNode}
-                onEdit={(id) => setEdit({ nodeId: id, free: true })} />
+                onEdit={(id) => setEdit({ nodeId: id, free: true })}
+                onNavigate={() => followLink(n.linkTo)} />
             ))}
           </g>
         </svg>
-        {edit && (
-          <NodePropsEditor
-            node={nodes.find(n => n.id === edit.nodeId)}
+        {edit && (() => {
+          const editNode = nodes.find(n => n.id === edit.nodeId)
+          return <NodePropsEditor
+            node={editNode}
             propertyDefs={propertyDefs}
             onSet={(propId, value) => { setNodeProp(edit.nodeId, propId, value); saveAll() }}
             onAddOption={(propId, name) => addSelectOption(propId, name)}
             onClose={() => setEdit(null)}
+            projectLink={{ projects: projectList, value: editNode?.linkTo, currentProjectId: projectId,
+              onSet: (lt) => { setNodeLink(edit.nodeId, lt); saveAll() } }}
             actions={[
+              ...(editNode?.linkTo?.projectId ? [{ label: `↗ Open ${editNode.linkTo.projectName || 'linked project'}`, onClick: () => { setEdit(null); followLink(editNode.linkTo) } }] : []),
               ...(edit.free ? [{ label: '↩ Remove from board (return to clusters)', onClick: () => { unFreeNode(edit.nodeId); setEdit(null) } }] : []),
               ...(edit.sysId ? [{ label: '⊘ Hide in this cluster', onClick: () => { const s = systemsRef.current.find(x => x.id === edit.sysId); setSystemConfig(edit.sysId, { hiddenIds: [...new Set([...(s?.hiddenIds || []), edit.nodeId])] }); setEdit(null) } }] : []),
               { label: '🙈 Hide on the board', danger: true, onClick: () => { hideNodes([edit.nodeId]); setEdit(null) } },
             ]}
           />
-        )}
+        })()}
       </div>
     </div>
   )
@@ -1281,7 +1288,7 @@ function dashArrayB(dash, sw = 1.4) {
 // A free node — a real graph node placed directly on the board canvas (not in any cluster). Drag to
 // reposition (persisted per view); right-click / double-click to edit. Renders with the node's own
 // graph-view cosmetics via LeafNode. `pos` is world coords; drag stays local until drop.
-function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit }) {
+function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNavigate }) {
   const [drag, setDrag] = useState(null)
   const x = drag ? drag.x : (pos?.x || 0), y = drag ? drag.y : (pos?.y || 0)
   const dec = decor || {}
@@ -1305,13 +1312,15 @@ function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit }) {
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
   const b = { x, y, label, color, decor: dec, shape, baseR, r: bound }
+  const linked = !!node.linkTo?.projectId
   return <LeafNode b={b} held={!!drag} lens={lens} smooth={false} onDown={startDrag}
     onContext={e => { e.preventDefault(); e.stopPropagation(); onEdit(node.id) }}
-    onDbl={e => { e.stopPropagation(); onEdit(node.id) }} />
+    onDbl={e => { e.stopPropagation(); onEdit(node.id) }}
+    onBadge={linked ? onNavigate : null} />
 }
 
 // A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
-function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl }) {
+function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl, onBadge }) {
   const dec = b.decor || {}
   const shape = b.shape || 'circle'
   const disp = lens ? lens(ox + (b.x || 0), oy + (b.y || 0)) : null
@@ -1341,6 +1350,16 @@ function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, on
         style={{ fontWeight: 400, paintOrder: 'stroke', stroke: light ? 'rgba(255,255,255,0.45)' : 'rgba(12,12,26,0.55)', strokeWidth: fs * 0.13 }}>
         {lines.map((ln, i) => <tspan key={i} x={0} y={yStart + i * lh}>{ln}</tspan>)}
       </text>
+      {onBadge && (() => { const br = Math.max(8, s * 0.3)
+        return (
+          <g transform={`translate(${s * 0.72},${-s * 0.72})`} style={{ cursor: 'pointer' }}
+            onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onBadge() }}>
+            <title>Open linked project</title>
+            <circle r={br} fill="#1a1f4a" stroke="#7c8cff" strokeWidth={1.4} />
+            <text textAnchor="middle" dominantBaseline="central" fontSize={br * 1.25} fill="#a9b4ff" pointerEvents="none">↗</text>
+          </g>
+        )
+      })()}
     </g>
   )
 }

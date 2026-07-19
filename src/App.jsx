@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, Component } from 'react'
 import { supabase } from './lib/supabase'
-import { renameProject, loadProject } from './lib/db'
+import { renameProject, loadProject, listProjects } from './lib/db'
 import useGraphStore from './lib/graphStore'
 import Auth from './components/Auth'
 import Projects from './pages/Projects'
@@ -46,6 +46,13 @@ export default function App() {
   const [shareToken, setShareToken] = useState(() => parseShareToken())
   const [showShare, setShowShare] = useState(false)
   const renameInputRef = useRef()
+  // Cross-project links: a node can jump to another project; a back-stack lets you return.
+  // Kept in sessionStorage so a chain (A → B → C) survives reload within the tab.
+  const [projectList, setProjectList] = useState([])
+  const [backStack, setBackStack] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('pim_back_stack') || '[]') } catch { return [] }
+  })
+  useEffect(() => { sessionStorage.setItem('pim_back_stack', JSON.stringify(backStack)) }, [backStack])
 
   useEffect(() => {
     const onHash = () => setShareToken(parseShareToken())
@@ -56,6 +63,18 @@ export default function App() {
   const openProject = (id, name) => {
     localStorage.setItem('pim_last_project', JSON.stringify({ id, name }))
     setProject({ id, name })
+  }
+  // Follow a node's cross-project link: remember where we came from, then open the target.
+  const navigateToProject = (id, name) => {
+    if (!id || id === project?.id) return
+    if (project) setBackStack(st => [...st, { id: project.id, name: project.name }])
+    openProject(id, name)
+  }
+  const goBack = () => {
+    if (!backStack.length) return
+    const prev = backStack[backStack.length - 1]
+    setBackStack(backStack.slice(0, -1))
+    openProject(prev.id, prev.name)
   }
 
   // Load the open project's snapshot into the store here (not inside Graph) so EVERY tab —
@@ -76,8 +95,17 @@ export default function App() {
   }, [project?.id, shareToken, loadProjectData])
   const closeProject = () => {
     localStorage.removeItem('pim_last_project')
+    setBackStack([])   // leaving via the picker breaks any link chain
     setProject(null)
   }
+
+  // Keep the list of projects fresh for the "link to project" picker (and back-button names).
+  useEffect(() => {
+    if (!session || shareToken) return
+    let cancelled = false
+    listProjects().then(d => { if (!cancelled) setProjectList(d || []) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [session, shareToken, project?.id])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
@@ -170,7 +198,7 @@ export default function App() {
       {/* key={project.id} → remount views on project switch so no per-project state leaks (view ids
           like "view-default" are shared across projects, so keying effects on the view id alone was
           not enough — a fresh mount guarantees clusters, pan/zoom, and refs reset). */}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {view === 'graph' && (
           <AppErrorBoundary>
           <Graph
@@ -182,8 +210,14 @@ export default function App() {
           </AppErrorBoundary>
         )}
         {view === 'table' && <Table key={project.id} projectId={project.id} />}
-        {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} /></AppErrorBoundary>}
+        {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} projectList={projectList} onNavigateProject={navigateToProject} /></AppErrorBoundary>}
         {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
+        {backStack.length > 0 && (
+          <button style={backChipStyle} onClick={goBack}
+            title={`Back to ${backStack[backStack.length - 1].name}`}>
+            ← Back to {backStack[backStack.length - 1].name}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -227,4 +261,14 @@ const signOutStyle = {
 const loadingStyle = {
   height: '100vh', display: 'flex', alignItems: 'center',
   justifyContent: 'center', color: '#8090b8', background: '#0f0f0f',
+}
+// Floating "← Back to <project>" chip, bottom-left of the canvas, shown while a link chain is active.
+const backChipStyle = {
+  position: 'absolute', left: 16, bottom: 16, zIndex: 40,
+  display: 'flex', alignItems: 'center', gap: 6,
+  padding: '8px 14px', borderRadius: 100,
+  background: 'rgba(26,31,74,0.96)', border: '1px solid #3a4a8a', color: '#c5d0ff',
+  cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600,
+  boxShadow: '0 8px 26px rgba(0,0,0,0.5)', maxWidth: 280,
+  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 }

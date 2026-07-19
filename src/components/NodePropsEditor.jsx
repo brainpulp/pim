@@ -3,7 +3,9 @@ import { useState } from 'react'
 // Modal: edit every property of a node (all types). Writes via onSet(propId, value).
 // onAddOption(propId, name) adds a new select/multiSelect value. Shared by pack view + board.
 // `actions` = optional [{ label, onClick, danger? }] rendered as a footer button row.
-export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption, onClose, actions }) {
+// `projectLink` = optional { projects:[{id,name}], value:linkTo|undefined, currentProjectId, onSet }
+//   → renders a "Link to project" picker so a node can jump to another project.
+export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption, onClose, actions, projectLink }) {
   if (!node) return null
   const props = node.props || {}
   return (
@@ -21,6 +23,7 @@ export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption
               <div style={npe.val}><PropInput def={def} value={props[def.id]} onSet={v => onSet(def.id, v)} onAddOption={name => onAddOption(def.id, name)} /></div>
             </div>
           ))}
+          {projectLink && <ProjectLinkInput {...projectLink} />}
         </div>
         {actions && actions.length > 0 && (
           <div style={npe.actions}>
@@ -28,6 +31,32 @@ export default function NodePropsEditor({ node, propertyDefs, onSet, onAddOption
               <button key={i} style={{ ...npe.actionBtn, ...(a.danger ? npe.actionDanger : {}) }} onClick={a.onClick}>{a.label}</button>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// "Link to project" row: a node becomes a portal to another project. value = { projectId, projectName }.
+function ProjectLinkInput({ projects = [], value, currentProjectId, onSet }) {
+  const others = projects.filter(p => p.id !== currentProjectId)
+  return (
+    <div style={{ ...npe.row, gridTemplateColumns: '110px 1fr', paddingTop: 6, borderTop: '1px solid #23233e', marginTop: 4 }}>
+      <div style={npe.key}>↗ Links to</div>
+      <div style={npe.val}>
+        {value?.projectId ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ ...npe.chip, background: '#1a1f4a', borderColor: '#3a4a8a', color: '#c5d0ff', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              ↗ {value.projectName || 'project'}
+            </span>
+            <button style={npe.addChip} onClick={() => onSet(null)}>Clear</button>
+          </div>
+        ) : (
+          <select value="" onChange={e => { const p = others.find(x => x.id === e.target.value); if (p) onSet({ projectId: p.id, projectName: p.name }) }}
+            style={{ ...npe.input, cursor: 'pointer' }}>
+            <option value="">— link this node to a project —</option>
+            {others.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
         )}
       </div>
     </div>
