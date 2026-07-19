@@ -25,6 +25,14 @@ function wrapText(text, maxChars) {
   if (cur) lines.push(cur); return lines.length ? lines : ['']
 }
 const EMPTY = []
+// Bounding radius of a free node from its decorations (mirrors FreeNode's body sizing) — used for
+// edge hit-testing and endpoint clipping.
+const freeNodeRadius = (dec = {}) => {
+  const scl = Math.min(2, Math.max(0.6, dec.scale || 1))
+  const baseR = 34 * scl
+  const shape = dec.shape || 'circle'
+  return (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
+}
 // World font that stays between [minPx,maxPx] on screen despite the zoom scale(k) group.
 const zfont = (basePx, k, minPx, maxPx) => Math.max(minPx, Math.min(maxPx, basePx * (k || 1))) / (k || 1)
 // Colour a node by a chosen "colour by" property's value colour (grey if it has no value there).
@@ -102,6 +110,9 @@ const makeFisheye = (focus, radius, distortion) => {
 
 export default function PackBoard({ projectId, projectList = [], onNavigateProject }) {
   const nodes = useGraphStore(s => s.nodes)
+  const edges = useGraphStore(s => s.edges)
+  const addEdge = useGraphStore(s => s.addEdge)
+  const removeEdge = useGraphStore(s => s.removeEdge)
   const views = useGraphStore(s => s.views)
   const activeViewId = useGraphStore(s => s.activeViewId)
   const propertyDefs = useGraphStore(s => s.propertyDefs)
@@ -368,6 +379,39 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   const unFreeNode = (id) => { removeViewBoardNode(id); saveAll() }
   const followLink = (lt) => { if (lt?.projectId && onNavigateProject) onNavigateProject(lt.projectId, lt.projectName) }
 
+  // Edges between free nodes turn the board's free canvas into a mind-map. Draw only edges whose
+  // BOTH endpoints are visible free nodes; the shared `edges` topology is view-independent.
+  const freeVisibleIds = useMemo(() => new Set(freeNodes.map(n => n.id)), [freeNodes])
+  const freeEdges = useMemo(
+    () => edges.filter(e => freeVisibleIds.has(e.source) && freeVisibleIds.has(e.target)),
+    [edges, freeVisibleIds])
+
+  // Drag a free node's connector handle → another free node = new edge; → empty = new connected node.
+  const [linking, setLinking] = useState(null)   // { fromId, x, y } world coords while linking
+  const startConnect = (fromId, e) => {
+    e.preventDefault(); e.stopPropagation()
+    const p0 = toWorld(e); setLinking({ fromId, x: p0.x, y: p0.y })
+    const move = ev => { const p = toWorld(ev); setLinking({ fromId, x: p.x, y: p.y }) }
+    const up = ev => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      const p = toWorld(ev)
+      let hit = null
+      for (const n of freeNodes) {
+        if (n.id === fromId) continue
+        const pos = boardFreeMap[n.id]; if (!pos) continue
+        if (Math.hypot(p.x - pos.x, p.y - pos.y) <= freeNodeRadius(decorOf(n.id))) { hit = n; break }
+      }
+      if (hit) { addEdge(fromId, hit.id); saveAll() }
+      else {
+        const label = prompt('New connected item name')
+        if (label != null) { const id = addNode(label.trim() || 'New item'); addEdge(fromId, id); setViewBoardNode(id, { x: p.x, y: p.y }); saveAll() }
+      }
+      setLinking(null)
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const deleteEdge = (id) => { if (confirm('Remove this connection?')) { removeEdge(id); saveAll() } }
+
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
     const svg = svgRef.current; if (!svg || !zoomRef.current || !bbox) return
@@ -470,12 +514,33 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
               return <NestedPackCluster {...common} groupDefs={packDefs.length ? packDefs : [def]} groupValsOf={groupValsOf} onRetagMulti={retagMulti}
                 onSetGroupOverride={(opt, val) => setGroupOverride(sys.id, opt, val)} onAddNode={addNodeWith} />
             })}
+            {/* Connections between free nodes (behind the nodes) + the live rubber line while linking. */}
+            <g>
+              {freeEdges.map(e => {
+                const a = boardFreeMap[e.source], b = boardFreeMap[e.target]
+                if (!a || !b) return null
+                return (
+                  <g key={'fe:' + e.id}>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#5b6af0" strokeOpacity={0.55} strokeWidth={2} />
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={14}
+                      style={{ cursor: 'pointer' }} onDoubleClick={ev => { ev.stopPropagation(); deleteEdge(e.id) }}>
+                      <title>Double-click to remove</title>
+                    </line>
+                  </g>
+                )
+              })}
+              {linking && boardFreeMap[linking.fromId] && (
+                <line x1={boardFreeMap[linking.fromId].x} y1={boardFreeMap[linking.fromId].y} x2={linking.x} y2={linking.y}
+                  stroke="#8ab4ff" strokeWidth={2} strokeDasharray="5 4" pointerEvents="none" />
+              )}
+            </g>
             {/* Free nodes — standalone items placed directly on the canvas (paint on top of clusters). */}
             {freeNodes.map(n => (
               <FreeNode key={'free:' + n.id} node={n} pos={boardFreeMap[n.id]} decor={decorOf(n.id)}
                 lens={lens} toWorld={toWorld} onDragEnd={moveFreeNode}
                 onEdit={(id) => setEdit({ nodeId: id, free: true })}
-                onNavigate={() => followLink(n.linkTo)} />
+                onNavigate={() => followLink(n.linkTo)}
+                onConnect={(e) => startConnect(n.id, e)} />
             ))}
           </g>
         </svg>
@@ -1288,7 +1353,7 @@ function dashArrayB(dash, sw = 1.4) {
 // A free node — a real graph node placed directly on the board canvas (not in any cluster). Drag to
 // reposition (persisted per view); right-click / double-click to edit. Renders with the node's own
 // graph-view cosmetics via LeafNode. `pos` is world coords; drag stays local until drop.
-function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNavigate }) {
+function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNavigate, onConnect }) {
   const [drag, setDrag] = useState(null)
   const x = drag ? drag.x : (pos?.x || 0), y = drag ? drag.y : (pos?.y || 0)
   const dec = decor || {}
@@ -1296,7 +1361,7 @@ function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNaviga
   const scl = Math.min(2, Math.max(0.6, dec.scale || 1))
   const baseR = 34 * scl
   const shape = dec.shape || 'circle'
-  const bound = (shape === 'ellipse' || shape === 'rect' || shape === 'roundrect') ? baseR * 1.34 : shape === 'diamond' ? baseR * 1.16 : baseR
+  const bound = freeNodeRadius(dec)
   const color = dec.fill || '#6b7394'
   const startDrag = (e) => {
     if (e.button === 2) return
@@ -1316,11 +1381,11 @@ function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNaviga
   return <LeafNode b={b} held={!!drag} lens={lens} smooth={false} onDown={startDrag}
     onContext={e => { e.preventDefault(); e.stopPropagation(); onEdit(node.id) }}
     onDbl={e => { e.stopPropagation(); onEdit(node.id) }}
-    onBadge={linked ? onNavigate : null} />
+    onBadge={linked ? onNavigate : null} onConnect={onConnect} />
 }
 
 // A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
-function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl, onBadge }) {
+function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl, onBadge, onConnect }) {
   const dec = b.decor || {}
   const shape = b.shape || 'circle'
   const disp = lens ? lens(ox + (b.x || 0), oy + (b.y || 0)) : null
@@ -1357,6 +1422,15 @@ function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, on
             <title>Open linked project</title>
             <circle r={br} fill="#1a1f4a" stroke="#7c8cff" strokeWidth={1.4} />
             <text textAnchor="middle" dominantBaseline="central" fontSize={br * 1.25} fill="#a9b4ff" pointerEvents="none">↗</text>
+          </g>
+        )
+      })()}
+      {onConnect && (() => { const cr = Math.max(5, s * 0.2)
+        return (
+          <g transform={`translate(${s + cr * 0.6},0)`} style={{ cursor: 'crosshair' }}
+            onMouseDown={e => { e.stopPropagation(); onConnect(e) }}>
+            <title>Drag to another node to connect</title>
+            <circle r={cr} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.2} />
           </g>
         )
       })()}
