@@ -40,7 +40,7 @@ export default function App() {
       return saved ? JSON.parse(saved) : null
     } catch { return null }
   })
-  const [view, setView] = useState('graph')
+  const [view, setView] = useState('board')   // the unified canvas is the primary view
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const [shareToken, setShareToken] = useState(() => parseShareToken())
@@ -170,13 +170,13 @@ export default function App() {
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {['graph', 'table', 'board', 'lab'].map(v => (
+          {[['board', 'canvas'], ['graph', 'graph'], ['table', 'table'], ['lab', 'lab']].map(([v, label]) => (
             <button
               key={v}
               style={{ ...navBtnStyle, ...(view === v ? navBtnActiveStyle : {}) }}
               onClick={() => setView(v)}
             >
-              {v}
+              {label}
             </button>
           ))}
         </div>

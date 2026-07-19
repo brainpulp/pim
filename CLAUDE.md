@@ -154,6 +154,41 @@ Repo: https://github.com/brainpulp/pim
 
 **CRITICAL: The user tests on the live GitHub Pages URL, NOT localhost. Always run `npm run deploy` after every set of changes.**
 
+## Last session (2026-07-19) — Merging Graph + Board into ONE canvas
+
+**Vision:** one general canvas for everything, UX'd from proximal pills/menus (NOT sidebar inspectors /
+distal tools). The **Board** (`src/pages/PackBoard.jsx`) is the unified canvas; the Graph is being folded
+into it and will eventually be retired. Board is now the **default/primary tab, labelled "canvas"** in
+`App.jsx` (nav order `[board→'canvas', graph, table, lab]`, default view `'board'`).
+
+What the Board now has (superset-in-progress of the Graph):
+- **Clusters** — circle packs / property trees / due-date buckets, proximal `ClusterConfigBar` pills.
+- **Free nodes** — standalone nodes placed on the canvas, per view. `activeView.boardNodes = {[id]:{x,y}}`.
+  Store: `setViewBoardNode` / `removeViewBoardNode`. `+ Node` creates one at viewport center. A node is
+  EITHER free OR clustered (clusters exclude free ids).
+- **Edges between free nodes** — connector handle on each free node → drag to another = `addEdge`, drag to
+  empty = new connected node. Uses the shared view-independent `edges`. Double-click an edge to remove.
+  `freeEdges` = edges whose both endpoints are visible free nodes.
+- **Photos** — the SAME `view.images[]` the graph uses (CENTER coords `{x,y,width,height}`). `+ Photo`
+  → file picker → `addImage` at viewport center. `BoardImage` component: drag-move, corner-resize
+  (aspect-locked), × delete, selection frame. Rendered as a background layer (before clusters). Zoom
+  filter ignores `[data-image]` (added alongside `[data-bubble],[data-syshead]`).
+- **Full node edit in `NodePropsEditor`** (shared modal) — properties + NEW `cosmetics` prop (fill colour
+  swatches + shape picker → `setNodeViewProp`) + `projectLink` picker + `actions` (hide/remove/open-link).
+- **Cross-project links** — `node.linkTo = {projectId, projectName}` (view-independent; `setNodeLink`).
+  Free nodes show a ↗ badge (one-click navigate); any node can navigate via the editor's "↗ Open" action.
+  `App.jsx` keeps a `sessionStorage` **back-stack** (`pim_back_stack`) → floating "← Back to <project>"
+  chip bottom-left; chains A→B→C work. `navigateToProject` / `goBack`; `projectList` loaded via
+  `listProjects` and passed to the board for the picker.
+
+Still to fold in before deleting the Graph tab: outline sidebar, presentation/slides, 3D nodes, force
+layout, emoji/motion cosmetics. Until then the Graph tab stays as a secondary view (no feature loss).
+
+Board component map (`PackBoard.jsx`): `FreeNode` (wraps `LeafNode`, adds ↗ badge + connector),
+`BoardImage`, `LeafNode` (now takes `onBadge`/`onConnect`), `NestedPackCluster`, `TreeCluster`,
+`ClusterConfigBar`. Helper `freeNodeRadius(dec)` (module-level) mirrors FreeNode sizing for edge
+hit-testing.
+
 ## Last session (2026-06-21) — Sharing + edge blur + text menus
 
 ### Project sharing (share-link based, public view + sign-in edit)

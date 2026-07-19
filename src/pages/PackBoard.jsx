@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
 import * as d3 from 'd3'
-import useGraphStore from '../lib/graphStore'
+import useGraphStore, { FILL_COLORS } from '../lib/graphStore'
 import { saveProject } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
 import { buildNestedTagTree } from '../lib/hierarchy'
@@ -121,6 +121,9 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setNodeLink = useGraphStore(s => s.setNodeLink)
+  const addImage = useGraphStore(s => s.addImage)
+  const updateImage = useGraphStore(s => s.updateImage)
+  const deleteImage = useGraphStore(s => s.deleteImage)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewBoardHidden = useGraphStore(s => s.setViewBoardHidden)
   const setViewBoardNode = useGraphStore(s => s.setViewBoardNode)
@@ -244,7 +247,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
     if (!svgRef.current) return
     const sel = d3.select(svgRef.current)
     const zoom = d3.zoom().scaleExtent([0.06, 4])
-      .filter(e => { if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-syshead]')) return false; return !e.ctrlKey && !e.button })
+      .filter(e => { if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-syshead],[data-image]')) return false; return !e.ctrlKey && !e.button })
       .on('zoom', e => {
         setTf(e.transform)
         if (e.sourceEvent) {   // only persist real user pans/zooms (not our programmatic restore)
@@ -412,6 +415,32 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   }
   const deleteEdge = (id) => { if (confirm('Remove this connection?')) { removeEdge(id); saveAll() } }
 
+  // Photos on the canvas — the same view.images[] the graph stores (center coords), so a photo added
+  // here shows in the graph too. Add via + Photo (file picker); drag to move, corner to resize.
+  const images = activeView?.images || EMPTY
+  const [selImage, setSelImage] = useState(null)
+  const fileRef = useRef(null)
+  const onPickPhoto = (e) => {
+    const file = e.target.files?.[0]; e.target.value = ''
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const src = ev.target.result
+      const el = new window.Image()
+      el.onload = () => {
+        const scale = Math.min(1, 400 / el.width)
+        const w = Math.round(el.width * scale), h = Math.round(el.height * scale)
+        const rect = svgRef.current?.getBoundingClientRect(), k = tf.k || 1
+        const cx = ((rect?.width ?? 800) / 2 - tf.x) / k, cy = ((rect?.height ?? 600) / 2 - tf.y) / k
+        addImage(src, cx, cy, w, h); saveAll()
+      }
+      el.src = src
+    }
+    reader.readAsDataURL(file)
+  }
+  const commitImage = (id, patch) => { updateImage(id, patch); saveAll() }
+  const removeImage = (id) => { deleteImage(id); setSelImage(null); saveAll() }
+
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
     const svg = svgRef.current; if (!svg || !zoomRef.current || !bbox) return
@@ -452,6 +481,8 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
             </>)}
           </div>
           <button style={styles.addBtn} onClick={addFreeNode} title="Create a free item on the board">+ Node</button>
+          <button style={styles.addBtn} onClick={() => fileRef.current?.click()} title="Add a photo to the canvas">+ Photo</button>
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickPhoto} />
           <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
           {views.map(v => (
             <div key={v.id} title="Click to switch · double-click to rename"
@@ -473,9 +504,16 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
           <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header for controls · double-click to zoom · drag to move</span>
         </div>
-        {!systems.length && !freeNodes.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> for a circle pack or tree, or <b style={{ color: '#8ab4ff' }}>+ Node</b> for a free item.</div>}
-        <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}>
+        {!systems.length && !freeNodes.length && !images.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> for a circle pack or tree, <b style={{ color: '#8ab4ff' }}>+ Node</b> for a free item, or <b style={{ color: '#8ab4ff' }}>+ Photo</b>.</div>}
+        <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}
+          onClick={e => { if (e.target === svgRef.current || e.target === gRef.current) setSelImage(null) }}>
           <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
+            {/* Photos — a background layer behind clusters and nodes (same view.images[] as the graph). */}
+            {images.map(img => (
+              <BoardImage key={img.id} img={img} selected={selImage === img.id} toWorld={toWorld}
+                onSelect={() => setSelImage(img.id)} onCommit={patch => commitImage(img.id, patch)}
+                onDelete={() => removeImage(img.id)} />
+            ))}
             {systems.map(sys => {
               const groupBy = (sys.groupBy && sys.groupBy.length) ? sys.groupBy : [sys.propId]
               const rawDef = propertyDefs.find(d => d.id === groupBy[0])
@@ -552,6 +590,9 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
             onSet={(propId, value) => { setNodeProp(edit.nodeId, propId, value); saveAll() }}
             onAddOption={(propId, name) => addSelectOption(propId, name)}
             onClose={() => setEdit(null)}
+            cosmetics={{ fillColors: FILL_COLORS, shapes: ['circle', 'ellipse', 'roundrect', 'rect', 'diamond'],
+              value: activeView?.nodeProps?.[edit.nodeId] || {},
+              onSet: (prop, val) => { setNodeViewProp(edit.nodeId, prop, val); saveAll() } }}
             projectLink={{ projects: projectList, value: editNode?.linkTo, currentProjectId: projectId,
               onSet: (lt) => { setNodeLink(edit.nodeId, lt); saveAll() } }}
             actions={[
@@ -1348,6 +1389,48 @@ function dashArrayB(dash, sw = 1.4) {
   if (dash === 'dashed') return `${Math.max(3, sw * 2.6)},${Math.max(2, sw * 1.8)}`
   if (dash === 'dotted') return `${Math.max(0.4, sw * 0.55)},${Math.max(2, sw * 1.9)}`
   return undefined
+}
+
+// A photo on the canvas (view.images[] — center coords, shared with the graph). Drag to move, the
+// bottom-right handle to resize (aspect-locked); × deletes. Selection shows the frame + handles.
+function BoardImage({ img, selected, toWorld, onSelect, onCommit, onDelete }) {
+  const [box, setBox] = useState(null)   // live {x,y,w,h} during a move/resize; committed on mouseup
+  const x = box ? box.x : img.x, y = box ? box.y : img.y
+  const w = box ? box.w : img.width, h = box ? box.h : img.height
+  const startMove = (e) => {
+    if (e.button === 2) return
+    e.preventDefault(); e.stopPropagation(); onSelect()
+    const p0 = toWorld(e); const ox = img.x - p0.x, oy = img.y - p0.y; let moved = false
+    const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 2) moved = true; setBox({ x: p.x + ox, y: p.y + oy, w: img.width, h: img.height }) }
+    const up = ev => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); const p = toWorld(ev); if (moved) onCommit({ x: p.x + ox, y: p.y + oy }); setBox(null) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const startResize = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const aspect = img.width / img.height; let last = null
+    const move = ev => { const p = toWorld(ev); const nw = Math.max(30, 2 * Math.abs(p.x - img.x)); const nh = nw / aspect; last = { w: nw, h: nh }; setBox({ x: img.x, y: img.y, w: nw, h: nh }) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (last) onCommit({ width: last.w, height: last.h }); setBox(null) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  return (
+    <g data-image="1" transform={`translate(${x},${y})`}>
+      {img.bgColor && <rect x={-w / 2} y={-h / 2} width={w} height={h} fill={img.bgColor} rx={2} />}
+      <image href={img.src} x={-w / 2} y={-h / 2} width={w} height={h} preserveAspectRatio="xMidYMid meet"
+        style={{ cursor: 'grab' }} onMouseDown={startMove}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onSelect() }} />
+      {selected && (<>
+        <rect x={-w / 2} y={-h / 2} width={w} height={h} fill="none" stroke="#5b6af0" strokeWidth={2} pointerEvents="none" />
+        <g transform={`translate(${w / 2},${h / 2})`} style={{ cursor: 'nwse-resize' }} onMouseDown={startResize}>
+          <rect x={-7} y={-7} width={14} height={14} rx={2} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
+        </g>
+        <g transform={`translate(${w / 2},${-h / 2})`} style={{ cursor: 'pointer' }}
+          onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDelete() }}>
+          <circle r={9} fill="#3a1a1a" stroke="#f87171" strokeWidth={1.4} />
+          <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="#f87171" pointerEvents="none">×</text>
+        </g>
+      </>)}
+    </g>
+  )
 }
 
 // A free node — a real graph node placed directly on the board canvas (not in any cluster). Drag to
