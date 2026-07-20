@@ -108,7 +108,7 @@ const makeFisheye = (focus, radius, distortion) => {
   }
 }
 
-export default function PackBoard({ projectId, projectList = [], onNavigateProject }) {
+export default function PackBoard({ projectId, projectList = [], onNavigateProject, readOnly = false, sharedData = null }) {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
   const addEdge = useGraphStore(s => s.addEdge)
@@ -158,6 +158,16 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   // key unchanged and the board kept the previous project's clusters/pan/filter. (bug)
   const viewKey = (projectId || '') + '::' + (activeViewId || '')
 
+  // Shared read-only mode: load the public snapshot straight into the store (skips loadProject/RLS).
+  useEffect(() => {
+    if (!sharedData) return
+    useGraphStore.getState().loadProjectData({
+      nodes: sharedData.nodes, edges: sharedData.edges, views: sharedData.views,
+      activeViewId: sharedData.active_view_id, propertyDefs: sharedData.property_defs,
+      styles: sharedData.styles, loadedProjectId: projectId,
+    })
+  }, [projectId, sharedData]) // eslint-disable-line
+
   // Persisted filter for the active view (shared with the pack view); seed "hide done" the first time.
   const filterInitRef = useRef(null), filterSaveRef = useRef()
   useEffect(() => {
@@ -168,6 +178,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   }, [viewKey, activeView, propertyDefs, setViewFilter])
   useEffect(() => {
     if (filterInitRef.current !== viewKey) return
+    if (readOnly) return
     setViewFilter(filter)
     clearTimeout(filterSaveRef.current)
     filterSaveRef.current = setTimeout(() => {
@@ -231,7 +242,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   }, [viewKey, activeView]) // eslint-disable-line
 
   const persist = (next) => {
-    if (!projectId) return
+    if (readOnly || !projectId) return
     const s = useGraphStore.getState()
     if (s.loadedProjectId !== projectId) return   // don't write if the store holds a different project (mid-switch)
     const views2 = s.views.map(v => v.id === s.activeViewId ? { ...v, boardSystems: next } : v)
@@ -250,7 +261,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
       .filter(e => { if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-syshead],[data-image]')) return false; return !e.ctrlKey && !e.button })
       .on('zoom', e => {
         setTf(e.transform)
-        if (e.sourceEvent) {   // only persist real user pans/zooms (not our programmatic restore)
+        if (e.sourceEvent && !readOnly) {   // only persist real user pans/zooms (not our programmatic restore)
           setViewBoardTf({ x: e.transform.x, y: e.transform.y, k: e.transform.k })
           clearTimeout(tfSaveRef.current)
           tfSaveRef.current = setTimeout(() => { const s = useGraphStore.getState(); if (projectId && s.loadedProjectId === projectId) saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(() => {}) }, 800)
@@ -283,6 +294,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   }
 
   const retag = (propId, nodeId, sourceOpt, targetOpt, additive) => {
+    if (readOnly) return
     const def = propertyDefs.find(d => d.id === propId); if (!def) return
     const node = useGraphStore.getState().nodes.find(n => n.id === nodeId)
     const raw = node?.props?.[propId]
@@ -297,7 +309,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
     if (projectId) { const s = useGraphStore.getState(); saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   }
   // View management (shared views; persist to DB on change so switches survive reload).
-  const saveAll = () => { if (!projectId) return; const s = useGraphStore.getState(); if (s.loadedProjectId !== projectId) return; saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
+  const saveAll = () => { if (readOnly || !projectId) return; const s = useGraphStore.getState(); if (s.loadedProjectId !== projectId) return; saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs }).catch(e => console.error('Save:', e)) }
   const switchView = (id) => { setActiveView(id); saveAll() }
   const setBoardColorBy = (propId) => { setViewColorBy(propId); saveAll() }
 
@@ -461,53 +473,59 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
     <div style={styles.wrap} onContextMenu={e => e.preventDefault()}>
       <div style={styles.main}>
         <div style={styles.toolbar}>
-          <div style={{ position: 'relative' }}>
-            <button style={styles.addBtn} onClick={() => setAdding(o => !o)} disabled={!tagDefs.length && !dateDefs.length}>+ Add</button>
-            {adding && (<>
-              <div style={styles.backdrop} onClick={() => setAdding(false)} />
-              <div style={styles.menu} onClick={e => e.stopPropagation()}>
-                {!tagDefs.length && !dateDefs.length && <div style={{ ...styles.item, color: '#8090b8' }}>No Select/Tags/Date property</div>}
-                {tagDefs.length > 0 && <>
-                  <div style={styles.mlabel}>◎ Circle pack — group by</div>
-                  {tagDefs.map(d => (<div key={'p' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
-                  <div style={{ ...styles.mlabel, marginTop: 4 }}>⌥ Property tree — branch by</div>
-                  {tagDefs.map(d => (<div key={'t' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'tree')}>{d.name}</div>))}
-                </>}
-                {dateDefs.length > 0 && <>
-                  <div style={{ ...styles.mlabel, marginTop: 4 }}>◷ Due-date buckets — by</div>
-                  {dateDefs.map(d => (<div key={'d' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
-                </>}
-              </div>
-            </>)}
-          </div>
-          <button style={styles.addBtn} onClick={addFreeNode} title="Create a free item on the board">+ Node</button>
-          <button style={styles.addBtn} onClick={() => fileRef.current?.click()} title="Add a photo to the canvas">+ Photo</button>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickPhoto} />
+          {!readOnly && (
+            <div style={{ position: 'relative' }}>
+              <button style={styles.addBtn} onClick={() => setAdding(o => !o)} disabled={!tagDefs.length && !dateDefs.length}>+ Add</button>
+              {adding && (<>
+                <div style={styles.backdrop} onClick={() => setAdding(false)} />
+                <div style={styles.menu} onClick={e => e.stopPropagation()}>
+                  {!tagDefs.length && !dateDefs.length && <div style={{ ...styles.item, color: '#8090b8' }}>No Select/Tags/Date property</div>}
+                  {tagDefs.length > 0 && <>
+                    <div style={styles.mlabel}>◎ Circle pack — group by</div>
+                    {tagDefs.map(d => (<div key={'p' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
+                    <div style={{ ...styles.mlabel, marginTop: 4 }}>⌥ Property tree — branch by</div>
+                    {tagDefs.map(d => (<div key={'t' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'tree')}>{d.name}</div>))}
+                  </>}
+                  {dateDefs.length > 0 && <>
+                    <div style={{ ...styles.mlabel, marginTop: 4 }}>◷ Due-date buckets — by</div>
+                    {dateDefs.map(d => (<div key={'d' + d.id} style={styles.item} onClick={() => addSystem(d.id, 'pack')}>{d.name}</div>))}
+                  </>}
+                </div>
+              </>)}
+            </div>
+          )}
+          {!readOnly && <>
+            <button style={styles.addBtn} onClick={addFreeNode} title="Create a free item on the board">+ Node</button>
+            <button style={styles.addBtn} onClick={() => fileRef.current?.click()} title="Add a photo to the canvas">+ Photo</button>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickPhoto} />
+          </>}
           <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
           {views.map(v => (
-            <div key={v.id} title="Click to switch · double-click to rename"
+            <div key={v.id} title={readOnly ? 'Click to switch' : 'Click to switch · double-click to rename'}
               style={{ ...styles.viewPill, ...(v.id === activeViewId ? styles.viewPillActive : {}) }}
               onClick={() => switchView(v.id)}
-              onDoubleClick={() => { const nm = prompt('Rename view', v.name); if (nm && nm.trim()) { renameView(v.id, nm.trim()); saveAll() } }}>
+              onDoubleClick={() => { if (readOnly) return; const nm = prompt('Rename view', v.name); if (nm && nm.trim()) { renameView(v.id, nm.trim()); saveAll() } }}>
               <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</span>
-              {views.length > 1 && <span style={styles.viewX} onClick={e => { e.stopPropagation(); if (confirm(`Delete view “${v.name}”?`)) { deleteView(v.id); saveAll() } }}>×</span>}
+              {!readOnly && views.length > 1 && <span style={styles.viewX} onClick={e => { e.stopPropagation(); if (confirm(`Delete view “${v.name}”?`)) { deleteView(v.id); saveAll() } }}>×</span>}
             </div>
           ))}
-          <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate view">⧉</button>
-          <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
-          {boardHiddenSet.size > 0 && (
+          {!readOnly && <>
+            <button style={styles.viewAdd} onClick={() => { duplicateView(activeViewId); saveAll() }} title="Duplicate view">⧉</button>
+            <button style={styles.viewAdd} onClick={() => { addView(); saveAll() }} title="New view">+</button>
+          </>}
+          {!readOnly && boardHiddenSet.size > 0 && (
             <button style={{ ...styles.lensBtn, marginLeft: 'auto', color: '#f0b090', borderColor: '#5a4030' }}
               title="Hidden on the board only (the graph is unaffected). Click to show them again."
               onClick={() => { setViewBoardHidden([]); saveAll() }}>🙈 {boardHiddenSet.size} hidden · Show all</button>
           )}
-          <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), ...(boardHiddenSet.size > 0 ? {} : { marginLeft: 'auto' }) }}
+          <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), ...((!readOnly && boardHiddenSet.size > 0) ? {} : { marginLeft: 'auto' }) }}
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
-          <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'} · click a header for controls · double-click to zoom · drag to move</span>
+          <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'}{readOnly ? ' · view only · double-click to zoom' : ' · click a header for controls · double-click to zoom · drag to move'}</span>
         </div>
         {!systems.length && !freeNodes.length && !images.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> for a circle pack or tree, <b style={{ color: '#8ab4ff' }}>+ Node</b> for a free item, or <b style={{ color: '#8ab4ff' }}>+ Photo</b>.</div>}
         <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}
           onClick={e => { if (e.target === svgRef.current || e.target === gRef.current) setSelImage(null) }}>
-          <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`}>
+          <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`} style={readOnly ? { pointerEvents: 'none' } : undefined}>
             {/* Photos — a background layer behind clusters and nodes (same view.images[] as the graph). */}
             {images.map(img => (
               <BoardImage key={img.id} img={img} selected={selImage === img.id} toWorld={toWorld}
