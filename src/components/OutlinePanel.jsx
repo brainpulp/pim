@@ -112,6 +112,22 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
 
   const isExpanded = (id) => !expanded.has(id) // items are expanded by default
 
+  // Selecting a node on the graph → reveal + scroll to its outline row. Expand any collapsed
+  // ancestor branches first (so the row is actually rendered), then scroll it into view.
+  useEffect(() => {
+    if (!selectedNodeId) return
+    const parentOf = {}
+    edges.forEach(e => { if (parentOf[e.target] === undefined) parentOf[e.target] = e.source })
+    const anc = []; const guard = new Set(); let cur = parentOf[selectedNodeId]
+    while (cur && !guard.has(cur)) { anc.push(cur); guard.add(cur); cur = parentOf[cur] }
+    if (anc.length) setExpanded(prev => (anc.some(a => prev.has(a)) ? new Set([...prev].filter(id => !anc.includes(id))) : prev))
+    const t = setTimeout(() => {
+      const row = containerRef.current?.querySelector(`[data-outline-id="${CSS.escape(selectedNodeId)}"]`)
+      if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }, 40)
+    return () => clearTimeout(t)
+  }, [selectedNodeId, edges])
+
   // ── Mouse drag system ─────────────────────────────────────────────────────
   const getDropFromPoint = useCallback((clientX, clientY) => {
     if (!containerRef.current) return null
