@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import useGraphStore from '../lib/graphStore'
 
 // ── Tree builder ──────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ function flattenTree(tree, expandedSet) {
 }
 
 // ── OutlinePanel ──────────────────────────────────────────────────────────────
-export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNodeIds }) {
+export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNodeIds, searchText = '', onSearchText, drillRoot = null, onExitDrill }) {
   const nodes         = useGraphStore(s => s.nodes)
   const edges         = useGraphStore(s => s.edges)
   const addNode       = useGraphStore(s => s.addNode)
@@ -72,6 +72,21 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
 
+  // Real-time search: dim every row whose label doesn't match (null = no filter, nothing dimmed).
+  const q = (searchText || '').trim().toLowerCase()
+  const matchSet = useMemo(() => q ? new Set(nodes.filter(n => (n.label || '').toLowerCase().includes(q)).map(n => n.id)) : null, [q, nodes])
+
+  // Drill: scope the outline to the drilled node's subtree (mirrors the canvas drill state).
+  const drillLabel = drillRoot ? (nodes.find(n => n.id === drillRoot)?.label || '(node)') : null
+  const drillDesc = useMemo(() => {
+    if (!drillRoot) return null
+    const set = new Set([drillRoot]); const stack = [drillRoot]
+    while (stack.length) { const cur = stack.pop(); edges.forEach(e => { if (e.source === cur && !set.has(e.target)) { set.add(e.target); stack.push(e.target) } }) }
+    return set
+  }, [drillRoot, edges])
+  const scopedNodes = drillDesc ? nodes.filter(n => drillDesc.has(n.id)) : nodes
+  const scopedEdges = drillDesc ? edges.filter(e => drillDesc.has(e.source) && drillDesc.has(e.target)) : edges
+
   const [expanded, setExpanded] = useState(() => new Set()) // expanded by default (empty = all shown)
   const [dropTarget, setDropTarget] = useState(null) // { id, position: 'before'|'after'|'into' }
   const [draggingId, setDraggingId] = useState(null)
@@ -81,10 +96,10 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
   const containerRef = useRef()
 
   const frameIds = containerNodeIds || new Set()
-  const frameNodes   = nodes.filter(n => frameIds.has(n.id))
-  const regularNodes = nodes.filter(n => !frameIds.has(n.id))
+  const frameNodes   = scopedNodes.filter(n => frameIds.has(n.id))
+  const regularNodes = scopedNodes.filter(n => !frameIds.has(n.id))
   const frameTree   = buildTree(frameNodes, [])
-  const regularTree = buildTree(regularNodes, edges.filter(e => !frameIds.has(e.source) && !frameIds.has(e.target)))
+  const regularTree = buildTree(regularNodes, scopedEdges.filter(e => !frameIds.has(e.source) && !frameIds.has(e.target)))
 
   const toggleExpand = useCallback((id) => {
     setExpanded(prev => {
@@ -153,7 +168,26 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
     <div ref={containerRef} style={styles.panel}>
       <div style={styles.header}>
         <span style={styles.headerLabel}>OUTLINE</span>
+        {matchSet && <span style={{ fontSize: '0.62rem', color: '#8ecbff' }}>{matchSet.size} match{matchSet.size === 1 ? '' : 'es'}</span>}
       </div>
+
+      {/* Real-time search — greys out non-matching rows here and non-matching nodes on the canvas. */}
+      <div style={{ padding: '6px 8px', borderBottom: '1px solid #1e1e2e', flexShrink: 0 }}>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <input value={searchText} onChange={e => onSearchText?.(e.target.value)} placeholder="Search nodes…"
+            style={styles.search} />
+          {searchText && <button onMouseDown={e => e.preventDefault()} onClick={() => onSearchText?.('')} style={styles.searchClear} title="Clear">×</button>}
+        </div>
+      </div>
+
+      {/* Drill breadcrumb — reflects the canvas drill-in state; the outline shows only that subtree. */}
+      {drillRoot && (
+        <div style={styles.drillBar}>
+          <span style={{ opacity: 0.7 }}>⊳</span>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#c5d0ff', fontWeight: 600 }} title={drillLabel}>{drillLabel}</span>
+          <button onClick={onExitDrill} style={styles.drillExit} title="Exit drill">exit ✕</button>
+        </div>
+      )}
 
       {/* Make-root drop zone */}
       <div
@@ -192,6 +226,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
             isExpanded={isExpanded}
             onToggleExpand={toggleExpand}
             containerNodeIds={containerNodeIds}
+            matchSet={matchSet}
           />
         ))}
 
@@ -232,7 +267,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
 function OutlineItem({
   item, depth, selectedNodeId, onSelect,
   onAddChild, onRename, onDelete, onToggleVisible, onDrill,
-  viewNodeProps, dropTarget, draggingId, onStartDrag, isExpanded, onToggleExpand, containerNodeIds,
+  viewNodeProps, dropTarget, draggingId, onStartDrag, isExpanded, onToggleExpand, containerNodeIds, matchSet,
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(item.label)
@@ -241,6 +276,7 @@ function OutlineItem({
   const hasChildren = item.children.length > 0
   const expanded = isExpanded(item.id)
   const isHidden = viewNodeProps[item.id]?.visible === false
+  const dimmed = matchSet && !matchSet.has(item.id)   // real-time search: grey out non-matches
   const isSelected = item.id === selectedNodeId
   const isDropInto = dropTarget?.id === item.id && dropTarget?.position === 'into'
   const isDropBefore = dropTarget?.id === item.id && dropTarget?.position === 'before'
@@ -281,7 +317,8 @@ function OutlineItem({
         onClick={() => onSelect?.(item.id)}
         style={{
           paddingLeft: depth * 14 + 4,
-          opacity: item.id === draggingId ? 0.3 : 1,
+          opacity: item.id === draggingId ? 0.3 : dimmed ? 0.32 : 1,
+          transition: 'opacity 0.12s',
           pointerEvents: item.id === draggingId ? 'none' : undefined,
           background: isSelected ? '#1e2048' : isDropInto ? '#1a2a3a' : undefined,
           borderLeft: isSelected
@@ -358,6 +395,7 @@ function OutlineItem({
           isExpanded={isExpanded}
           onToggleExpand={onToggleExpand}
           containerNodeIds={containerNodeIds}
+          matchSet={matchSet}
         />
       ))}
     </div>
@@ -367,10 +405,14 @@ function OutlineItem({
 const styles = {
   panel: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 },
   header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
     padding: '0.6rem 0.75rem', borderBottom: '1px solid #1e1e2e', flexShrink: 0,
   },
-  headerLabel: { fontSize: '0.65rem', fontWeight: 700, color: '#555', letterSpacing: '0.08em' },
+  headerLabel: { fontSize: '0.65rem', fontWeight: 700, color: '#7080a0', letterSpacing: '0.08em' },
+  search: { width: '100%', background: '#12122a', border: '1px solid #2d3a6a', color: '#e8eeff', borderRadius: 6, padding: '5px 26px 5px 8px', fontSize: '0.76rem', outline: 'none' },
+  searchClear: { position: 'absolute', right: 4, background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0 4px' },
+  drillBar: { display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: '#141a30', borderBottom: '1px solid #23233e', flexShrink: 0, fontSize: '0.74rem', color: '#8ab4ff' },
+  drillExit: { background: 'transparent', border: '1px solid #2d3a6a', color: '#8ecbff', borderRadius: 5, padding: '1px 7px', fontSize: '0.68rem', cursor: 'pointer', flexShrink: 0 },
   addRootBtn: {
     fontSize: '0.72rem', padding: '2px 7px', borderRadius: 4,
     border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer',

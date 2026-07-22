@@ -405,6 +405,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const organizeAnimRef = useRef(0)                     // rAF id for the glide-to-packed-layout tween
   const [searchOpen, setSearchOpen] = useState(false)   // Cmd/Ctrl+K node spotlight
   const [searchQuery, setSearchQuery] = useState('')
+  const [outlineSearch, setOutlineSearch] = useState('')   // real-time filter: greys out non-matches (outline + canvas)
   const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
@@ -685,6 +686,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, propFilter, storePropertyDefs])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
+
+  // Real-time search match set (label substring). null = no filter. Non-matches are greyed, not hidden.
+  const searchMatchSet = useMemo(() => {
+    const q = outlineSearch.trim().toLowerCase()
+    if (!q) return null
+    return new Set(storeNodes.filter(n => (n.label || '').toLowerCase().includes(q)).map(n => n.id))
+  }, [outlineSearch, storeNodes])
 
   const nodesWithChildren = useMemo(() => new Set(storeEdges.map(e => e.source)), [storeEdges])
   // node.props by id — sim nodes don't carry props, so look them up for on-canvas chips
@@ -1115,7 +1123,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     return true
   }, [scheduleRender])
 
-  // Restore pan/zoom when switching views
+  // Open/switch-back intro: snap to the maximum zoom-out, then animate IN to the saved pan/zoom —
+  // keeping the target's focal point centered so it reads as zooming into the saved viewport.
+  const introToPan = useCallback((pan) => {
+    const svg = svgRef.current, zb = zoomBehaviorRef.current
+    if (!pan || !svg || !zb) return false
+    const rect = svg.getBoundingClientRect(), w = rect.width, h = rect.height
+    if (!w || !h) return false
+    const target = d3.zoomIdentity.translate(pan.x, pan.y).scale(pan.k)
+    const wx = (w / 2 - target.x) / target.k, wy = (h / 2 - target.y) / target.k   // world point target centers on
+    const startK = zb.scaleExtent()[0]   // maximum zoom-out (min scale)
+    const start = d3.zoomIdentity.translate(w / 2 - startK * wx, h / 2 - startK * wy).scale(startK)
+    const sel = d3.select(svg)
+    sel.call(zb.transform, start)                       // jump to fully zoomed out
+    sel.transition().duration(800).ease(d3.easeCubicInOut).call(zb.transform, target)   // …then zoom in
+    return true
+  }, [])
+
+  // Restore pan/zoom when switching views (instant — the intro is only for opening the graph).
   useEffect(() => {
     applyPan(readSavedPan(activeViewId))
   }, [activeViewId]) // eslint-disable-line
@@ -1128,10 +1153,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const didRestoreViewRef = useRef(false)
   useEffect(() => {
     if (loading || didRestoreViewRef.current) return
-    if (applyPan(readSavedPan(activeViewId)) || (svgRef.current && zoomBehaviorRef.current)) {
-      didRestoreViewRef.current = true
-    }
-  }, [loading, views, activeViewId, applyPan, readSavedPan])
+    if (!svgRef.current || !zoomBehaviorRef.current) return
+    const pan = readSavedPan(activeViewId)
+    // Opening the graph (fresh mount, incl. switching back to the tab): start fully zoomed out and
+    // animate in to the saved viewport. Nothing saved → leave the default view.
+    if (pan) introToPan(pan)
+    didRestoreViewRef.current = true
+  }, [loading, views, activeViewId, applyPan, readSavedPan, introToPan])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1357,19 +1385,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       didDrag = true
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
 
-      // Hover-detect: find node under cursor to highlight as reparent target
+      // Hover-detect: highlight the node under the cursor as a reparent target — ONLY while Alt is
+      // held. Without Alt a drag is a pure move (never changes topology), so nodes can't be lost by
+      // an accidental drop onto a neighbour. (Shift is already the "drag subtree" gesture.)
       if (!isFrame && !multiDrag) {
         let found = null
-        for (const n of simNodesRef.current) {
-          if (n.id === nodeId) continue
-          const nvp = viewNodePropsRef.current[n.id] || {}
-          if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
-          const nr = NODE_R * (nvp.scale || 1)
-          const nLabel = n.label || ''
-          const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
-          const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize, nvp.labelWidth)
-          if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) {
-            found = n.id; break
+        if (me.altKey) {
+          for (const n of simNodesRef.current) {
+            if (n.id === nodeId) continue
+            const nvp = viewNodePropsRef.current[n.id] || {}
+            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
+            const nr = NODE_R * (nvp.scale || 1)
+            const nLabel = n.label || ''
+            const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
+            const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize, nvp.labelWidth)
+            if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) {
+              found = n.id; break
+            }
           }
         }
         if (found !== dragHoverNodeIdRef.current) {
@@ -1422,9 +1454,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return
         }
 
-        // Reparent: if dropped on another regular node, make it a child
-        if (!isFrame && !multiDrag && dragHoverNodeIdRef.current === null) {
-          // re-check at drop position since ref was just cleared
+        // Reparent: ONLY with Alt held (deliberate gesture) — otherwise a plain drop never changes
+        // topology, so moving a node can't silently reparent/strand it (the "lost nodes" bug).
+        if (!isFrame && !multiDrag && ue.altKey) {
           let dropTarget = null
           for (const n of simNodesRef.current) {
             if (n.id === nodeId) continue
@@ -2295,6 +2327,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           selectedNodeId={selected?.type === 'node' ? selected.id : null}
           onSelectNode={id => setSelected({ id, type: 'node' })}
           containerNodeIds={new Set(storeNodes.filter(n => (viewNodeProps[n.id]?.shape) === 'frame').map(n => n.id))}
+          searchText={outlineSearch}
+          onSearchText={setOutlineSearch}
+          drillRoot={drillRoot}
+          onExitDrill={exitDrill}
         />
         <ViewManager />
         {/* Tool strip — consolidated canvas actions */}
@@ -2553,7 +2589,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
             {/* 4. Regular nodes on top */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame').map(n => (
-              <NodeShape key={n.id} node={n}
+              <g key={n.id} style={{ opacity: searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1, transition: 'opacity 0.15s' }}>
+              <NodeShape node={n}
                 modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
                 viewProps={resolveVP(n.id)}
@@ -2591,6 +2628,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onMouseEnter={() => showToolbar(n.id)}
                 onMouseLeave={hideToolbar}
               />
+              </g>
             ))}
 
             {/* Rubber-band selection rect — on top of nodes/images */}
