@@ -807,13 +807,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     simNodesRef.current.forEach(n => { posById[n.id] = { x: n.x, y: n.y, vx: n.vx, vy: n.vy } })
     const cx = svgRef.current?.clientWidth / 2 || 500
     const cy = svgRef.current?.clientHeight / 2 || 350
+    // Parent of each node (first incoming edge) → a new node spawns NEXT TO its parent, not at center.
+    const parentOf = {}
+    storeEdges.forEach(e => { if (parentOf[e.target] === undefined) parentOf[e.target] = e.source })
     simNodesRef.current = storeNodes.map(n => {
       const vp = { ...DEFAULT_NODE_PROPS, ...(viewNodeProps[n.id] || {}) }
+      const prev = posById[n.id]
+      let sx, sy
+      if (prev) { sx = prev.x; sy = prev.y }
+      else {
+        const pPos = posById[parentOf[n.id]]   // parent's existing position, if any
+        if (pPos) { sx = pPos.x + (Math.random() - 0.5) * 70; sy = pPos.y + 70 + (Math.random() - 0.5) * 30 }
+        else { sx = cx + (Math.random() - 0.5) * 120; sy = cy + (Math.random() - 0.5) * 120 }
+      }
       return {
         id: n.id, label: n.label, notes: n.notes || '',
-        x: posById[n.id]?.x ?? cx + (Math.random() - 0.5) * 120,
-        y: posById[n.id]?.y ?? cy + (Math.random() - 0.5) * 120,
-        vx: posById[n.id]?.vx ?? 0, vy: posById[n.id]?.vy ?? 0,
+        x: sx, y: sy,
+        vx: prev?.vx ?? 0, vy: prev?.vy ?? 0,
         fx: vp.fx ?? null, fy: vp.fy ?? null,
       }
     })
@@ -1485,11 +1495,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (dropTarget) {
             pushUndo()
             reparentNode(nodeId, dropTarget)
-            // Anti-loss: if the new parent's branch is collapsed (or the parent is hidden by the
-            // current drill), the child would vanish into it — expand so the moved node stays visible.
-            const st = useGraphStore.getState()
-            const av2 = st.views.find(v => v.id === st.activeViewId)
-            if ((av2?.collapsedNodeIds || []).includes(dropTarget)) toggleCollapseNode(dropTarget)
+            // If the new parent's children are collapsed, the reparented node stays hidden under it
+            // (consistent with the collapsed branch) — recover it by expanding the parent. The cycle
+            // guard in reparentNode already prevents the branch from being orphaned/lost.
             // Release so D3 settles near new parent
             simNode.fx = null; simNode.fy = null
             releaseAnchor(nodeId)
@@ -2593,8 +2601,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               )
             })()}
 
-            {/* 3. Images */}
-            {(activeView?.images || []).filter(img => img.visible !== false).map(img => (
+            {/* 3. Images (floating photos are hidden while drilled into a node) */}
+            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img => (
               <ImageNode key={img.id} img={img}
                 isSelected={selectedImageIds.has(img.id)}
                 isCropping={cropImageId === img.id}
@@ -2962,20 +2970,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           />
         </>)}
 
-        {/* Delete node confirm */}
-        {confirmDelete && (
-          <div style={confirmStyle} onClick={() => setConfirmDelete(null)}>
-            <div style={confirmBox} onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
-                Delete node from <strong>all views</strong>?
-              </div>
-              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-                <button style={confirmCancelBtn} onClick={() => setConfirmDelete(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }}>Delete</button>
+        {/* Delete node confirm — anchored above (or below) the node itself, not screen-centered. */}
+        {confirmDelete && (() => {
+          const dn = simNodesRef.current.find(n => n.id === confirmDelete)
+          const W = svgRef.current?.clientWidth || 800
+          const rawX = dn ? T.x + (dn.x || 0) * T.k : W / 2
+          const rawY = dn ? T.y + (dn.y || 0) * T.k : (svgRef.current?.clientHeight || 600) / 2
+          const px = Math.max(150, Math.min(W - 150, rawX))
+          const below = rawY < 150
+          return (
+            <div style={confirmStyle} onClick={() => setConfirmDelete(null)}>
+              <div style={{ ...confirmBox, position: 'absolute', left: px, top: rawY, transform: below ? 'translate(-50%, 28px)' : 'translate(-50%, calc(-100% - 28px))' }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
+                  Delete <strong>{dn?.label || 'this node'}</strong> from <strong>all views</strong>?
+                </div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={confirmCancelBtn} onClick={() => setConfirmDelete(null)}>Cancel</button>
+                  <button style={confirmOkBtn} onClick={() => { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }}>Delete</button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {/* Delete multiple selected nodes confirm */}
         {confirmDeleteNodes && (

@@ -40,7 +40,10 @@ export default function App() {
       return saved ? JSON.parse(saved) : null
     } catch { return null }
   })
-  const [view, setView] = useState('board')   // the unified canvas is the primary view
+  const [view, setView] = useState(() => {   // restore the last-used tab (canvas/graph/table/lab)
+    try { return localStorage.getItem('pim_last_view') || 'board' } catch { return 'board' }
+  })
+  useEffect(() => { try { localStorage.setItem('pim_last_view', view) } catch { /* ignore */ } }, [view])
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const [shareToken, setShareToken] = useState(() => parseShareToken())
