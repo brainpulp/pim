@@ -589,18 +589,32 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const viewNodePropsRef = useRef(viewNodeProps)
   viewNodePropsRef.current = viewNodeProps
 
+  const saveDirtyRef = useRef(false)
   useEffect(() => {
     if (loading || readOnly || !loadOkRef.current) return   // never autosave unless the project loaded OK (a failed load must not blank it)
     setSaveStatus('saving')
+    saveDirtyRef.current = true
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       try {
         await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId, propertyDefs: storePropertyDefs, styles: storeStyles })
+        saveDirtyRef.current = false
         setSaveStatus('saved')
       } catch (e) { console.error('Save:', e); setSaveStatus('error') }
     }, 1500)
     return () => clearTimeout(saveTimer.current)
   }, [storeNodes, storeEdges, storePropertyDefs, storeStyles, views, activeViewId, projectId, loading]) // eslint-disable-line
+
+  // Flush a pending save on unmount (e.g. switching tabs graph↔board) so the last edit isn't dropped
+  // when the debounce timer is cleared. Reads fresh store state; guarded so it can't blank a project.
+  useEffect(() => {
+    return () => {
+      if (!saveDirtyRef.current || readOnly) return
+      const s = useGraphStore.getState()
+      if (s.loadedProjectId !== projectId) return
+      saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles }).catch(() => {})
+    }
+  }, [projectId, readOnly])
 
   const getVP = useCallback((nodeId) => ({
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
@@ -1391,7 +1405,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         for (const n of simNodesRef.current) {
           if (n.id === nodeId) continue
           const nvp = viewNodePropsRef.current[n.id] || {}
-          if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
+          // Only nodes actually on screen (in the current drill/filter) are valid targets — never
+          // reparent onto an off-screen node (that would move the dragged node out of view).
+          if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
           const nr = NODE_R * (nvp.scale || 1)
           const nLabel = n.label || ''
           const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
@@ -1457,7 +1473,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           for (const n of simNodesRef.current) {
             if (n.id === nodeId) continue
             const nvp = viewNodePropsRef.current[n.id] || {}
-            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
+            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
             const nr = NODE_R * (nvp.scale || 1)
             const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
             const sp = startPositions.find(p => p.node.id === nodeId)

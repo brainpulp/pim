@@ -285,6 +285,16 @@ const useGraphStore = create((set, get) => ({
   removeEdge: (id) => set(s => ({ edges: s.edges.filter(e => e.id !== id) })),
 
   reparentNode: (nodeId, newParentId) => set(s => {
+    // Guard against cycles: re-parenting a node UNDER one of its own descendants would disconnect
+    // that whole branch from the graph (unreachable → it vanishes from drill/hierarchy views and
+    // never comes back). Reject such a move (no-op) so nodes can't be lost this way.
+    if (newParentId && newParentId !== nodeId) {
+      const childrenOf = {}
+      s.edges.forEach(e => { (childrenOf[e.source] = childrenOf[e.source] || []).push(e.target) })
+      const desc = new Set(); const stack = [nodeId]
+      while (stack.length) { const c = stack.pop(); (childrenOf[c] || []).forEach(t => { if (!desc.has(t)) { desc.add(t); stack.push(t) } }) }
+      if (desc.has(newParentId)) return {}   // would create a cycle → refuse
+    }
     const edges = s.edges.filter(e => e.target !== nodeId)
     if (newParentId && newParentId !== nodeId) edges.push({ id: uid(), source: newParentId, target: nodeId })
     return { edges }
