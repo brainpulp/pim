@@ -1385,23 +1385,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       didDrag = true
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
 
-      // Hover-detect: highlight the node under the cursor as a reparent target — ONLY while Alt is
-      // held. Without Alt a drag is a pure move (never changes topology), so nodes can't be lost by
-      // an accidental drop onto a neighbour. (Shift is already the "drag subtree" gesture.)
+      // Hover-detect: find node under cursor to highlight as reparent target
       if (!isFrame && !multiDrag) {
         let found = null
-        if (me.altKey) {
-          for (const n of simNodesRef.current) {
-            if (n.id === nodeId) continue
-            const nvp = viewNodePropsRef.current[n.id] || {}
-            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
-            const nr = NODE_R * (nvp.scale || 1)
-            const nLabel = n.label || ''
-            const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
-            const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize, nvp.labelWidth)
-            if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) {
-              found = n.id; break
-            }
+        for (const n of simNodesRef.current) {
+          if (n.id === nodeId) continue
+          const nvp = viewNodePropsRef.current[n.id] || {}
+          if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false) continue
+          const nr = NODE_R * (nvp.scale || 1)
+          const nLabel = n.label || ''
+          const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
+          const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize, nvp.labelWidth)
+          if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) {
+            found = n.id; break
           }
         }
         if (found !== dragHoverNodeIdRef.current) {
@@ -1454,9 +1450,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return
         }
 
-        // Reparent: ONLY with Alt held (deliberate gesture) — otherwise a plain drop never changes
-        // topology, so moving a node can't silently reparent/strand it (the "lost nodes" bug).
-        if (!isFrame && !multiDrag && ue.altKey) {
+        // Reparent: if dropped on another regular node, make it a child.
+        if (!isFrame && !multiDrag && dragHoverNodeIdRef.current === null) {
+          // re-check at drop position since the hover ref was just cleared
           let dropTarget = null
           for (const n of simNodesRef.current) {
             if (n.id === nodeId) continue
@@ -1473,6 +1469,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (dropTarget) {
             pushUndo()
             reparentNode(nodeId, dropTarget)
+            // Anti-loss: if the new parent's branch is collapsed (or the parent is hidden by the
+            // current drill), the child would vanish into it — expand so the moved node stays visible.
+            const st = useGraphStore.getState()
+            const av2 = st.views.find(v => v.id === st.activeViewId)
+            if ((av2?.collapsedNodeIds || []).includes(dropTarget)) toggleCollapseNode(dropTarget)
             // Release so D3 settles near new parent
             simNode.fx = null; simNode.fy = null
             releaseAnchor(nodeId)

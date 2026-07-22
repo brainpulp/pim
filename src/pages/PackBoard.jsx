@@ -5,6 +5,7 @@ import { saveProject } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
 import { buildNestedTagTree } from '../lib/hierarchy'
 import NodePropsEditor from '../components/NodePropsEditor'
+import { usePresence } from '../lib/usePresence'
 
 // Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
 // clusters. Two kinds:
@@ -157,6 +158,9 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   // project (many projects share "view-default"), so switching between two such projects left this
   // key unchanged and the board kept the previous project's clusters/pan/filter. (bug)
   const viewKey = (projectId || '') + '::' + (activeViewId || '')
+
+  // Realtime presence (Phase 2a): who's here + live cursors, shared across editors and viewers.
+  const { self, peers, cursors, sendCursor } = usePresence(projectId)
 
   // Shared read-only mode: load the public snapshot straight into the store (skips loadProject/RLS).
   useEffect(() => {
@@ -466,7 +470,11 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   }
   // Active fisheye lens (world coords). Radius is held ~constant on screen by dividing by the zoom.
   const lens = (fisheye && focusRef.current) ? makeFisheye(focusRef.current, 320 / (tf.k || 1), 3) : null
-  const onCanvasMove = (e) => { if (!fisheye) return; focusRef.current = toWorld(e); setLensTick(t => t + 1) }
+  const onCanvasMove = (e) => {
+    const w = toWorld(e)
+    sendCursor(w.x, w.y)   // broadcast presence cursor (world coords)
+    if (fisheye) { focusRef.current = w; setLensTick(t => t + 1) }
+  }
   const onCanvasLeave = () => { if (focusRef.current) { focusRef.current = null; setLensTick(t => t + 1) } }
 
   return (
@@ -521,6 +529,16 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
           <button style={{ ...styles.lensBtn, ...(fisheye ? styles.lensBtnOn : {}), ...((!readOnly && boardHiddenSet.size > 0) ? {} : { marginLeft: 'auto' }) }}
             onClick={() => setFisheye(o => { if (o) focusRef.current = null; return !o })} title="Hover magnifier lens">🔍 Lens {fisheye ? 'on' : 'off'}</button>
           <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>{systems.length} cluster{systems.length === 1 ? '' : 's'}{readOnly ? ' · view only · double-click to zoom' : ' · click a header for controls · double-click to zoom · drag to move'}</span>
+          {peers.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', marginLeft: 4 }} title={[self, ...peers].map((p, i) => p.name + (i === 0 ? ' (you)' : '')).join(', ')}>
+              {[self, ...peers].map((p, i) => (
+                <div key={p.id} style={{ width: 22, height: 22, borderRadius: '50%', background: p.color, color: '#0c0c1a', fontSize: '0.7rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #0c0c1a', marginLeft: i ? -7 : 0 }}>
+                  {(p.name || '?').slice(0, 1).toUpperCase()}
+                </div>
+              ))}
+              <span style={{ color: '#8ecbff', fontSize: '0.7rem', marginLeft: 6 }}>{peers.length + 1} here</span>
+            </div>
+          )}
         </div>
         {!systems.length && !freeNodes.length && !images.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> for a circle pack or tree, <b style={{ color: '#8ab4ff' }}>+ Node</b> for a free item, or <b style={{ color: '#8ab4ff' }}>+ Photo</b>.</div>}
         <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}
@@ -597,6 +615,16 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
                 onEdit={(id) => setEdit({ nodeId: id, free: true })}
                 onNavigate={() => followLink(n.linkTo)}
                 onConnect={(e) => startConnect(n.id, e)} />
+            ))}
+            {/* Realtime peer cursors — counter-scaled so they stay a constant size at any zoom. */}
+            {Object.values(cursors).map(c => (
+              <g key={'cur:' + c.id} transform={`translate(${c.x},${c.y}) scale(${1 / (tf.k || 1)})`} pointerEvents="none" style={{ transition: 'transform 0.08s linear' }}>
+                <path d="M0 0 L0 16 L4.5 12 L7.5 18.5 L10 17.5 L7 11 L13 11 Z" fill={c.color} stroke="#0c0c1a" strokeWidth={1} />
+                <g transform="translate(13,15)">
+                  <rect x={0} y={0} rx={4} height={17} width={(c.name || 'Guest').length * 6.4 + 12} fill={c.color} />
+                  <text x={6} y={12} fontSize={11} fontWeight={600} fill="#0c0c1a">{c.name || 'Guest'}</text>
+                </g>
+              </g>
             ))}
           </g>
         </svg>
