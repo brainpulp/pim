@@ -419,6 +419,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [newNodeAt, setNewNodeAt] = useState(null)       // { px, py, sx, sy } floating new-node name input
   const [contextMenu, setContextMenu] = useState(null)   // { px, py, sx, sy } right-click menu (only on click, not drag)
   const [ctxColors, setCtxColors] = useState(false)      // context-menu background-color submenu open
+  const [bulkMenu, setBulkMenu] = useState(null)         // { px, py, ids } right-click menu for a multi-selection
+  const [bulkPanel, setBulkPanel] = useState(null)       // 'color' | 'shape' submenu open in the bulk menu
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
@@ -1126,6 +1128,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
       if (hitNode) {
         setContextMenu(null); setPhotoMenu(null)
+        // Right-clicking a node that's part of a multi-selection → bulk menu for ALL selected.
+        const curSel = selectedNodeIdsRef.current
+        if (curSel.size > 1 && curSel.has(hitNode.id)) {
+          setNodeMenu(null); setBulkPanel(null)
+          setBulkMenu({ px, py, ids: [...curSel] })
+          return
+        }
         setSelected({ id: hitNode.id, type: 'node' })
         setSelectedImageIds(new Set()); setSelectedNodeIds(new Set())
         setNodeMenu({ nodeId: hitNode.id, px, py })
@@ -1224,6 +1233,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (e.key === 'Escape') {
         if (nodeMenu) { setNodeMenu(null); return }
         if (photoMenu) { setPhotoMenu(null); return }
+        if (bulkMenu) { setBulkMenu(null); setBulkPanel(null); return }
         if (contextMenu) { setContextMenu(null); return }
         if (confirmDeleteImages) { setConfirmDeleteImages(null); return }
         if (cropImageId) { setCropImageId(null); return }
@@ -1386,6 +1396,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
     canvasFocused.current = true
+
+    // Ctrl/Cmd-click toggles a node in/out of the multi-selection (no drag) — build a selection by
+    // clicking several nodes, then right-click for bulk changes.
+    if (e.metaKey || e.ctrlKey) {
+      setSelectedNodeIds(prev => { const s = new Set(prev); if (s.has(nodeId)) s.delete(nodeId); else s.add(nodeId); return s })
+      setSelected(null); setSelectedImageIds(new Set())
+      return
+    }
 
     // If this node is part of a multi-selection, keep that selection and move all
     // of them together; otherwise it's a normal single selection.
@@ -2476,7 +2494,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         onContextMenu={e => { const t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return; e.preventDefault() }}
         style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <svg ref={svgRef}
-          style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'grab' }}
+          style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'default' }}
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (readOnly) return
@@ -2802,6 +2820,55 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item(<>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
                     {item('Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
                     {item('Fit to view', () => { zoomExtents(); close() })}
+                  </>
+                )}
+              </div>
+            </>
+          )
+        })()}
+
+        {/* Bulk right-click menu — applies to every node in the current multi-selection. */}
+        {bulkMenu && (() => {
+          const ids = bulkMenu.ids
+          const close = () => { setBulkMenu(null); setBulkPanel(null) }
+          const setAll = (prop, val) => { pushUndo(); ids.forEach(id => setNodeViewProp(id, prop, val)) }
+          const item = (label, onClick) => (
+            <div onClick={onClick}
+              onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+              {label}
+            </div>
+          )
+          const SHAPE_OPTS = [['circle', '● Circle'], ['ellipse', '⬭ Ellipse'], ['roundrect', '▢ Rounded'], ['rect', '▮ Rectangle'], ['diamond', '◆ Diamond']]
+          return (
+            <>
+              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
+              <div onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
+                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 180 }}>
+                <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
+                {bulkPanel === 'color' ? (
+                  <>
+                    {item(<span style={{ color: '#8090b8' }}>‹ Fill color</span>, () => setBulkPanel(null))}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 178, padding: '4px 8px 6px' }}>
+                      <div title="No fill" onClick={() => { setAll('fillColor', 'none'); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: 'transparent', border: '1.5px solid #5b6af0', cursor: 'pointer', color: '#8090b8', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>∅</div>
+                      {COLOR_PALETTE.map(c => (
+                        <div key={c} title={c} onClick={() => { setAll('fillColor', c); close() }}
+                          style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer', border: '1.5px solid rgba(255,255,255,0.15)' }} />
+                      ))}
+                    </div>
+                  </>
+                ) : bulkPanel === 'shape' ? (
+                  <>
+                    {item(<span style={{ color: '#8090b8' }}>‹ Shape</span>, () => setBulkPanel(null))}
+                    {SHAPE_OPTS.map(([s, label]) => item(label, () => { setAll('shape', s); close() }))}
+                  </>
+                ) : (
+                  <>
+                    {item(<>Fill color<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel('color'))}
+                    {item(<>Shape<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel('shape'))}
+                    {item('Hide these', () => { setAll('visible', false); setSelectedNodeIds(new Set()); close() })}
+                    {item(<span style={{ color: '#f0a0a0' }}>Delete these</span>, () => { setConfirmDeleteNodes(ids); close() })}
                   </>
                 )}
               </div>
