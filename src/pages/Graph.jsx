@@ -436,6 +436,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const [dragHoverNodeId, setDragHoverNodeId] = useState(null)
   const dragHoverNodeIdRef = useRef(null)
+  const [movingIds, setMovingIds] = useState(null)   // nodes being dragged as a group (highlighted while moving)
   const [showSlideSidebar, setShowSlideSidebar] = useState(false)
   const [hideFrameOutlines, setHideFrameOutlines] = useState(false)
   // Auto-hide frame outlines after zooming to a frame (thumbnail click), until the next real pan/zoom.
@@ -573,6 +574,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const slideIds      = activeSlideshow?.slides || []
   const customEmojis  = activeView?.customEmojis || []
   const collapsedNodeIds = activeView?.collapsedNodeIds || []
+  const listNodeIds = activeView?.listNodeIds || []   // nodes shown as a nested list card (subtree hidden)
   const presentingSlideBg = (presentingSlideIdx !== null)
     ? (activeSlideshow?.slideBgColors?.[slideIds[presentingSlideIdx]] || bgColor)
     : bgColor
@@ -666,9 +668,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     } else {
       base = new Set(storeNodes.filter(n => viewNodeProps[n.id]?.visible !== false).map(n => n.id))
     }
-    if (collapsedNodeIds.length) {
+    // Hide the descendants of any collapsed OR list-card node (the card renders that subtree itself).
+    if (collapsedNodeIds.length || listNodeIds.length) {
       const hidden = new Set()
-      const q = [...collapsedNodeIds]
+      const q = [...collapsedNodeIds, ...listNodeIds]
       while (q.length) {
         const cur = q.shift()
         storeEdges.forEach(e => {
@@ -697,9 +700,36 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
     }
     return base
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, propFilter, storePropertyDefs])
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, propFilter, storePropertyDefs])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
+
+  // ── List-card ("show children as list") support ──────────────────────────────
+  const toggleListNode = useGraphStore(s => s.toggleListNode)
+  const moveChild      = useGraphStore(s => s.moveChild)
+  const listNodeSet    = useMemo(() => new Set(listNodeIds), [listNodeIds])
+  const nodeLabelById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.label])), [storeNodes])
+  const childrenOrdered = useMemo(() => { const m = {}; storeEdges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [storeEdges])
+  // Flatten a node's whole subtree into indented rows (edge order; cycle-safe) for the list card.
+  const flattenSubtree = useCallback((rootId) => {
+    const rows = []; const seen = new Set([rootId])
+    const walk = (id, depth) => {
+      (childrenOrdered[id] || []).forEach(cid => {
+        if (seen.has(cid)) return; seen.add(cid)
+        rows.push({ id: cid, parentId: id, label: nodeLabelById[cid] || '(untitled)', depth })
+        walk(cid, depth + 1)
+      })
+    }
+    walk(rootId, 0)
+    return rows
+  }, [childrenOrdered, nodeLabelById])
+  // Move a row up/down among its direct siblings.
+  const reorderRow = useCallback((parentId, childId, dir) => {
+    const sibs = childrenOrdered[parentId] || []
+    const i = sibs.indexOf(childId); if (i < 0) return
+    if (dir === 'up' && i > 0) moveChild(parentId, childId, sibs[i - 1])
+    else if (dir === 'down' && i < sibs.length - 1) moveChild(parentId, childId, sibs[i + 2] ?? null)
+  }, [childrenOrdered, moveChild])
 
   // Real-time search match set (label substring). null = no filter. Non-matches are greyed, not hidden.
   const searchMatchSet = useMemo(() => {
@@ -1216,9 +1246,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
-      // Enter → create child if root node, sister if non-root
+      // Enter → create child if root node, sister if non-root. Ignore auto-repeat (holding Enter)
+      // so a held key can't spit out a run of duplicate nodes.
       if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && selected?.type === 'node') {
         e.preventDefault()
+        if (e.repeat) return
         const isRoot = !storeEdges.some(se => se.target === selected.id)
         if (isRoot) {
           pushUndo()
@@ -1309,6 +1341,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // Tab → cycle to next sibling (enter edit mode)
       if (e.key === 'Tab' && selected?.type === 'node') {
         e.preventDefault()
+        if (e.repeat) return   // holding Tab shouldn't spawn a run of child nodes
         handleNodeTab(selected.id)
         return
       }
@@ -1405,7 +1438,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const [sx, sy] = clientToSim(me.clientX, me.clientY)
       const ddx = sx - startSx, ddy = sy - startSy
       if (!didDrag && Math.abs(ddx) < 2 && Math.abs(ddy) < 2) return
-      if (!didDrag) document.body.style.cursor = 'grabbing'
+      if (!didDrag) {
+        document.body.style.cursor = 'grabbing'
+        if (dragGroup.length > 1) setMovingIds(new Set(dragGroup.map(g => g.id)))   // highlight all nodes moving together
+      }
       didDrag = true
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
 
@@ -1435,6 +1471,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const onUp = ue => {
       document.body.style.cursor = ''
       simRef.current.alphaTarget(0)
+      setMovingIds(null)   // clear the group-move highlight
 
       // Clear hover highlight
       dragHoverNodeIdRef.current = null
@@ -2613,13 +2650,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {/* 3b placeholder — 3D viewer is rendered as absolute div outside SVG below */}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame').map(n => (
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id)).map(n => (
               <g key={n.id} style={{ opacity: searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1, transition: 'opacity 0.15s' }}>
               <NodeShape node={n}
                 modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
                 viewProps={resolveVP(n.id)}
-                isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
+                isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
                 isHovered={hoveredNodeId === n.id}
                 isDropTarget={dragHoverNodeId === n.id}
                 autoEdit={pendingEditId === n.id}
@@ -2654,6 +2691,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onMouseLeave={hideToolbar}
               />
               </g>
+            ))}
+
+            {/* List cards — a node whose subtree is shown as one nested, editable outline card. */}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && listNodeSet.has(n.id)).map(n => (
+              <ListCard key={'lc' + n.id} node={n} rootLabel={n.label} rows={flattenSubtree(n.id)}
+                fill={getVP(n.id).fillColor} selectedId={selected?.type === 'node' ? selected.id : null}
+                onHeaderDown={e => handleNodeMouseDown(e, n.id)}
+                onSelect={id => setSelected({ id, type: 'node' })}
+                onRename={(id, label) => updateLabel(id, label)}
+                onDelete={id => { pushUndo(); deleteNode(id) }}
+                onReorder={reorderRow}
+                onExit={() => toggleListNode(n.id)} />
             ))}
 
             {/* Rubber-band selection rect — on top of nodes/images */}
@@ -2891,6 +2940,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDrill={() => { setDrillRoot(hn.id); close(); setTimeout(zoomExtents, 50) }}
+              onToggleList={() => { toggleListNode(hn.id); close() }}
+              isList={listNodeSet.has(hn.id)}
+              hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
               onHide={() => { pushUndo(); setNodeViewProp(hn.id, 'visible', false); close() }}
               onRelease={() => handleRelease(hn.id)}
               onDelete={() => { setConfirmDelete(hn.id); close() }}
@@ -3478,6 +3530,71 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
       )}
     </div>
   )
+}
+
+// ─── ListCard ───────────────────────────────────────────────────────────────
+// A node rendered as one nested, editable outline card (its subtree hidden on the canvas). Drag the
+// header to move the node; a row: click = select, double-click = rename, ▲▼ = reorder among siblings,
+// × = delete. Rendered as an HTML card inside a <foreignObject> so inputs/scroll/buttons just work.
+function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSelect, onRename, onDelete, onReorder, onExit }) {
+  const W = 248, rowH = 24, headerH = 32, maxH = 360
+  const H = Math.min(maxH, headerH + rows.length * rowH + 12)
+  const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#3a4a8a'
+  return (
+    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
+      <div style={lc.card(accent)}>
+        <div style={lc.header(accent)} onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }}
+          onDoubleClick={e => e.stopPropagation()} title="Drag to move · click to select">
+          <span style={lc.title}>{rootLabel || '(untitled)'}</span>
+          <span style={lc.count}>{rows.length}</span>
+          <button style={lc.exitBtn} title="Expand back to nodes" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>⤢</button>
+        </div>
+        <div style={lc.body} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
+          {rows.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: '6px 10px' }}>No children yet.</div>}
+          {rows.map(r => <ListRow key={r.id} row={r} selected={selectedId === r.id} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onReorder={onReorder} />)}
+        </div>
+      </div>
+    </foreignObject>
+  )
+}
+
+function ListRow({ row, selected, onSelect, onRename, onDelete, onReorder }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(row.label)
+  useEffect(() => { if (!editing) setDraft(row.label) }, [row.label, editing])
+  const commit = () => { const t = draft.trim(); onRename(row.id, t || row.label); setEditing(false) }
+  return (
+    <div style={{ ...lc.row, paddingLeft: 8 + row.depth * 14, background: selected ? '#1e2048' : 'transparent' }}
+      onClick={e => { e.stopPropagation(); onSelect(row.id) }}>
+      <span style={{ color: '#5b6af0', fontSize: 9, flexShrink: 0 }}>•</span>
+      {editing ? (
+        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onClick={e => e.stopPropagation()}
+          onBlur={commit} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); commit() } if (e.key === 'Escape') setEditing(false) }}
+          style={lc.input} />
+      ) : (
+        <span style={lc.rowLabel} onDoubleClick={e => { e.stopPropagation(); setDraft(row.label); setEditing(true) }} title={row.label}>{row.label}</span>
+      )}
+      <span style={lc.actions}>
+        <button style={lc.rowBtn} title="Move up" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'up') }}>▲</button>
+        <button style={lc.rowBtn} title="Move down" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'down') }}>▼</button>
+        <button style={{ ...lc.rowBtn, color: '#f87171' }} title="Delete" onClick={e => { e.stopPropagation(); onDelete(row.id) }}>×</button>
+      </span>
+    </div>
+  )
+}
+
+const lc = {
+  card: (accent) => ({ width: '100%', height: '100%', background: '#14142a', border: `1px solid ${accent}`, borderRadius: 10, boxShadow: '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }),
+  header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', background: accent, cursor: 'grab', flexShrink: 0 }),
+  title: { fontWeight: 700, fontSize: 13, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  count: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600 },
+  exitBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 5px' },
+  body: { flex: 1, overflowY: 'auto', padding: '4px 0' },
+  row: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 6px', minHeight: 20, cursor: 'pointer' },
+  rowLabel: { flex: 1, fontSize: 12.5, color: '#dbe4ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  input: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 5px', fontSize: 12.5, outline: 'none', minWidth: 0 },
+  actions: { display: 'flex', gap: 1, flexShrink: 0 },
+  rowBtn: { background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: 10, padding: '0 3px', lineHeight: 1 },
 }
 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -4567,7 +4684,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
@@ -4703,6 +4820,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         }, { right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
         {textRow('Drill in', onDrill, { opens: null })}
+        {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
         {textRow('Hide', onHide, { opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { color: '#f6ad55', opens: null })}
         {textRow('Delete', onDelete, { color: '#f87171', opens: null })}

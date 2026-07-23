@@ -615,6 +615,39 @@ const useGraphStore = create((set, get) => ({
     })
   })),
 
+  // "Show children as list" — render a node's whole subtree as one nested list card (per active view).
+  // Its descendants are hidden from the canvas (like collapse); the card draws them as editable rows.
+  // Toggling on also clears any plain-collapse state on that node (the two states are exclusive).
+  toggleListNode: (nodeId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const list = new Set(v.listNodeIds || [])
+      const coll = new Set(v.collapsedNodeIds || [])
+      if (list.has(nodeId)) list.delete(nodeId)
+      else { list.add(nodeId); coll.delete(nodeId) }
+      return { ...v, listNodeIds: [...list], collapsedNodeIds: [...coll] }
+    })
+  })),
+
+  // Reorder a child among its siblings under `parentId`: move the (parent→child) edge to just before
+  // the (parent→beforeId) edge, or to the end when beforeId is null. Children order = edge order.
+  moveChild: (parentId, childId, beforeId) => set(s => {
+    const edges = [...s.edges]
+    const from = edges.findIndex(e => e.source === parentId && e.target === childId)
+    if (from < 0) return {}
+    const [moved] = edges.splice(from, 1)
+    if (beforeId == null) {
+      // append after the last sibling edge of this parent
+      let lastSib = -1
+      edges.forEach((e, i) => { if (e.source === parentId) lastSib = i })
+      edges.splice(lastSib + 1, 0, moved)
+    } else {
+      const to = edges.findIndex(e => e.source === parentId && e.target === beforeId)
+      edges.splice(to < 0 ? edges.length : to, 0, moved)
+    }
+    return { edges }
+  }),
+
   setDrillRoot: (nodeId) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, drillRoot: nodeId } : v),
   })),
