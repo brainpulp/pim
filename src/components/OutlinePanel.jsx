@@ -87,7 +87,10 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
   const scopedNodes = drillDesc ? nodes.filter(n => drillDesc.has(n.id)) : nodes
   const scopedEdges = drillDesc ? edges.filter(e => drillDesc.has(e.source) && drillDesc.has(e.target)) : edges
 
-  const [expanded, setExpanded] = useState(() => new Set()) // expanded by default (empty = all shown)
+  // Collapse state is SHARED with the graph (view.collapsedNodeIds) so the depth slider and per-node
+  // toggles stay in sync across the outline and the canvas.
+  const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
+  const collapsedSet = new Set(activeView?.collapsedNodeIds || [])
   const [dropTarget, setDropTarget] = useState(null) // { id, position: 'before'|'after'|'into' }
   const [draggingId, setDraggingId] = useState(null)
 
@@ -101,16 +104,9 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
   const frameTree   = buildTree(frameNodes, [])
   const regularTree = buildTree(regularNodes, scopedEdges.filter(e => !frameIds.has(e.source) && !frameIds.has(e.target)))
 
-  const toggleExpand = useCallback((id) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+  const toggleExpand = useCallback((id) => toggleCollapseNode(id), [toggleCollapseNode])
 
-  const isExpanded = (id) => !expanded.has(id) // items are expanded by default
+  const isExpanded = (id) => !collapsedSet.has(id) // shared with the graph's collapse state
 
   // Selecting a node on the graph → reveal + scroll to its outline row. Expand any collapsed
   // ancestor branches first (so the row is actually rendered), then scroll it into view.
@@ -120,7 +116,7 @@ export default function OutlinePanel({ selectedNodeId, onSelectNode, containerNo
     edges.forEach(e => { if (parentOf[e.target] === undefined) parentOf[e.target] = e.source })
     const anc = []; const guard = new Set(); let cur = parentOf[selectedNodeId]
     while (cur && !guard.has(cur)) { anc.push(cur); guard.add(cur); cur = parentOf[cur] }
-    if (anc.length) setExpanded(prev => (anc.some(a => prev.has(a)) ? new Set([...prev].filter(id => !anc.includes(id))) : prev))
+    anc.forEach(a => { if (collapsedSet.has(a)) toggleCollapseNode(a) })   // expand collapsed ancestors so the row shows
     const t = setTimeout(() => {
       const row = containerRef.current?.querySelector(`[data-outline-id="${CSS.escape(selectedNodeId)}"]`)
       if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' })

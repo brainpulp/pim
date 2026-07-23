@@ -733,6 +733,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     else if (dir === 'down' && i < sibs.length - 1) moveChild(parentId, childId, sibs[i + 2] ?? null)
   }, [childrenOrdered, moveChild])
 
+  // ── Depth slider (collapse/expand by level, synced to the outline via collapsedNodeIds) ──────
+  const setCollapsedNodes = useGraphStore(s => s.setCollapsedNodes)
+  const { depthById, maxDepth } = useMemo(() => {
+    const parentCount = {}; storeNodes.forEach(n => { parentCount[n.id] = 0 })
+    storeEdges.forEach(e => { if (parentCount[e.target] !== undefined) parentCount[e.target]++ })
+    const depth = {}; const q = []
+    storeNodes.forEach(n => { if (parentCount[n.id] === 0) { depth[n.id] = 0; q.push(n.id) } })
+    for (let h = 0; h < q.length; h++) {
+      const id = q[h], d = depth[id]
+      ;(childrenOrdered[id] || []).forEach(c => { if (depth[c] === undefined || d + 1 < depth[c]) { depth[c] = d + 1; q.push(c) } })
+    }
+    storeNodes.forEach(n => { if (depth[n.id] === undefined) depth[n.id] = 0 })
+    return { depthById: depth, maxDepth: Math.max(0, ...Object.values(depth)) }
+  }, [storeNodes, storeEdges, childrenOrdered])
+  const depthCap = Math.min(maxDepth, 12)
+  const [depthLevel, setDepthLevel] = useState(depthCap)
+  useEffect(() => { setDepthLevel(depthCap) }, [depthCap])   // reset when the graph changes shape
+  const applyDepthLevel = useCallback((L) => {
+    setDepthLevel(L)
+    if (L >= depthCap && depthCap >= maxDepth) { setCollapsedNodes([]); return }   // top = fully expanded
+    const ids = storeNodes.filter(n => (childrenOrdered[n.id]?.length) && (depthById[n.id] ?? 0) >= L).map(n => n.id)
+    setCollapsedNodes(ids)
+  }, [depthCap, maxDepth, storeNodes, childrenOrdered, depthById, setCollapsedNodes])
+
   // Real-time search match set (label substring). null = no filter. Non-matches are greyed, not hidden.
   const searchMatchSet = useMemo(() => {
     const q = outlineSearch.trim().toLowerCase()
@@ -2493,6 +2517,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       <div onMouseDown={() => { canvasFocused.current = true }}
         onContextMenu={e => { const t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return; e.preventDefault() }}
         style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {/* Depth slider — collapse/expand the whole graph (and the outline) by level. One notch per
+            level (capped). Top = everything expanded; drag down to fold deeper levels away. */}
+        {!readOnly && !isPresenting && depthCap > 0 && (
+          <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', borderRadius: 10, padding: '8px 7px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }}
+            title="Collapse / expand by level (affects the graph and the outline)">
+            <span style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: '0.08em' }}>LEVEL</span>
+            <input type="range" min={0} max={depthCap} step={1} value={depthLevel} list="depth-ticks"
+              onChange={e => applyDepthLevel(Number(e.target.value))}
+              style={{ writingMode: 'vertical-lr', direction: 'rtl', height: Math.max(96, depthCap * 20), width: 22, accentColor: '#5b6af0', cursor: 'pointer' }} />
+            <datalist id="depth-ticks">{Array.from({ length: depthCap + 1 }, (_, i) => <option key={i} value={i} />)}</datalist>
+            <span style={{ fontSize: '0.72rem', color: '#c5d0ff', fontWeight: 700 }}>{depthLevel >= depthCap ? 'All' : depthLevel + 1}</span>
+          </div>
+        )}
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'default' }}
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
@@ -2840,34 +2877,50 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               {label}
             </div>
           )
-          const SHAPE_OPTS = [['circle', '● Circle'], ['ellipse', '⬭ Ellipse'], ['roundrect', '▢ Rounded'], ['rect', '▮ Rectangle'], ['diamond', '◆ Diamond']]
+          const back = (label) => item(<span style={{ color: '#8090b8' }}>‹ {label}</span>, () => setBulkPanel(null))
+          const swatchGrid = (withNone, onPick) => (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 178, padding: '4px 8px 6px' }}>
+              {withNone && <div title="None" onClick={() => { onPick('__none__'); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: 'transparent', border: '1.5px solid #5b6af0', cursor: 'pointer', color: '#8090b8', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>∅</div>}
+              {COLOR_PALETTE.map(c => (
+                <div key={c} title={c} onClick={() => { onPick(c); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer', border: '1.5px solid rgba(255,255,255,0.15)' }} />
+              ))}
+            </div>
+          )
+          const listPanel = (opts, onPick) => opts.map(([label, val], i) => <div key={i}>{item(label, () => { onPick(val); close() })}</div>)
+          const PANELS = {
+            fill:   () => <>{back('Fill color')}{swatchGrid(true, c => setAll('fillColor', c === '__none__' ? 'none' : c))}</>,
+            text:   () => <>{back('Text color')}{swatchGrid(false, c => setAll('textColor', c))}</>,
+            stroke: () => <>{back('Border color')}{swatchGrid(true, c => setAll('strokeColor', c === '__none__' ? null : c))}</>,
+            shape:  () => <>{back('Shape')}{listPanel([['● Circle', 'circle'], ['⬭ Ellipse', 'ellipse'], ['▢ Rounded', 'roundrect'], ['▮ Rectangle', 'rect'], ['◆ Diamond', 'diamond']], v => setAll('shape', v))}</>,
+            width:  () => <>{back('Border width')}{listPanel([['None', 0], ['Thin', 1], ['Medium', 2], ['Thick', 3.5]], v => setAll('strokeWidth', v))}</>,
+            dash:   () => <>{back('Border style')}{listPanel([['Solid', 'solid'], ['Dashed', 'dashed'], ['Dotted', 'dotted']], v => setAll('strokeDash', v))}</>,
+            opacity:() => <>{back('Opacity')}{listPanel([['100%', 1], ['75%', 0.75], ['50%', 0.5], ['25%', 0.25]], v => setAll('opacity', v))}</>,
+            size:   () => <>{back('Size')}{listPanel([['Small', 0.6], ['Medium', 1], ['Large', 1.5], ['Extra large', 2.2]], v => setAll('scale', v))}</>,
+            motion: () => <>{back('Motion')}{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
+            style:  () => <>{back('Apply style')}{storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>}</>,
+          }
+          const row = (label, panel) => item(<>{label}<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel(panel))
           return (
             <>
               <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
-                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 180 }}>
+                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto' }}>
                 <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
-                {bulkPanel === 'color' ? (
+                {bulkPanel && PANELS[bulkPanel] ? PANELS[bulkPanel]() : (
                   <>
-                    {item(<span style={{ color: '#8090b8' }}>‹ Fill color</span>, () => setBulkPanel(null))}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 178, padding: '4px 8px 6px' }}>
-                      <div title="No fill" onClick={() => { setAll('fillColor', 'none'); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: 'transparent', border: '1.5px solid #5b6af0', cursor: 'pointer', color: '#8090b8', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>∅</div>
-                      {COLOR_PALETTE.map(c => (
-                        <div key={c} title={c} onClick={() => { setAll('fillColor', c); close() }}
-                          style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer', border: '1.5px solid rgba(255,255,255,0.15)' }} />
-                      ))}
-                    </div>
-                  </>
-                ) : bulkPanel === 'shape' ? (
-                  <>
-                    {item(<span style={{ color: '#8090b8' }}>‹ Shape</span>, () => setBulkPanel(null))}
-                    {SHAPE_OPTS.map(([s, label]) => item(label, () => { setAll('shape', s); close() }))}
-                  </>
-                ) : (
-                  <>
-                    {item(<>Fill color<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel('color'))}
-                    {item(<>Shape<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel('shape'))}
-                    {item('Hide these', () => { setAll('visible', false); setSelectedNodeIds(new Set()); close() })}
+                    {row('Fill color', 'fill')}
+                    {row('Text color', 'text')}
+                    {row('Border color', 'stroke')}
+                    {row('Border width', 'width')}
+                    {row('Border style', 'dash')}
+                    {row('Shape', 'shape')}
+                    {row('Size', 'size')}
+                    {row('Opacity', 'opacity')}
+                    {row('Motion', 'motion')}
+                    {row('Apply style', 'style')}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                    {item('Release anchors', () => { ids.forEach(id => releaseAnchor(id)); ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = null; sn.fy = null } }); simRef.current?.alpha(0.4).restart(); close() })}
+                    {item('Hide these', () => { pushUndo(); ids.forEach(id => setNodeViewProp(id, 'visible', false)); setSelectedNodeIds(new Set()); close() })}
                     {item(<span style={{ color: '#f0a0a0' }}>Delete these</span>, () => { setConfirmDeleteNodes(ids); close() })}
                   </>
                 )}

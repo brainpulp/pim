@@ -16,14 +16,18 @@ export const DEFAULT_NODE_PROPS = {
   containedIn: null, // nodeId of a frame node, or null (per-view)
 }
 
-// Unified palette used for fill colors, text colors, and background colors
-// Tailwind 500-series — MIT licensed, one color per hue, proven in UI design
+// Unified palette for fill/text/background colors. Radix Colors (MIT) — the step-9 "solid" values,
+// engineered to be vivid and legible on dark UIs, arranged by hue; plus a light-tint row and neutrals.
 export const PALETTE = [
-  '#f43f5e', '#ef4444', '#f97316', '#f59e0b', '#eab308',
-  '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
-  '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7',
-  '#d946ef', '#ec4899',
-  '#ffffff', '#94a3b8', '#334155', '#0f172a',
+  // Vivid solids (Radix step 9), red → pink around the wheel
+  '#e5484d', '#e54d2e', '#f76b15', '#ffb224', '#ffc53d',
+  '#bdee63', '#46a758', '#30a46c', '#12a594', '#00a2c7',
+  '#0090ff', '#3e63dd', '#6e56cf', '#8e4ec6', '#ab4aba',
+  '#d6409f', '#e93d82', '#7ce2fe',
+  // Light tints (soft fills / light text)
+  '#ffd1c9', '#ffe4a3', '#d7f5c4', '#c4f1e8', '#cfe0ff', '#e7d7ff',
+  // Neutrals (white → near-black)
+  '#ffffff', '#c5d0ff', '#8b93b8', '#4a5272', '#232a3e', '#0f1420',
 ]
 
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none', 'image']
@@ -613,6 +617,11 @@ const useGraphStore = create((set, get) => ({
       if (c.has(nodeId)) c.delete(nodeId); else c.add(nodeId)
       return { ...v, collapsedNodeIds: [...c] }
     })
+  })),
+
+  // Set the collapsed set outright (used by the depth slider to collapse/expand by level).
+  setCollapsedNodes: (ids) => set(s => ({
+    views: s.views.map(v => v.id === s.activeViewId ? { ...v, collapsedNodeIds: [...new Set(ids)] } : v),
   })),
 
   // "Show children as list" — render a node's whole subtree as one nested list card (per active view).
