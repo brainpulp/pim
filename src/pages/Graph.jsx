@@ -567,6 +567,31 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }, 0)
   }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line
 
+  // "Make current view a slide": create a frame sized to exactly the visible viewport (current
+  // pan/zoom) and add it to the current slideshow — a one-click snapshot of what you're looking at.
+  const makeCurrentViewAsSlide = useCallback(() => {
+    if (!svgRef.current) return
+    const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight
+    const T = zoomTransformRef.current
+    const [cx, cy] = T.invert([W / 2, H / 2])
+    const inset = 0.94   // small margin so the frame's edge isn't flush against the content
+    const halfW = (W / T.k) / 2 * inset, halfH = (H / T.k) / 2 * inset
+    pushUndo()
+    const id = addNode('Slide', null, cx, cy)
+    setNodeViewProp(id, 'shape', 'frame')
+    setNodeViewProp(id, 'fillColor', 'none')
+    setNodeViewProp(id, 'strokeColor', null)
+    setNodeViewProp(id, 'frameHalfW', halfW)
+    setNodeViewProp(id, 'frameHalfH', halfH)
+    addSlide(id)
+    setShowSlideSidebar(true)
+    setTimeout(() => {
+      const sn = simNodesRef.current.find(n => n.id === id)
+      if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
+      scheduleRender()
+    }, 0)
+  }, [addNode, setNodeViewProp, addSlide, pushUndo, scheduleRender])
+
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
   const drillRoot     = activeView?.drillRoot || null
@@ -707,6 +732,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, propFilter, storePropertyDefs])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
+
+  // Fade nodes in/out when their visibility changes (depth slider, collapse) instead of popping.
+  // `mounted` keeps a node in the DOM through its fade-out; opacity animates via a CSS transition.
+  const mountedRef = useRef(null)
+  if (mountedRef.current === null) mountedRef.current = new Set(visibleNodeIds)
+  const nodeOpacityRef = useRef({})
+  const fadeTimersRef = useRef({})
+  const [, setFadeTick] = useState(0)
+  useEffect(() => {
+    const vis = visibleNodeIds, mounted = mountedRef.current, op = nodeOpacityRef.current
+    let changed = false
+    vis.forEach(id => {
+      if (!mounted.has(id)) { mounted.add(id); op[id] = 0; changed = true }        // new → mount at 0 (fade in)
+      if (fadeTimersRef.current[id]) { clearTimeout(fadeTimersRef.current[id]); delete fadeTimersRef.current[id] }
+    })
+    mounted.forEach(id => {
+      if (!vis.has(id) && !fadeTimersRef.current[id]) {                              // gone → fade to 0, unmount later
+        op[id] = 0; changed = true
+        fadeTimersRef.current[id] = setTimeout(() => { mounted.delete(id); delete op[id]; delete fadeTimersRef.current[id]; setFadeTick(t => t + 1) }, 400)
+      }
+    })
+    requestAnimationFrame(() => { let ch = false; vis.forEach(id => { if (op[id] !== 1) { op[id] = 1; ch = true } }); if (ch) setFadeTick(t => t + 1) })
+    if (changed) setFadeTick(t => t + 1)
+  }, [visibleNodeIds])
 
   // ── List-card ("show children as list") support ──────────────────────────────
   const toggleListNode = useGraphStore(s => s.toggleListNode)
@@ -2396,7 +2445,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const edgeData = simEdgesRef.current.map(e => {
     const s = e.source, t = e.target
     if (!s || !t || s.x == null) return null
-    if (!visibleNodeIds.has(s.id) || !visibleNodeIds.has(t.id)) return null
+    if (!mountedRef.current.has(s.id) || !mountedRef.current.has(t.id)) return null
+    const edgeOpacity = Math.min(nodeOpacityRef.current[s.id] ?? 1, nodeOpacityRef.current[t.id] ?? 1)   // fade with endpoints
     const isSel = selected?.id === e.id && selected?.type === 'edge'
     const svp = getVP(s.id), tvp = getVP(t.id)
     const sLabel = storeNodes.find(n => n.id === s.id)?.label || ''
@@ -2421,7 +2471,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Blur fade: if an endpoint node is blurred, the edge dissolves into its halo.
     const sBlur = svp.borderBlur || 0, tBlur = tvp.borderBlur || 0
     const lineLen = Math.hypot(tipX - x1, tipY - y1) || 1
-    return { id: e.id, x1, y1, x2: basX, y2: basY, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen }
+    return { id: e.id, x1, y1, x2: basX, y2: basY, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen, opacity: edgeOpacity }
   }).filter(Boolean)
 
   const frameSimNodes = simNodesRef.current.filter(n => (viewNodeProps[n.id]?.shape) === 'frame')
@@ -2525,6 +2575,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : null)); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
+                      ['Slide from current view', () => { makeCurrentViewAsSlide(); setShowAddMenu(false) }],
                       ['View', () => { addView(); setShowAddMenu(false) }],
                     ].map(([label, action]) => (
                       <button key={label} onClick={action}
@@ -2624,14 +2675,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             ))}
 
             {/* 2. Edges â€" node fill covers the tips cleanly. Hidden in Organize unless "segments" on. */}
-            {(!organize || organize.showSegments) && edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen }) => {
+            {(!organize || organize.showSegments) && edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen, opacity }) => {
               const hasBlur = sBlur > 0 || tBlur > 0
               const gid = `eg-${id}`
               const sFade = Math.min(0.5, (sBlur * 2) / lineLen)
               const tFade = Math.min(0.5, (tBlur * 2) / lineLen)
               const lineStroke = hasBlur ? `url(#${gid})` : edgeColor
               return (
-              <g key={id} onClick={ev => { ev.stopPropagation(); setSelected({ id, type: 'edge' }) }} style={{ cursor:'pointer' }}>
+              <g key={id} onClick={ev => { ev.stopPropagation(); setSelected({ id, type: 'edge' }) }} style={{ cursor:'pointer', opacity: opacity ?? 1, transition: 'opacity 0.38s ease' }}>
                 {hasBlur && (
                   <defs>
                     <linearGradient id={gid} gradientUnits="userSpaceOnUse" x1={x1} y1={y1} x2={tipX} y2={tipY}>
@@ -2737,8 +2788,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {/* 3b placeholder — 3D viewer is rendered as absolute div outside SVG below */}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id)).map(n => (
-              <g key={n.id} style={{ opacity: searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1, transition: 'opacity 0.15s' }}>
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id)).map(n => {
+              const fo = nodeOpacityRef.current[n.id] ?? 1
+              const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
+              return (
+              <g key={n.id} style={{ opacity: fo * dim, transition: 'opacity 0.38s ease', pointerEvents: fo === 0 ? 'none' : undefined }}>
               <NodeShape node={n}
                 modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
@@ -2778,7 +2832,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onMouseLeave={hideToolbar}
               />
               </g>
-            ))}
+            )})}
 
             {/* List cards — a node whose subtree is shown as one nested, editable outline card. */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && listNodeSet.has(n.id)).map(n => (
@@ -2885,6 +2939,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
+                    {item('Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
                     {item('Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
                     {item(<>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
                     {item('Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
