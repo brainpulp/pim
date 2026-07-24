@@ -590,7 +590,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
       scheduleRender()
     }, 0)
-  }, [addNode, setNodeViewProp, addSlide, pushUndo, scheduleRender])
+  }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line -- pushUndo/scheduleRender are declared later (TDZ)
 
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
