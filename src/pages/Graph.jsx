@@ -7,6 +7,7 @@ import OutlinePanel from '../components/OutlinePanel'
 import { saveProject, uploadModel, uploadThumbnail } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
+import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 
 // â"€â"€ Text measurement â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 let _measureCanvas = null
@@ -421,6 +422,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [ctxColors, setCtxColors] = useState(false)      // context-menu background-color submenu open
   const [bulkMenu, setBulkMenu] = useState(null)         // { px, py, ids } right-click menu for a multi-selection
   const [bulkPanel, setBulkPanel] = useState(null)       // 'color' | 'shape' submenu open in the bulk menu
+  const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
@@ -732,6 +734,43 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (dir === 'up' && i > 0) moveChild(parentId, childId, sibs[i - 1])
     else if (dir === 'down' && i < sibs.length - 1) moveChild(parentId, childId, sibs[i + 2] ?? null)
   }, [childrenOrdered, moveChild])
+
+  // Build a clean, self-contained SVG of the CURRENT graph (visible nodes as shapes + labels, edges
+  // as lines) for export — no foreignObjects, so it rasterizes/prints reliably.
+  const captureGraphSVG = useCallback(() => {
+    const vis = simNodesRef.current.filter(n => visibleNodeIdsRef.current.has(n.id) && n.x != null && !isNaN(n.x))
+    if (!vis.length) return null
+    const pos = Object.fromEntries(vis.map(n => [n.id, n]))
+    const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+    const pad = 70
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    vis.forEach(n => { const r = NODE_R * ((getVP(n.id).scale) || 1); minX = Math.min(minX, n.x - r); maxX = Math.max(maxX, n.x + r); minY = Math.min(minY, n.y - r); maxY = Math.max(maxY, n.y + r) })
+    const W = Math.round(maxX - minX + pad * 2), H = Math.round(maxY - minY + pad * 2)
+    const ox = -minX + pad, oy = -minY + pad
+    const edgesSvg = simEdgesRef.current.filter(e => pos[e.source.id] && pos[e.target.id]).map(e => {
+      const s = pos[e.source.id], t = pos[e.target.id]
+      return `<line x1="${(s.x + ox).toFixed(1)}" y1="${(s.y + oy).toFixed(1)}" x2="${(t.x + ox).toFixed(1)}" y2="${(t.y + oy).toFixed(1)}" stroke="#5a6488" stroke-width="1.2"/>`
+    }).join('')
+    const nodesSvg = vis.map(n => {
+      const vp = getVP(n.id); const r = NODE_R * (vp.scale || 1)
+      const fill = (vp.fillColor && vp.fillColor !== 'none' && vp.fillColor !== 'transparent') ? vp.fillColor : '#12122a'
+      const tcol = vp.textColor || '#e8eeff'
+      const cx = (n.x + ox), cy = (n.y + oy)
+      const fs = Math.max(8, r * 0.32)
+      const words = String(n.label || '').split(/\s+/).filter(Boolean)
+      const maxCh = Math.max(6, Math.floor((r * 1.7) / (fs * 0.56)))
+      const lines = []; let cur = ''
+      for (const w of words) { if (!cur) cur = w; else if ((cur + ' ' + w).length <= maxCh) cur += ' ' + w; else { lines.push(cur); cur = w } if (lines.length >= 3) break }
+      if (cur && lines.length < 3) lines.push(cur)
+      const y0 = cy - (lines.length - 1) / 2 * fs * 1.05
+      const text = lines.map((ln, i) => `<tspan x="${cx.toFixed(1)}" y="${(y0 + i * fs * 1.05).toFixed(1)}">${esc(ln.slice(0, maxCh))}</tspan>`).join('')
+      return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="rgba(232,238,255,0.25)" stroke-width="1"/>`
+        + `<text text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="${fs.toFixed(1)}" fill="${tcol}">${text}</text>`
+    }).join('')
+    const bg = bgColor || '#0c0c1a'
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${bg}"/>${edgesSvg}${nodesSvg}</svg>`
+    return { svg, width: W, height: H, bg }
+  }, [getVP, bgColor])
 
   // ── Depth slider (collapse/expand by level, synced to the outline via collapsedNodeIds) ──────
   const setCollapsedNodes = useGraphStore(s => s.setCollapsedNodes)
@@ -2442,6 +2481,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           <div style={{ display:'flex', gap:5, flexWrap:'wrap', alignItems:'center' }}>
             <button style={sideToolBtnStyle} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
             <button style={sideToolBtnStyle} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
+            <button style={sideToolBtnStyle} onClick={() => setShowExport(true)} title="Export outline / graph to PDF or Word">⤓ Export</button>
             <button style={{ ...sideToolBtnStyle, color: hideFrameOutlines ? '#f6ad55' : undefined }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">{hideFrameOutlines ? '⊞' : '⊟'}</button>
             {/* BG color */}
             <div style={{ position:'relative' }}>
@@ -2920,6 +2960,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             </>
           )
         })()}
+
+        {showExport && (
+          <ExportDialog projectName={projectName} nodes={storeNodes} edges={storeEdges} views={views}
+            activeViewId={activeViewId} captureGraphSVG={captureGraphSVG} onClose={() => setShowExport(false)} />
+        )}
 
         {/* Always-on 3D viewers (rotate mode 'always', not currently selected) */}
         {simNodesRef.current.filter(n => {
@@ -3640,6 +3685,80 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// ─── ExportDialog ───────────────────────────────────────────────────────────
+// Quick export: outline and/or graph, to PDF (print dialog) or Word (.doc), for the selected views.
+// The graph image is only produced for the ACTIVE view (the one with a live layout).
+function ExportDialog({ projectName, nodes, edges, views, activeViewId, captureGraphSVG, onClose }) {
+  const [doOutline, setDoOutline] = useState(true)
+  const [doGraph, setDoGraph] = useState(true)
+  const [format, setFormat] = useState('pdf')
+  const [viewIds, setViewIds] = useState(() => new Set([activeViewId]))
+  const [busy, setBusy] = useState(false)
+  const toggleView = (id) => setViewIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s })
+
+  const run = async () => {
+    if (!doOutline && !doGraph) return
+    setBusy(true)
+    try {
+      const chosen = views.filter(v => viewIds.has(v.id))
+      const cap = doGraph ? captureGraphSVG() : null
+      const graphPng = cap ? await svgToPng(cap.svg, cap.width, cap.height, cap.bg) : null
+      const sections = chosen.map(v => {
+        const hidden = new Set(Object.entries(v.nodeProps || {}).filter(([, p]) => p?.visible === false).map(([id]) => id))
+        return {
+          viewName: v.name || 'View',
+          outline: doOutline ? outlineHTML(nodes, edges, hidden) : null,
+          graphPng: (doGraph && v.id === activeViewId) ? graphPng : null,
+        }
+      })
+      const html = buildDocumentHTML(projectName || 'PIM export', sections, format === 'word')
+      if (format === 'word') downloadDoc(html, (projectName || 'pim'))
+      else printPDF(html)
+      onClose()
+    } finally { setBusy(false) }
+  }
+
+  const row = { display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.84rem', color: '#c5d0ff', cursor: 'pointer', padding: '3px 0' }
+  const multipleWithGraph = doGraph && viewIds.size > 1
+  return (
+    <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(4,5,14,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onMouseDown={e => e.stopPropagation()} style={{ width: 'min(380px,92vw)', maxHeight: '84vh', overflow: 'auto', background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 12, padding: 18, boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <span style={{ color: '#e8eeff', fontSize: '1rem', fontWeight: 700 }}>Export</span>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#8090b8', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ fontSize: '0.66rem', letterSpacing: '0.08em', color: '#7080a0', margin: '4px 0 4px' }}>INCLUDE</div>
+        <label style={row}><input type="checkbox" checked={doOutline} onChange={e => setDoOutline(e.target.checked)} /> Outline (nested list)</label>
+        <label style={row}><input type="checkbox" checked={doGraph} onChange={e => setDoGraph(e.target.checked)} /> Graph (image of the current layout)</label>
+
+        <div style={{ fontSize: '0.66rem', letterSpacing: '0.08em', color: '#7080a0', margin: '12px 0 4px' }}>FORMAT</div>
+        <label style={row}><input type="radio" name="fmt" checked={format === 'pdf'} onChange={() => setFormat('pdf')} /> PDF (print dialog)</label>
+        <label style={row}><input type="radio" name="fmt" checked={format === 'word'} onChange={() => setFormat('word')} /> Word (.doc)</label>
+
+        <div style={{ fontSize: '0.66rem', letterSpacing: '0.08em', color: '#7080a0', margin: '12px 0 4px' }}>VIEWS</div>
+        <div style={{ maxHeight: 140, overflow: 'auto', border: '1px solid #23233e', borderRadius: 6, padding: '4px 8px' }}>
+          {views.map(v => (
+            <label key={v.id} style={row}>
+              <input type="checkbox" checked={viewIds.has(v.id)} onChange={() => toggleView(v.id)} />
+              {v.name || 'View'}{v.id === activeViewId && <span style={{ color: '#8ecbff', fontSize: '0.68rem' }}>active</span>}
+            </label>
+          ))}
+        </div>
+        {multipleWithGraph && <div style={{ fontSize: '0.72rem', color: '#f0b090', marginTop: 6 }}>The graph image is exported for the active view only; other views export the outline.</div>}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <button onClick={onClose} style={{ background: '#181834', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 7, padding: '7px 14px', fontSize: '0.82rem', cursor: 'pointer' }}>Cancel</button>
+          <button onClick={run} disabled={busy || (!doOutline && !doGraph) || viewIds.size === 0}
+            style={{ background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 7, padding: '7px 16px', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', opacity: (busy || (!doOutline && !doGraph) || viewIds.size === 0) ? 0.5 : 1 }}>
+            {busy ? 'Exporting…' : format === 'word' ? 'Download .doc' : 'Open PDF'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
