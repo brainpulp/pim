@@ -2517,18 +2517,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       <div onMouseDown={() => { canvasFocused.current = true }}
         onContextMenu={e => { const t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return; e.preventDefault() }}
         style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {/* Depth slider — collapse/expand the whole graph (and the outline) by level. One notch per
-            level (capped). Top = everything expanded; drag down to fold deeper levels away. */}
+        {/* Depth slider — collapse/expand the whole graph (and outline) by level. Top = all expanded,
+            drag down to fold deeper levels away; one notch per level. */}
         {!readOnly && !isPresenting && depthCap > 0 && (
-          <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', borderRadius: 10, padding: '8px 7px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }}
-            title="Collapse / expand by level (affects the graph and the outline)">
-            <span style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: '0.08em' }}>LEVEL</span>
-            <input type="range" min={0} max={depthCap} step={1} value={depthLevel} list="depth-ticks"
-              onChange={e => applyDepthLevel(Number(e.target.value))}
-              style={{ writingMode: 'vertical-lr', direction: 'rtl', height: Math.max(96, depthCap * 20), width: 22, accentColor: '#5b6af0', cursor: 'pointer' }} />
-            <datalist id="depth-ticks">{Array.from({ length: depthCap + 1 }, (_, i) => <option key={i} value={i} />)}</datalist>
-            <span style={{ fontSize: '0.72rem', color: '#c5d0ff', fontWeight: 700 }}>{depthLevel >= depthCap ? 'All' : depthLevel + 1}</span>
-          </div>
+          <DepthSlider level={depthLevel} max={depthCap} onChange={applyDepthLevel} />
         )}
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'default' }}
@@ -3648,6 +3640,42 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// ─── DepthSlider ────────────────────────────────────────────────────────────
+// Thin vertical slider with one notch per level. Top = "All" (fully expanded); drag the thumb DOWN
+// to fold deeper levels away. Sets the shared collapse level (graph + outline).
+function DepthSlider({ level, max, onChange }) {
+  const trackRef = useRef(null)
+  const H = Math.max(90, Math.min(280, max * 26))
+  const setFromY = (clientY) => {
+    const r = trackRef.current?.getBoundingClientRect(); if (!r) return
+    const t = Math.max(0, Math.min(1, (clientY - r.top) / r.height))
+    onChange(Math.round((1 - t) * max))   // top = max (All), bottom = 0
+  }
+  const onDown = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    setFromY(e.clientY)
+    const mv = ev => setFromY(ev.clientY)
+    const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up) }
+    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up)
+  }
+  const thumbPct = (1 - level / max) * 100
+  return (
+    <div onMouseDown={e => e.stopPropagation()} title="Collapse / expand by level (graph + outline)"
+      style={{ position: 'absolute', top: 56, left: 10, zIndex: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, background: 'rgba(18,18,42,0.92)', border: '1px solid #2d3a6a', borderRadius: 8, padding: '6px 3px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', width: 26 }}>
+      <span style={{ fontSize: '0.56rem', fontWeight: 700, letterSpacing: '0.04em', color: level >= max ? '#8ecbff' : '#7080a0' }}>All</span>
+      <div ref={trackRef} onMouseDown={onDown} style={{ position: 'relative', width: 16, height: H, cursor: 'pointer' }}>
+        <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 3, transform: 'translateX(-50%)', background: '#2a2a44', borderRadius: 2 }} />
+        <div style={{ position: 'absolute', left: '50%', top: `${thumbPct}%`, bottom: 0, width: 3, transform: 'translateX(-50%)', background: '#5b6af0', borderRadius: 2 }} />
+        {Array.from({ length: max + 1 }, (_, i) => (
+          <div key={i} style={{ position: 'absolute', left: '50%', top: `${(1 - i / max) * 100}%`, width: 9, height: 1.5, transform: 'translate(-50%,-50%)', background: '#3a4358' }} />
+        ))}
+        <div style={{ position: 'absolute', left: '50%', top: `${thumbPct}%`, width: 13, height: 13, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: '#8ea0ff', border: '2px solid #14142a', boxShadow: '0 1px 4px rgba(0,0,0,0.6)' }} />
+      </div>
+      <span style={{ fontSize: '0.64rem', fontWeight: 700, color: '#c5d0ff' }}>{level >= max ? '·' : level + 1}</span>
     </div>
   )
 }
@@ -4809,6 +4837,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
+  const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
   const [newStyleName, setNewStyleName] = useState('')
   const [notesDraft, setNotesDraft] = useState(notes)
   const [emojiInput, setEmojiInput] = useState('')
@@ -4869,7 +4898,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   // Sub-sections fly out beside the toolbar (flip to the left near the right screen edge).
   const flipLeft = typeof window !== 'undefined' && x > window.innerWidth * 0.6
   const flyout = {
-    position:'absolute', top:-1,
+    position:'absolute', top: Math.max(-1, panelTop - 6),   // align to the row that opened it (near the cursor)
     [flipLeft ? 'right' : 'left']: '100%',
     [flipLeft ? 'marginRight' : 'marginLeft']: 6,
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
@@ -4882,8 +4911,8 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const textRow = (label, onClick, opts = {}) => {
     const isOpen = opts.opens != null && panel === opts.opens
     return (
-      <div onClick={onClick}
-        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens !== undefined) setPanel(opts.opens) }}
+      <div onClick={e => { if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop); onClick?.() }}
+        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens !== undefined) { setPanel(opts.opens); if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop) } }}
         onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#23234a' : 'transparent' }}
         style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
           background: isOpen ? '#23234a' : 'transparent',
