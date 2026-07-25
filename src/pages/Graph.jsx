@@ -592,6 +592,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }, 0)
   }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line -- pushUndo/scheduleRender are declared later (TDZ)
 
+  // "Update slide": resize/reposition an existing slide's frame to match the current viewport.
+  const updateSlideToView = useCallback((frameId) => {
+    if (!svgRef.current || !frameId) return
+    const W = svgRef.current.clientWidth, H = svgRef.current.clientHeight
+    const T = zoomTransformRef.current
+    const [cx, cy] = T.invert([W / 2, H / 2])
+    const inset = 0.94
+    const halfW = (W / T.k) / 2 * inset, halfH = (H / T.k) / 2 * inset
+    pushUndo()
+    setNodeViewProp(frameId, 'frameHalfW', halfW)
+    setNodeViewProp(frameId, 'frameHalfH', halfH)
+    const sn = simNodesRef.current.find(n => n.id === frameId)
+    if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
+    scheduleRender()
+  }, [setNodeViewProp]) // eslint-disable-line -- pushUndo/scheduleRender are declared later (TDZ)
+
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
   const drillRoot     = activeView?.drillRoot || null
@@ -2575,7 +2591,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : null)); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
-                      ['Slide from current view', () => { makeCurrentViewAsSlide(); setShowAddMenu(false) }],
                       ['View', () => { addView(); setShowAddMenu(false) }],
                     ].map(([label, action]) => (
                       <button key={label} onClick={action}
@@ -3476,6 +3491,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           renameSlideshow={renameSlideshow}
           setActiveSlideshowId={setActiveSlideshowId}
           setSlideBgColor={setSlideBgColor}
+          onAddSlideFromView={makeCurrentViewAsSlide}
+          onUpdateSlideToView={updateSlideToView}
           onClose={() => setShowSlideSidebar(false)}
           canvasBtnStyle={canvasBtnStyle}
         />
@@ -3505,15 +3522,17 @@ function ThreeDWrapper({ children, onFocus }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const [dragIdx, setDragIdx] = useState(null)
   const [dropIdx, setDropIdx] = useState(null)
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
+  const [currentIdx, setCurrentIdx] = useState(0)   // which slide "Update slide" targets (last clicked / presented)
   const containerRef = useRef()
   const [slideMenu, setSlideMenu] = useState(null)   // { frameId, label, x, y } — right-click options
+  const activeIdx = presentingSlideIdx ?? currentIdx
 
   // Whole-card drag with click threshold â€" click zooms, drag reorders
   const handleCardMouseDown = (e, idx) => {
@@ -3546,6 +3565,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       if (!dragging) {
+        setCurrentIdx(idx)
         zoomToFrame(slideSimNodes[idx])
         setDragIdx(null); setDropIdx(null)
         return
@@ -3615,6 +3635,15 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
           style={{ fontSize:'0.72rem', padding:'3px 8px', borderRadius:4, border:'1px solid #3a4878', background:'transparent', color:'#9aa0c8', cursor:'pointer', marginTop:2 }}>+ new slideshow</button>
       </div>
 
+      {/* Capture / update slides from the current viewport — sits with the slideshow controls. */}
+      <div style={{ display:'flex', gap:6, marginBottom:10 }}>
+        <button onClick={() => onAddSlideFromView?.()} title="Add a new slide framing the current view"
+          style={{ flex:1, fontSize:'0.72rem', padding:'5px 6px', borderRadius:5, border:'1px solid #3a4a8a', background:'#1a1f4a', color:'#c5d0ff', cursor:'pointer', whiteSpace:'nowrap' }}>＋ From view</button>
+        <button onClick={() => { const fn = slideSimNodes[activeIdx]; if (fn) onUpdateSlideToView?.(fn.id) }} disabled={!slideSimNodes[activeIdx]}
+          title="Resize the current slide to match the current view"
+          style={{ flex:1, fontSize:'0.72rem', padding:'5px 6px', borderRadius:5, border:'1px solid #2a3358', background:'transparent', color:'#c5d0ff', cursor:'pointer', whiteSpace:'nowrap', opacity: slideSimNodes[activeIdx] ? 1 : 0.5 }}>⟳ Update slide</button>
+      </div>
+
       {slideSimNodes.map((fn, i) => {
         const fvp = getVP(fn.id)
         const fr = NODE_R * (fvp.scale || 1)
@@ -3638,7 +3667,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
               opacity: dragIdx === i ? 0.4 : 1,
               borderRadius: 6 }}>
             <div style={{ borderRadius:6, overflow:'hidden',
-              border: presentingSlideIdx === i ? '2px solid #5b6af0' : '1.5px solid #1e2a3a',
+              border: activeIdx === i ? '2px solid #5b6af0' : '1.5px solid #1e2a3a',
               background: '#111827' }}>
               <svg width={TW} height={TH}
                 viewBox={`${-halfW} ${-halfH} ${halfW*2} ${halfH*2}`}
