@@ -867,41 +867,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setCollapsedNodes(ids)
   }, [depthCap, maxDepth, storeNodes, childrenOrdered, depthById, setCollapsedNodes])
 
-  // ── Children effects engine (chase / marquee highlight around a node's children) ──────────────
-  // A parent's viewProps.childrenEffect = { type:'chase', speedSec, color:'#..'|'rainbow', span, style }.
-  // One RAF loop computes which children are "lit" each step; the overlay layer draws the highlight.
-  const effectParents = useMemo(
-    () => storeNodes.filter(n => (viewNodeProps[n.id] || {}).childrenEffect && (childrenOrdered[n.id]?.length)).map(n => n.id),
+  // ── Children effects — a per-parent viewProps.childrenEffect drives a coordinated animation over the
+  // node's children (chase / colour wave / pulse / twinkle / ripple / orbit). The animation runs in an
+  // isolated <EffectsOverlay> (its own RAF), so continuous effects don't re-render the whole graph.
+  const effectParentList = useMemo(
+    () => storeNodes.filter(n => (viewNodeProps[n.id] || {}).childrenEffect && (childrenOrdered[n.id]?.length))
+      .map(n => ({ id: n.id, fx: viewNodeProps[n.id].childrenEffect })),
     [storeNodes, viewNodeProps, childrenOrdered])
-  const litRef = useRef({})              // childId -> { color, intensity, style }
-  const litKeyRef = useRef('')
-  const [, setEffectTick] = useState(0)
-  useEffect(() => {
-    if (!effectParents.length) { if (litKeyRef.current) { litRef.current = {}; litKeyRef.current = ''; setEffectTick(x => x + 1) } return }
-    let raf
-    const loop = (t) => {
-      const now = t / 1000, lit = {}
-      effectParents.forEach(pid => {
-        const fx = (viewNodePropsRef.current[pid] || {}).childrenEffect; if (!fx) return
-        const kids = (childrenOrdered[pid] || []).filter(id => visibleNodeIdsRef.current.has(id))
-        const n = kids.length; if (!n) return
-        const step = Math.max(0.08, fx.speedSec || 0.4)
-        const span = Math.max(1, Math.min(6, fx.span || 1))
-        const idx = Math.floor(now / step) % n
-        for (let s = 0; s < span; s++) {
-          const child = kids[((idx - s) % n + n) % n]
-          const intensity = 1 - s / (span + 0.001)
-          const color = fx.color === 'rainbow' ? `hsl(${Math.round((now * 90 + idx * (360 / n)) % 360)},90%,60%)` : (fx.color || '#ffd24d')
-          if (!lit[child] || lit[child].intensity < intensity) lit[child] = { color, intensity, style: fx.style || 'halo' }
-        }
-      })
-      const key = Object.keys(lit).sort().map(id => id + lit[id].color + lit[id].intensity.toFixed(2)).join('|')
-      if (key !== litKeyRef.current) { litKeyRef.current = key; litRef.current = lit; setEffectTick(x => x + 1) }   // re-render only when the marquee advances
-      raf = requestAnimationFrame(loop)
-    }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [effectParents, childrenOrdered])
 
   // Real-time search match set (label substring). null = no filter. Non-matches are greyed, not hidden.
   const searchMatchSet = useMemo(() => {
@@ -2911,23 +2883,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onExit={() => toggleListNode(n.id)} />
             ))}
 
-            {/* Children-effects overlay: halo / colour flash on the currently-lit children (chaser). */}
-            {litKeyRef.current && (
-              <g pointerEvents="none">
-                {simNodesRef.current.filter(n => litRef.current[n.id] && mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame').map(n => {
-                  const hl = litRef.current[n.id]
-                  const r = NODE_R * (getVP(n.id).scale || 1) + 5
-                  return (
-                    <g key={'fx' + n.id} transform={`translate(${n.x},${n.y})`} style={{ transition: 'opacity 0.15s' }}>
-                      {(hl.style === 'color' || hl.style === 'both') && <circle r={r - 3} fill={hl.color} opacity={hl.intensity * 0.42} />}
-                      {(hl.style === 'halo' || hl.style === 'both' || !hl.style) && (
-                        <circle r={r} fill="none" stroke={hl.color} strokeWidth={4} opacity={hl.intensity}
-                          style={{ filter: `drop-shadow(0 0 7px ${hl.color})` }} />
-                      )}
-                    </g>
-                  )
-                })}
-              </g>
+            {/* Children-effects overlay (chase / colour wave / pulse / twinkle / ripple / orbit). */}
+            {effectParentList.length > 0 && (
+              <EffectsOverlay parents={effectParentList} simNodesRef={simNodesRef} getVP={getVP}
+                visibleRef={visibleNodeIdsRef} childrenOrdered={childrenOrdered} scheduleRender={scheduleRender} />
             )}
 
             {/* Rubber-band selection rect — on top of nodes/images */}
@@ -3915,6 +3874,89 @@ function ExportDialog({ projectName, nodes, edges, views, activeViewId, captureG
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── EffectsOverlay ─────────────────────────────────────────────────────────
+// Animates a node's children as a group. Runs its OWN RAF and re-renders only itself, so continuous
+// effects don't re-render the whole graph. Highlights are drawn in the child's ACTUAL shape.
+function shapeOutline(shape, hw, hh, props) {
+  if (shape === 'ellipse') return <ellipse rx={hw} ry={hh} {...props} />
+  if (shape === 'rect') return <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} {...props} />
+  if (shape === 'roundrect') return <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx={Math.min(hw, hh) * 0.4} {...props} />
+  if (shape === 'diamond') return <polygon points={`0,${-hh} ${hw},0 0,${hh} ${-hw},0`} {...props} />
+  return <circle r={Math.max(hw, hh)} {...props} />
+}
+function EffectsOverlay({ parents, simNodesRef, getVP, visibleRef, childrenOrdered, scheduleRender }) {
+  const [, setT] = useState(0)
+  const orbitPrevRef = useRef(new Set())
+  const hasOrbit = parents.some(p => p.fx?.type === 'orbit')
+  useEffect(() => {
+    let raf
+    const loop = () => { setT(x => (x + 1) % 1e6); if (hasOrbit) scheduleRender(); raf = requestAnimationFrame(loop) }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [hasOrbit, scheduleRender])
+  // Release any orbit pins when the overlay unmounts (effect turned off / node deleted).
+  useEffect(() => () => { orbitPrevRef.current.forEach(id => { const n = simNodesRef.current.find(x => x.id === id); if (n) { n.fx = null; n.fy = null } }) }, []) // eslint-disable-line
+
+  const now = performance.now() / 1000
+  const nodeMap = new Map(simNodesRef.current.map(n => [n.id, n]))
+  const hls = []
+  const orbitNow = new Set()
+  const colOf = (fx, cid, i, n) => {
+    if (fx.color === 'rainbow') return `hsl(${Math.round((now * 90 + i * 360 / Math.max(1, n)) % 360)},90%,60%)`
+    if (fx.color === 'own') { const f = getVP(cid).fillColor; return (f && f !== 'none' && f !== 'transparent') ? f : '#ffd24d' }
+    return fx.color || '#ffd24d'
+  }
+  parents.forEach(({ id: pid, fx }) => {
+    if (!fx) return
+    const parent = nodeMap.get(pid)
+    const kids = (childrenOrdered[pid] || []).filter(cid => visibleRef.current.has(cid) && nodeMap.has(cid))
+    const n = kids.length
+    const speed = Math.max(0.06, fx.speedSec || 0.4)
+    const add = (cid, color, intensity, scale, style) => { const node = nodeMap.get(cid); if (node) hls.push({ key: pid + cid, node, color, intensity: Math.max(0, Math.min(1, intensity)), scale, style: style || 'halo' }) }
+    if (fx.type === 'orbit') {
+      const radius = fx.radius ?? 130
+      kids.forEach((cid, i) => { const node = nodeMap.get(cid); if (!node || !parent) return; const ang = now * (1 / speed) * 0.5 + i / n * Math.PI * 2; node.fx = parent.x + Math.cos(ang) * radius; node.fy = parent.y + Math.sin(ang) * radius; node.x = node.fx; node.y = node.fy; orbitNow.add(cid) })
+    } else if (!n) { /* nothing to light */ } else if (fx.type === 'chase') {
+      const span = Math.max(1, Math.min(6, fx.span || 1)); const idx = Math.floor(now / speed) % n
+      for (let s = 0; s < span; s++) { const i = ((idx - s) % n + n) % n; add(kids[i], colOf(fx, kids[i], idx, n), 1 - s / (span + 0.001), 1, fx.style) }
+    } else if (fx.type === 'colorwave') {
+      kids.forEach((cid, i) => add(cid, `hsl(${Math.round((now * 90 + i * 360 / n) % 360)},90%,60%)`, 1, 1, fx.style || 'color'))
+    } else if (fx.type === 'pulse') {
+      const amp = fx.amp ?? 0.3
+      kids.forEach((cid, i) => { const ph = (fx.stagger === false ? 0 : i / n * Math.PI * 2); const sc = 1 + amp * (0.5 + 0.5 * Math.sin(now * (Math.PI * 2 / (speed * 4)) + ph)); add(cid, colOf(fx, cid, i, n), 0.85, sc, 'halo') })
+    } else if (fx.type === 'twinkle') {
+      const density = fx.density ?? 0.3
+      kids.forEach((cid, i) => { const seed = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1; const v = Math.sin(now * (Math.PI * 2 / (speed * 2)) + seed * Math.PI * 2); const thr = 1 - density * 2; if (v > thr) add(cid, colOf(fx, cid, i, n), (v - thr) / (density * 2 || 1), 1, fx.style || 'halo') })
+    } else if (fx.type === 'ripple') {
+      const depth = {}; const q = [[pid, -1]]; const seen = new Set([pid])
+      for (let h = 0; h < q.length; h++) { const [id, d] = q[h]; (childrenOrdered[id] || []).forEach(c => { if (!seen.has(c)) { seen.add(c); depth[c] = d + 1; q.push([c, d + 1]) } }) }
+      const vals = Object.values(depth); if (vals.length) { const maxD = Math.max(1, ...vals); const front = (now / speed) % (maxD + 1.5); Object.entries(depth).forEach(([cid, d]) => { if (!visibleRef.current.has(cid) || !nodeMap.has(cid)) return; const dist = Math.abs(d - front); if (dist < 1) add(cid, colOf(fx, cid, d, maxD + 1), 1 - dist, 1, fx.style || 'halo') }) }
+    }
+  })
+  orbitPrevRef.current.forEach(id => { if (!orbitNow.has(id)) { const n = nodeMap.get(id); if (n) { n.fx = null; n.fy = null } } })
+  orbitPrevRef.current = orbitNow
+
+  return (
+    <g pointerEvents="none">
+      {hls.map(({ key, node, color, intensity, scale, style }) => {
+        const vp = getVP(node.id)
+        const shape = vp.shape || 'circle'
+        const baseR = NODE_R * (vp.scale || 1)
+        let hw, hh
+        if (shape === 'circle' || shape === 'none' || shape === 'frame' || shape === '3d') { hw = baseR; hh = baseR }
+        else { const d = shapeDims(shape, baseR, node.label || '', Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth); hw = d.halfW; hh = d.halfH }
+        const m = 5
+        return (
+          <g key={key} transform={`translate(${node.x || 0},${node.y || 0})`}>
+            {(style === 'color' || style === 'both') && shapeOutline(shape, hw * scale, hh * scale, { fill: color, opacity: intensity * 0.42 })}
+            {(style === 'halo' || style === 'both') && shapeOutline(shape, (hw + m) * scale, (hh + m) * scale, { fill: 'none', stroke: color, strokeWidth: 4, opacity: intensity, style: { filter: `drop-shadow(0 0 7px ${color})` } })}
+          </g>
+        )
+      })}
+    </g>
   )
 }
 
@@ -5657,47 +5699,64 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         </div>
       )}
 
-      {/* ── Effects (children) panel — the chaser / marquee ── */}
+      {/* ── Effects (children) panel — chase / colour wave / pulse / twinkle / ripple / orbit ── */}
       {panel === 'effects' && (() => {
         const fx = childrenEffect || null
-        const set = (patch) => onSetChildrenEffect?.({ type: 'chase', speedSec: 0.35, color: '#ffd24d', span: 1, style: 'halo', ...(fx || {}), ...patch })
+        const t = fx?.type
+        const set = (patch) => onSetChildrenEffect?.({ ...(fx || {}), ...patch })
+        const DEF = {
+          chase: { speedSec: 0.35, color: '#ffd24d', span: 1, style: 'halo' },
+          colorwave: { speedSec: 1, style: 'color' },
+          pulse: { speedSec: 0.6, amp: 0.3 },
+          twinkle: { speedSec: 0.5, color: '#ffd24d', density: 0.3, style: 'halo' },
+          ripple: { speedSec: 0.5, color: '#7fd8ff', style: 'halo' },
+          orbit: { speedSec: 1, radius: 130 },
+        }
+        const pick = (type) => onSetChildrenEffect?.({ type, ...DEF[type] })
         const pill = (active, label, onClick) => (
-          <button onClick={onClick} style={{ background: active ? '#26306a' : 'transparent', border: `1px solid ${active ? '#5b6af0' : '#2a3358'}`, color: active ? '#fff' : '#c5d0ff', borderRadius: 5, cursor: 'pointer', fontSize: '0.72rem', padding: '3px 7px' }}>{label}</button>
+          <button onClick={onClick} style={{ background: active ? '#26306a' : 'transparent', border: `1px solid ${active ? '#5b6af0' : '#2a3358'}`, color: active ? '#fff' : '#c5d0ff', borderRadius: 5, cursor: 'pointer', fontSize: '0.7rem', padding: '3px 7px' }}>{label}</button>
+        )
+        const slider = (label, key, min, max, step, def) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.66rem', color: '#8090b8', width: 44 }}>{label}</span>
+            <input type="range" min={min} max={max} step={step} value={fx?.[key] ?? def} onChange={e => set({ [key]: Number(e.target.value) })} style={{ flex: 1, accentColor: '#5b6af0' }} />
+          </div>
+        )
+        const styleRow = (withColorStyle) => (
+          <div style={{ display: 'flex', gap: 6 }}>
+            {pill(fx.style === 'halo' || !fx.style, 'Halo', () => set({ style: 'halo' }))}
+            {withColorStyle && pill(fx.style === 'color', 'Color', () => set({ style: 'color' }))}
+            {pill(fx.style === 'both', 'Both', () => set({ style: 'both' }))}
+          </div>
+        )
+        const colorRow = () => (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            <button onClick={() => set({ color: 'rainbow' })} title="Rainbow" style={{ width: 20, height: 20, borderRadius: 4, cursor: 'pointer', border: fx.color === 'rainbow' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)', background: 'linear-gradient(90deg,#f43f5e,#f6e05e,#22c55e,#0ea5e9,#a855f7)' }} />
+            <button onClick={() => set({ color: 'own' })} title="Each child's own colour" style={{ width: 20, height: 20, borderRadius: 4, cursor: 'pointer', border: fx.color === 'own' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)', background: 'conic-gradient(#f43f5e,#f6e05e,#22c55e,#0ea5e9,#a855f7,#f43f5e)', color: '#000', fontSize: 9, fontWeight: 700 }}>◈</button>
+            {COLOR_PALETTE.slice(0, 12).map(c => (
+              <button key={c} onClick={() => set({ color: c })} style={{ width: 20, height: 20, borderRadius: 4, cursor: 'pointer', background: c, border: fx.color === c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)' }} />
+            ))}
+          </div>
         )
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 190 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
               <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
               <span style={{ fontSize: '0.72rem', color: '#7080a0', letterSpacing: '0.06em' }}>EFFECTS · CHILDREN</span>
+              {fx && <button onClick={() => onSetChildrenEffect?.(null)} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid #5a2a2a', color: '#f0a0a0', borderRadius: 5, cursor: 'pointer', fontSize: '0.68rem', padding: '2px 7px' }}>Off</button>}
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {pill(!!fx, 'Chase', () => set({ type: 'chase' }))}
-              {fx && <button onClick={() => onSetChildrenEffect?.(null)} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid #5a2a2a', color: '#f0a0a0', borderRadius: 5, cursor: 'pointer', fontSize: '0.72rem', padding: '3px 8px' }}>Off</button>}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {[['chase', 'Chase'], ['colorwave', 'Colour wave'], ['pulse', 'Pulse'], ['twinkle', 'Twinkle'], ['ripple', 'Ripple'], ['orbit', 'Orbit']].map(([ty, label]) => pill(t === ty, label, () => pick(ty)))}
             </div>
-            {fx && <>
-              <div style={{ fontSize: '0.66rem', color: '#8090b8' }}>Style</div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {pill(fx.style === 'halo' || !fx.style, 'Halo', () => set({ style: 'halo' }))}
-                {pill(fx.style === 'color', 'Color', () => set({ style: 'color' }))}
-                {pill(fx.style === 'both', 'Both', () => set({ style: 'both' }))}
-              </div>
-              <div style={{ fontSize: '0.66rem', color: '#8090b8' }}>Colour</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-                <button onClick={() => set({ color: 'rainbow' })} title="Rainbow" style={{ width: 22, height: 22, borderRadius: 4, cursor: 'pointer', border: fx.color === 'rainbow' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)', background: 'linear-gradient(90deg,#f43f5e,#f6e05e,#22c55e,#0ea5e9,#a855f7)' }} />
-                {COLOR_PALETTE.slice(0, 12).map(c => (
-                  <button key={c} onClick={() => set({ color: c })} style={{ width: 22, height: 22, borderRadius: 4, cursor: 'pointer', background: c, border: fx.color === c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)' }} />
-                ))}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: '0.66rem', color: '#8090b8', width: 42 }}>Speed</span>
-                <input type="range" min={0.08} max={1} step={0.02} value={fx.speedSec ?? 0.35} onChange={e => set({ speedSec: Number(e.target.value) })} style={{ flex: 1, accentColor: '#5b6af0' }} />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: '0.66rem', color: '#8090b8', width: 42 }}>Tail</span>
-                <input type="range" min={1} max={5} step={1} value={fx.span ?? 1} onChange={e => set({ span: Number(e.target.value) })} style={{ flex: 1, accentColor: '#5b6af0' }} />
-                <span style={{ fontSize: '0.7rem', color: '#c5d0ff', width: 12 }}>{fx.span ?? 1}</span>
-              </div>
-            </>}
+            {fx && <div style={{ borderTop: '1px solid #23233e', margin: '2px 0', paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {(t === 'chase' || t === 'colorwave' || t === 'ripple') && <><div style={{ fontSize: '0.64rem', color: '#8090b8' }}>Style</div>{styleRow(true)}</>}
+              {(t === 'chase' || t === 'twinkle' || t === 'ripple') && <><div style={{ fontSize: '0.64rem', color: '#8090b8' }}>Colour</div>{colorRow()}</>}
+              {slider('Speed', 'speedSec', 0.06, 2, 0.02, 0.5)}
+              {t === 'chase' && slider('Tail', 'span', 1, 5, 1, 1)}
+              {t === 'pulse' && slider('Amount', 'amp', 0.1, 0.7, 0.05, 0.3)}
+              {t === 'twinkle' && slider('Density', 'density', 0.1, 0.7, 0.05, 0.3)}
+              {t === 'orbit' && slider('Radius', 'radius', 50, 320, 10, 130)}
+            </div>}
           </div>
         )
       })()}
