@@ -9,6 +9,12 @@ import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 
+// Central "gesture cursor": while a drag/pan/connect is in progress we set the cursor on <body>, which
+// overrides whatever element is under the pointer, then clear it on gesture end. One source of truth
+// so cursor states never fight (idle cursor lives on the <svg>; active gestures live here).
+const setGestureCursor = (c) => { document.body.style.cursor = c }
+const clearGestureCursor = () => { document.body.style.cursor = '' }
+
 // â"€â"€ Text measurement â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 let _measureCanvas = null
 function measureTextWidth(text, fontSize) {
@@ -1214,6 +1220,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (panSaveTimerRef.current) clearTimeout(panSaveTimerRef.current)
         panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
       })
+    // Pan cursor: a drag-pan (mousedown, not wheel) shows the grabbing hand for its duration.
+    zoomBehaviorRef.current
+      .on('start', e => { if (e.sourceEvent && e.sourceEvent.type !== 'wheel') setGestureCursor('grabbing') })
+      .on('end', () => clearGestureCursor())
     zoomBehaviorRef.current.on('zoom.toolbar', () => setZoomTick(t => t + 1))
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
@@ -1585,7 +1595,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const ddx = sx - startSx, ddy = sy - startSy
       if (!didDrag && Math.abs(ddx) < 2 && Math.abs(ddy) < 2) return
       if (!didDrag) {
-        document.body.style.cursor = 'grabbing'
+        setGestureCursor('grabbing')
         if (dragGroup.length > 1) setMovingIds(new Set(dragGroup.map(g => g.id)))   // highlight all nodes moving together
       }
       didDrag = true
@@ -1615,7 +1625,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
     }
     const onUp = ue => {
-      document.body.style.cursor = ''
+      clearGestureCursor()
       simRef.current.alphaTarget(0)
       setMovingIds(null)   // clear the group-move highlight
 
@@ -1735,11 +1745,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     e.stopPropagation(); e.preventDefault()
     const src = simNodesRef.current.find(n => n.id === sourceId)
     if (!src) return
+    setGestureCursor('crosshair')   // drawing a connection
     const onMove = me => {
       const [sx, sy] = clientToSim(me.clientX, me.clientY)
       setConnecting({ sourceId, x1: src.x, y1: src.y, x2: sx, y2: sy })
     }
     const onUp = ue => {
+      clearGestureCursor()
       const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
       const hit = simNodesRef.current.find(n => {
         if (n.id === sourceId) return false
@@ -2196,6 +2208,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (!moved && Math.hypot(dx, dy) < 4) return
       if (!moved) {
         moved = true
+        setGestureCursor('crosshair')   // rubber-band selection
         // Suppress D3 pan for the duration of the rubber-band
         zoomBehaviorRef.current?.filter(() => false)
       }
@@ -2207,6 +2220,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      clearGestureCursor()
       // Re-enable D3 pan (restore original filter, not a permissive one)
       if (zoomFilterRef.current) zoomBehaviorRef.current?.filter(zoomFilterRef.current)
 
@@ -2629,7 +2643,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           <DepthSlider level={depthLevel} max={depthCap} onChange={applyDepthLevel} />
         )}
         <svg ref={svgRef}
-          style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: isPanning ? 'grabbing' : 'default' }}
+          style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: 'default' }}
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (readOnly) return
