@@ -3914,26 +3914,32 @@ function EffectsOverlay({ parents, simNodesRef, getVP, visibleRef, childrenOrder
     const parent = nodeMap.get(pid)
     const kids = (childrenOrdered[pid] || []).filter(cid => visibleRef.current.has(cid) && nodeMap.has(cid))
     const n = kids.length
-    const speed = Math.max(0.06, fx.speedSec || 0.4)
+    const speed = fx.speed ?? (fx.speedSec ? Math.max(0.2, 0.5 / fx.speedSec) : 1)   // higher = faster (back-compat)
+    const rev = fx.dir === 'rev'
     const add = (cid, color, intensity, scale, style) => { const node = nodeMap.get(cid); if (node) hls.push({ key: pid + cid, node, color, intensity: Math.max(0, Math.min(1, intensity)), scale, style: style || 'halo' }) }
-    if (fx.type === 'orbit') {
+    if (fx.type === 'orbit' || fx.type === 'orbitwave') {
       const radius = fx.radius ?? 130
-      kids.forEach((cid, i) => { const node = nodeMap.get(cid); if (!node || !parent) return; const ang = now * (1 / speed) * 0.5 + i / n * Math.PI * 2; node.fx = parent.x + Math.cos(ang) * radius; node.fy = parent.y + Math.sin(ang) * radius; node.x = node.fx; node.y = node.fy; orbitNow.add(cid) })
+      const wob = fx.type === 'orbitwave' ? (fx.amp ?? 0.4) : 0   // far/close radial shift as they circle
+      const dir = rev ? -1 : 1
+      kids.forEach((cid, i) => { const node = nodeMap.get(cid); if (!node || !parent) return
+        const ang = dir * now * speed * 0.9 + i / n * Math.PI * 2
+        const rr = radius * (1 + wob * Math.sin(now * speed * 1.6 + i * Math.PI))
+        node.fx = parent.x + Math.cos(ang) * rr; node.fy = parent.y + Math.sin(ang) * rr; node.x = node.fx; node.y = node.fy; orbitNow.add(cid) })
     } else if (!n) { /* nothing to light */ } else if (fx.type === 'chase') {
-      const span = Math.max(1, Math.min(6, fx.span || 1)); const idx = Math.floor(now / speed) % n
+      const span = Math.max(1, Math.min(6, fx.span || 1)); const idx0 = Math.floor(now * speed * 2.5) % n; const idx = rev ? ((n - idx0) % n) : idx0
       for (let s = 0; s < span; s++) { const i = ((idx - s) % n + n) % n; add(kids[i], colOf(fx, kids[i], idx, n), 1 - s / (span + 0.001), 1, fx.style) }
     } else if (fx.type === 'colorwave') {
-      kids.forEach((cid, i) => add(cid, `hsl(${Math.round((now * 90 + i * 360 / n) % 360)},90%,60%)`, 1, 1, fx.style || 'color'))
+      kids.forEach((cid, i) => add(cid, `hsl(${Math.round((now * speed * 90 + i * 360 / n) % 360)},90%,60%)`, 1, 1, fx.style || 'color'))
     } else if (fx.type === 'pulse') {
       const amp = fx.amp ?? 0.3
-      kids.forEach((cid, i) => { const ph = (fx.stagger === false ? 0 : i / n * Math.PI * 2); const sc = 1 + amp * (0.5 + 0.5 * Math.sin(now * (Math.PI * 2 / (speed * 4)) + ph)); add(cid, colOf(fx, cid, i, n), 0.85, sc, 'halo') })
+      kids.forEach((cid, i) => { const ph = (fx.stagger === false ? 0 : i / n * Math.PI * 2); const sc = 1 + amp * (0.5 + 0.5 * Math.sin(now * speed * 3 + ph)); add(cid, colOf(fx, cid, i, n), 0.85, sc, fx.style || 'halo') })
     } else if (fx.type === 'twinkle') {
       const density = fx.density ?? 0.3
-      kids.forEach((cid, i) => { const seed = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1; const v = Math.sin(now * (Math.PI * 2 / (speed * 2)) + seed * Math.PI * 2); const thr = 1 - density * 2; if (v > thr) add(cid, colOf(fx, cid, i, n), (v - thr) / (density * 2 || 1), 1, fx.style || 'halo') })
+      kids.forEach((cid, i) => { const seed = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1; const v = Math.sin(now * speed * 3 + seed * Math.PI * 2); const thr = 1 - density * 2; if (v > thr) add(cid, colOf(fx, cid, i, n), (v - thr) / (density * 2 || 1), 1, fx.style || 'halo') })
     } else if (fx.type === 'ripple') {
       const depth = {}; const q = [[pid, -1]]; const seen = new Set([pid])
       for (let h = 0; h < q.length; h++) { const [id, d] = q[h]; (childrenOrdered[id] || []).forEach(c => { if (!seen.has(c)) { seen.add(c); depth[c] = d + 1; q.push([c, d + 1]) } }) }
-      const vals = Object.values(depth); if (vals.length) { const maxD = Math.max(1, ...vals); const front = (now / speed) % (maxD + 1.5); Object.entries(depth).forEach(([cid, d]) => { if (!visibleRef.current.has(cid) || !nodeMap.has(cid)) return; const dist = Math.abs(d - front); if (dist < 1) add(cid, colOf(fx, cid, d, maxD + 1), 1 - dist, 1, fx.style || 'halo') }) }
+      const vals = Object.values(depth); if (vals.length) { const maxD = Math.max(1, ...vals); let front = (now * speed * 1.5) % (maxD + 1.5); if (rev) front = maxD - front; Object.entries(depth).forEach(([cid, d]) => { if (!visibleRef.current.has(cid) || !nodeMap.has(cid)) return; const dist = Math.abs(d - front); if (dist < 1) add(cid, colOf(fx, cid, d, maxD + 1), 1 - dist, 1, fx.style || 'halo') }) }
     }
   })
   orbitPrevRef.current.forEach(id => { if (!orbitNow.has(id)) { const n = nodeMap.get(id); if (n) { n.fx = null; n.fy = null } } })
@@ -3950,7 +3956,7 @@ function EffectsOverlay({ parents, simNodesRef, getVP, visibleRef, childrenOrder
         else { const d = shapeDims(shape, baseR, node.label || '', Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth); hw = d.halfW; hh = d.halfH }
         const m = 5
         return (
-          <g key={key} transform={`translate(${node.x || 0},${node.y || 0})`}>
+          <g key={key} transform={`translate(${node.x || 0},${node.y || 0})`} style={{ transition: 'opacity 0.12s linear' }}>
             {(style === 'color' || style === 'both') && shapeOutline(shape, hw * scale, hh * scale, { fill: color, opacity: intensity * 0.42 })}
             {(style === 'halo' || style === 'both') && shapeOutline(shape, (hw + m) * scale, (hh + m) * scale, { fill: 'none', stroke: color, strokeWidth: 4, opacity: intensity, style: { filter: `drop-shadow(0 0 7px ${color})` } })}
           </g>
@@ -5705,12 +5711,13 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         const t = fx?.type
         const set = (patch) => onSetChildrenEffect?.({ ...(fx || {}), ...patch })
         const DEF = {
-          chase: { speedSec: 0.35, color: '#ffd24d', span: 1, style: 'halo' },
-          colorwave: { speedSec: 1, style: 'color' },
-          pulse: { speedSec: 0.6, amp: 0.3 },
-          twinkle: { speedSec: 0.5, color: '#ffd24d', density: 0.3, style: 'halo' },
-          ripple: { speedSec: 0.5, color: '#7fd8ff', style: 'halo' },
-          orbit: { speedSec: 1, radius: 130 },
+          chase: { speed: 1, color: '#ffd24d', span: 1, style: 'halo' },
+          colorwave: { speed: 1, style: 'color' },
+          pulse: { speed: 1, amp: 0.3, color: '#ffd24d', style: 'halo' },
+          twinkle: { speed: 1, color: '#ffd24d', density: 0.3, style: 'halo' },
+          ripple: { speed: 1, color: '#7fd8ff', style: 'halo' },
+          orbit: { speed: 1, radius: 130 },
+          orbitwave: { speed: 1, radius: 130, amp: 0.4 },
         }
         const pick = (type) => onSetChildrenEffect?.({ type, ...DEF[type] })
         const pill = (active, label, onClick) => (
@@ -5746,16 +5753,23 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               {fx && <button onClick={() => onSetChildrenEffect?.(null)} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid #5a2a2a', color: '#f0a0a0', borderRadius: 5, cursor: 'pointer', fontSize: '0.68rem', padding: '2px 7px' }}>Off</button>}
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              {[['chase', 'Chase'], ['colorwave', 'Colour wave'], ['pulse', 'Pulse'], ['twinkle', 'Twinkle'], ['ripple', 'Ripple'], ['orbit', 'Orbit']].map(([ty, label]) => pill(t === ty, label, () => pick(ty)))}
+              {[['chase', 'Chase'], ['colorwave', 'Colour wave'], ['pulse', 'Pulse'], ['twinkle', 'Twinkle'], ['ripple', 'Ripple'], ['orbit', 'Orbit'], ['orbitwave', 'Orbit wave']].map(([ty, label]) => pill(t === ty, label, () => pick(ty)))}
             </div>
             {fx && <div style={{ borderTop: '1px solid #23233e', margin: '2px 0', paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 7 }}>
-              {(t === 'chase' || t === 'colorwave' || t === 'ripple') && <><div style={{ fontSize: '0.64rem', color: '#8090b8' }}>Style</div>{styleRow(true)}</>}
-              {(t === 'chase' || t === 'twinkle' || t === 'ripple') && <><div style={{ fontSize: '0.64rem', color: '#8090b8' }}>Colour</div>{colorRow()}</>}
-              {slider('Speed', 'speedSec', 0.06, 2, 0.02, 0.5)}
+              {(t === 'chase' || t === 'colorwave' || t === 'pulse' || t === 'twinkle' || t === 'ripple') && <><div style={{ fontSize: '0.64rem', color: '#8090b8' }}>Style</div>{styleRow(t !== 'pulse')}</>}
+              {(t === 'chase' || t === 'pulse' || t === 'twinkle' || t === 'ripple') && <><div style={{ fontSize: '0.64rem', color: '#8090b8' }}>Colour</div>{colorRow()}</>}
+              {slider('Speed', 'speed', 0.2, 4, 0.1, 1)}
               {t === 'chase' && slider('Tail', 'span', 1, 5, 1, 1)}
               {t === 'pulse' && slider('Amount', 'amp', 0.1, 0.7, 0.05, 0.3)}
               {t === 'twinkle' && slider('Density', 'density', 0.1, 0.7, 0.05, 0.3)}
-              {t === 'orbit' && slider('Radius', 'radius', 50, 320, 10, 130)}
+              {(t === 'orbit' || t === 'orbitwave') && slider('Radius', 'radius', 50, 320, 10, 130)}
+              {t === 'orbitwave' && slider('Wobble', 'amp', 0.1, 0.8, 0.05, 0.4)}
+              {(t === 'chase' || t === 'ripple' || t === 'orbit' || t === 'orbitwave') && (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {pill(fx.dir !== 'rev', 'Forward', () => set({ dir: 'fwd' }))}
+                  {pill(fx.dir === 'rev', 'Reverse', () => set({ dir: 'rev' }))}
+                </div>
+              )}
             </div>}
           </div>
         )
