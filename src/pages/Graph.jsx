@@ -867,6 +867,42 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setCollapsedNodes(ids)
   }, [depthCap, maxDepth, storeNodes, childrenOrdered, depthById, setCollapsedNodes])
 
+  // ── Children effects engine (chase / marquee highlight around a node's children) ──────────────
+  // A parent's viewProps.childrenEffect = { type:'chase', speedSec, color:'#..'|'rainbow', span, style }.
+  // One RAF loop computes which children are "lit" each step; the overlay layer draws the highlight.
+  const effectParents = useMemo(
+    () => storeNodes.filter(n => (viewNodeProps[n.id] || {}).childrenEffect && (childrenOrdered[n.id]?.length)).map(n => n.id),
+    [storeNodes, viewNodeProps, childrenOrdered])
+  const litRef = useRef({})              // childId -> { color, intensity, style }
+  const litKeyRef = useRef('')
+  const [, setEffectTick] = useState(0)
+  useEffect(() => {
+    if (!effectParents.length) { if (litKeyRef.current) { litRef.current = {}; litKeyRef.current = ''; setEffectTick(x => x + 1) } return }
+    let raf
+    const loop = (t) => {
+      const now = t / 1000, lit = {}
+      effectParents.forEach(pid => {
+        const fx = (viewNodePropsRef.current[pid] || {}).childrenEffect; if (!fx) return
+        const kids = (childrenOrdered[pid] || []).filter(id => visibleNodeIdsRef.current.has(id))
+        const n = kids.length; if (!n) return
+        const step = Math.max(0.08, fx.speedSec || 0.4)
+        const span = Math.max(1, Math.min(6, fx.span || 1))
+        const idx = Math.floor(now / step) % n
+        for (let s = 0; s < span; s++) {
+          const child = kids[((idx - s) % n + n) % n]
+          const intensity = 1 - s / (span + 0.001)
+          const color = fx.color === 'rainbow' ? `hsl(${Math.round((now * 90 + idx * (360 / n)) % 360)},90%,60%)` : (fx.color || '#ffd24d')
+          if (!lit[child] || lit[child].intensity < intensity) lit[child] = { color, intensity, style: fx.style || 'halo' }
+        }
+      })
+      const key = Object.keys(lit).sort().map(id => id + lit[id].color + lit[id].intensity.toFixed(2)).join('|')
+      if (key !== litKeyRef.current) { litKeyRef.current = key; litRef.current = lit; setEffectTick(x => x + 1) }   // re-render only when the marquee advances
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [effectParents, childrenOrdered])
+
   // Real-time search match set (label substring). null = no filter. Non-matches are greyed, not hidden.
   const searchMatchSet = useMemo(() => {
     const q = outlineSearch.trim().toLowerCase()
@@ -2875,6 +2911,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onExit={() => toggleListNode(n.id)} />
             ))}
 
+            {/* Children-effects overlay: halo / colour flash on the currently-lit children (chaser). */}
+            {litKeyRef.current && (
+              <g pointerEvents="none">
+                {simNodesRef.current.filter(n => litRef.current[n.id] && mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame').map(n => {
+                  const hl = litRef.current[n.id]
+                  const r = NODE_R * (getVP(n.id).scale || 1) + 5
+                  return (
+                    <g key={'fx' + n.id} transform={`translate(${n.x},${n.y})`} style={{ transition: 'opacity 0.15s' }}>
+                      {(hl.style === 'color' || hl.style === 'both') && <circle r={r - 3} fill={hl.color} opacity={hl.intensity * 0.42} />}
+                      {(hl.style === 'halo' || hl.style === 'both' || !hl.style) && (
+                        <circle r={r} fill="none" stroke={hl.color} strokeWidth={4} opacity={hl.intensity}
+                          style={{ filter: `drop-shadow(0 0 7px ${hl.color})` }} />
+                      )}
+                    </g>
+                  )
+                })}
+              </g>
+            )}
+
             {/* Rubber-band selection rect — on top of nodes/images */}
             {rubberBand && (() => {
               const x = Math.min(rubberBand.sx, rubberBand.ex)
@@ -3184,6 +3239,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
               hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
+              childrenEffect={vp.childrenEffect}
+              onSetChildrenEffect={fx => setNodeViewProp(hn.id, 'childrenEffect', fx)}
               onHide={() => { pushUndo(); setNodeViewProp(hn.id, 'visible', false); close() }}
               onRelease={() => handleRelease(hn.id)}
               onDelete={() => { setConfirmDelete(hn.id); close() }}
@@ -5049,7 +5106,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
@@ -5180,6 +5237,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {textRow('Image', () => setPanel('image'), { right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
         {textRow('Motion & color cycle', () => setPanel('motion'), { right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8', opens: 'motion' })}
         {textRow('Radiate to children', () => setPanel('radiate'), { right: '›', opens: 'radiate' })}
+        {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
         {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
           if (depthExpand !== null) { onSetDepthExpand?.(null) }
           else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
@@ -5598,6 +5656,51 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           ))}
         </div>
       )}
+
+      {/* ── Effects (children) panel — the chaser / marquee ── */}
+      {panel === 'effects' && (() => {
+        const fx = childrenEffect || null
+        const set = (patch) => onSetChildrenEffect?.({ type: 'chase', speedSec: 0.35, color: '#ffd24d', span: 1, style: 'halo', ...(fx || {}), ...patch })
+        const pill = (active, label, onClick) => (
+          <button onClick={onClick} style={{ background: active ? '#26306a' : 'transparent', border: `1px solid ${active ? '#5b6af0' : '#2a3358'}`, color: active ? '#fff' : '#c5d0ff', borderRadius: 5, cursor: 'pointer', fontSize: '0.72rem', padding: '3px 7px' }}>{label}</button>
+        )
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 190 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+              <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+              <span style={{ fontSize: '0.72rem', color: '#7080a0', letterSpacing: '0.06em' }}>EFFECTS · CHILDREN</span>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {pill(!!fx, 'Chase', () => set({ type: 'chase' }))}
+              {fx && <button onClick={() => onSetChildrenEffect?.(null)} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid #5a2a2a', color: '#f0a0a0', borderRadius: 5, cursor: 'pointer', fontSize: '0.72rem', padding: '3px 8px' }}>Off</button>}
+            </div>
+            {fx && <>
+              <div style={{ fontSize: '0.66rem', color: '#8090b8' }}>Style</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {pill(fx.style === 'halo' || !fx.style, 'Halo', () => set({ style: 'halo' }))}
+                {pill(fx.style === 'color', 'Color', () => set({ style: 'color' }))}
+                {pill(fx.style === 'both', 'Both', () => set({ style: 'both' }))}
+              </div>
+              <div style={{ fontSize: '0.66rem', color: '#8090b8' }}>Colour</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                <button onClick={() => set({ color: 'rainbow' })} title="Rainbow" style={{ width: 22, height: 22, borderRadius: 4, cursor: 'pointer', border: fx.color === 'rainbow' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)', background: 'linear-gradient(90deg,#f43f5e,#f6e05e,#22c55e,#0ea5e9,#a855f7)' }} />
+                {COLOR_PALETTE.slice(0, 12).map(c => (
+                  <button key={c} onClick={() => set({ color: c })} style={{ width: 22, height: 22, borderRadius: 4, cursor: 'pointer', background: c, border: fx.color === c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)' }} />
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '0.66rem', color: '#8090b8', width: 42 }}>Speed</span>
+                <input type="range" min={0.08} max={1} step={0.02} value={fx.speedSec ?? 0.35} onChange={e => set({ speedSec: Number(e.target.value) })} style={{ flex: 1, accentColor: '#5b6af0' }} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '0.66rem', color: '#8090b8', width: 42 }}>Tail</span>
+                <input type="range" min={1} max={5} step={1} value={fx.span ?? 1} onChange={e => set({ span: Number(e.target.value) })} style={{ flex: 1, accentColor: '#5b6af0' }} />
+                <span style={{ fontSize: '0.7rem', color: '#c5d0ff', width: 12 }}>{fx.span ?? 1}</span>
+              </div>
+            </>}
+          </div>
+        )
+      })()}
 
       {/* â"€â"€ Motion panel â"€â"€ */}
       {panel === 'motion' && (() => {
