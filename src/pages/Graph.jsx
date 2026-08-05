@@ -149,27 +149,33 @@ function dashArray(dash, sw = 1.5) {
 function borderFxPath(fx, hw, hh, count, amp) {
   const C = Math.max(3, Math.round(count || 8))
   const A = Math.max(0, Math.min(0.6, amp ?? 0.15))
-  const M = fx === 'jagged' ? C * 2 : Math.max(180, C * 18)
-  const rAt = (th) => {
-    const s = Math.sin(C * th)
-    switch (fx) {
-      case 'wave': return 1 + A * s
-      case 'petal': return 1 + A * Math.abs(s)
-      case 'scallop': return 1 + A * Math.abs(s)
-      case 'bloom': return 1 + A * Math.pow(Math.abs(Math.cos(C * th / 2)), 3)
-      case 'gear': return 1 + A * (s >= 0 ? 1 : 0)
-      case 'zigzag': { const ph = ((C * th) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI); const tri = ph < Math.PI ? ph / Math.PI : 2 - ph / Math.PI; return 1 + A * tri }
-      case 'jagged': { const h = Math.abs(Math.sin(th * 91.7 + C * 7.13) * 43758.5453) % 1; return 1 + A * h }
-      default: return 1
+  const pts = []
+  const push = (th, r) => pts.push((hw * r * Math.cos(th)).toFixed(1) + ',' + (hh * r * Math.sin(th)).toFixed(1))
+  // Sharp, exact-vertex families (crisp corners):
+  if (fx === 'zigzag') {                       // symmetric saw: alternate out/in with straight lines
+    const V = C * 2
+    for (let i = 0; i < V; i++) push((i / V) * 2 * Math.PI, i % 2 === 0 ? 1 + A : 1 - A)
+  } else if (fx === 'star') {                  // pointed star: shallow-count points with deep notches
+    const V = C * 2, inner = Math.max(0.15, 1 - A * 1.7)
+    for (let i = 0; i < V; i++) push((i / V) * 2 * Math.PI - Math.PI / 2, i % 2 === 0 ? 1 + A : inner)
+  } else if (fx === 'jagged') {                // irregular spikes
+    const V = C * 2
+    for (let i = 0; i < V; i++) { const h = Math.abs(Math.sin(i * 91.7 + C * 7.13) * 43758.5453) % 1; push((i / V) * 2 * Math.PI, 1 + A * h) }
+  } else if (fx === 'gear') {                  // square teeth (exact rise/fall so edges are vertical)
+    const per = 2 * Math.PI / C
+    for (let i = 0; i < C; i++) { const b = i * per; push(b, 1 + A); push(b + per * 0.5 - 1e-4, 1 + A); push(b + per * 0.5, 1); push(b + per - 1e-4, 1) }
+  } else {                                     // smooth, densely-sampled families
+    const M = Math.max(220, C * 22)
+    for (let i = 0; i < M; i++) {
+      const th = (i / M) * 2 * Math.PI, s = Math.sin(C * th)
+      let r = 1
+      if (fx === 'wave') r = 1 + A * s                                   // symmetric crest/trough
+      else if (fx === 'petal' || fx === 'scallop') r = 1 + A * Math.abs(s)  // rounded outward bumps
+      else if (fx === 'bloom') r = 1 + A * Math.pow(Math.abs(Math.cos(C * th / 2)), 3)
+      push(th, r)
     }
   }
-  let d = ''
-  for (let i = 0; i < M; i++) {
-    const th = (i / M) * Math.PI * 2
-    const r = rAt(th)
-    d += (i === 0 ? 'M' : 'L') + (hw * r * Math.cos(th)).toFixed(1) + ',' + (hh * r * Math.sin(th)).toFixed(1)
-  }
-  return d + 'Z'
+  return 'M' + pts.join('L') + 'Z'
 }
 
 function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, strokeDash, filter, imageUrl, nodeId }) {
@@ -1299,39 +1305,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     svg.call(zoomBehaviorRef.current)
     svg.on('dblclick.zoom', null)
 
-    // Right-click context menu. The native `contextmenu` event fires at *press* time (before any
-    // drag is known), so opening the menu there makes it pop every time you start a right-drag pan.
-    // Instead: always suppress the native menu, track right-button drag, and open our menu on the
-    // right-button MOUSEUP only if the pointer didn't move (i.e. it was a click, not a pan).
+    // Context menu — opened on the native `contextmenu` event, which fires for EVERY secondary-click
+    // gesture on every device (right mouse, Mac Ctrl+click, trackpad two-finger tap / "secondary click").
+    // The old approach opened on right-button MOUSEUP, so trackpad/ctrl secondary-clicks (which don't
+    // send button 2) never produced a menu. Chrome suppresses `contextmenu` after a right-drag pan, so
+    // opening here doesn't pop the menu while panning.
     const el = svgRef.current
-    let rmb = null
-    // Listen on window (not just the svg) so right-clicks that land on the HTML toolbar/menu overlays
-    // covering the canvas are still tracked; overlay targets are skipped when opening our menu.
-    // Context trigger = right mouse (button 2) OR Mac-style Ctrl+left-click (button 0 + ctrlKey). The
-    // latter never sent button 2, so ctrl-clickers (trackpads, no right button) saw no menu at all.
-    const onDownCapture = ev => {
-      if (ev.button === 2 || (ev.button === 0 && ev.ctrlKey && !ev.metaKey)) {
-        rmb = { x: ev.clientX, y: ev.clientY, moved: false, target: ev.target, ctrl: ev.button === 0 }
-      }
-    }
-    const onMoveCapture = ev => { if (rmb && Math.hypot(ev.clientX - rmb.x, ev.clientY - rmb.y) >= 5) rmb.moved = true }
-    // Suppress the native menu everywhere (window capture) — binding only to the svg let it leak over
-    // the HTML overlays (NodeToolbar, menus) that sit above the canvas. Keep it on form fields.
-    const onContext = ev => { const t = ev.target; if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return; ev.preventDefault() }
     const OVERLAY_SEL = '[data-nodetoolbar],[data-menu],[data-slide-sidebar],input,textarea,select,a,button'
-    const onUpCapture = ev => {
-      if (!rmb) return
-      const wasCtrl = rmb.ctrl   // Ctrl+click → only the background menu (nodes keep ctrl-click multi-select)
-      const dragged = rmb.moved
-      const cx = rmb.x, cy = rmb.y
-      const overlay = rmb.target?.closest?.(OVERLAY_SEL)
-      rmb = null
-      if (dragged || !el || readOnly || overlay) return   // panned, over an overlay, or read-only
+    // Open the right menu at a screen point. isCtrl = a Ctrl+click (background menu only; nodes keep multi-select).
+    const openMenuAt = (clientX, clientY, target, isCtrl) => {
+      if (!el || readOnly) return
+      if (target?.closest?.(OVERLAY_SEL)) return
       const rect = el.getBoundingClientRect()
-      const px = cx - rect.left, py = cy - rect.top
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
+      const px = clientX - rect.left, py = clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
-
-      // Topmost non-frame node under the cursor → node menu
       let hitNode = null
       for (const n of simNodesRef.current) {
         if (!visibleNodeIdsRef.current.has(n.id) || n.x == null) continue
@@ -1342,46 +1330,52 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
         if (Math.abs(sx - n.x) <= halfW && Math.abs(sy - n.y) <= halfH) hitNode = n
       }
-      if (hitNode && !wasCtrl) {
+      if (hitNode && !isCtrl) {
         setContextMenu(null); setPhotoMenu(null)
-        // Right-clicking a node that's part of a multi-selection → bulk menu for ALL selected.
         const curSel = selectedNodeIdsRef.current
-        if (curSel.size > 1 && curSel.has(hitNode.id)) {
-          setNodeMenu(null); setBulkPanel(null)
-          setBulkMenu({ px, py, ids: [...curSel] })
-          return
-        }
+        if (curSel.size > 1 && curSel.has(hitNode.id)) { setNodeMenu(null); setBulkPanel(null); setBulkMenu({ px, py, ids: [...curSel] }); return }
         setSelected({ id: hitNode.id, type: 'node' })
         setSelectedImageIds(new Set()); setSelectedNodeIds(new Set())
         setNodeMenu({ nodeId: hitNode.id, px, py })
         return
       }
-
-      // Topmost photo under the cursor → photo menu (select it if not already selected)
       const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
       let hitImg = null
       imgs.forEach(im => { if (im.visible !== false && Math.abs(sx - im.x) <= im.width / 2 && Math.abs(sy - im.y) <= im.height / 2) hitImg = im })
-      if (hitImg && !wasCtrl) {
+      if (hitImg && !isCtrl) {
         setContextMenu(null); setNodeMenu(null)
         setSelectedImageIds(prev => prev.has(hitImg.id) ? prev : new Set([hitImg.id]))
         setPhotoMenu({ px, py, imageId: hitImg.id })
         return
       }
-
-      if (wasCtrl && (hitNode || hitImg)) return   // ctrl-click on a node/image → leave it to multi-select
+      if (isCtrl && (hitNode || hitImg)) return   // ctrl-click on a node/image → leave it to multi-select
       setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
     }
-    window.addEventListener('mousedown', onDownCapture, true)
-    window.addEventListener('mousemove', onMoveCapture, true)
-    window.addEventListener('mouseup', onUpCapture, true)
+    // Primary path: the native `contextmenu` event fires for right mouse, Mac Ctrl+click, AND trackpad
+    // two-finger / secondary click — on every device. (Chrome suppresses it after a right-drag pan.)
+    const onContext = ev => {
+      const t = ev.target
+      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // keep native menu on form fields
+      ev.preventDefault()
+      openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey)
+    }
+    // Fallback: some environments fire Ctrl+left-click WITHOUT a contextmenu event. Catch it on mouseup
+    // (skip if it was a drag). Idempotent with onContext when both fire.
+    let ctrlDown = null
+    const onMouseDownCtrl = ev => { ctrlDown = (ev.button === 0 && ev.ctrlKey && !ev.metaKey) ? { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false } : null }
+    const onMouseMoveCtrl = ev => { if (ctrlDown && Math.hypot(ev.clientX - ctrlDown.x, ev.clientY - ctrlDown.y) >= 5) ctrlDown.moved = true }
+    const onMouseUpCtrl = ev => { if (ctrlDown && !ctrlDown.moved && ev.button === 0) openMenuAt(ctrlDown.x, ctrlDown.y, ctrlDown.t, true); ctrlDown = null }
     window.addEventListener('contextmenu', onContext, true)
+    window.addEventListener('mousedown', onMouseDownCtrl, true)
+    window.addEventListener('mousemove', onMouseMoveCtrl, true)
+    window.addEventListener('mouseup', onMouseUpCtrl, true)
     return () => {
       svg.on('.zoom', null)
-      window.removeEventListener('mousedown', onDownCapture, true)
-      window.removeEventListener('mousemove', onMoveCapture, true)
-      window.removeEventListener('mouseup', onUpCapture, true)
       window.removeEventListener('contextmenu', onContext, true)
+      window.removeEventListener('mousedown', onMouseDownCtrl, true)
+      window.removeEventListener('mousemove', onMouseMoveCtrl, true)
+      window.removeEventListener('mouseup', onMouseUpCtrl, true)
     }
   }, [scheduleRender, loading])
 
@@ -3376,7 +3370,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetBorderFx={v => setNodeViewProp(hn.id, 'borderFx', v)}
               onSetBorderFxAmp={v => setNodeViewProp(hn.id, 'borderFxAmp', v)}
               onSetBorderFxCount={v => setNodeViewProp(hn.id, 'borderFxCount', v)}
-              onSetRotate={v => setNodeViewProp(hn.id, 'rotate', v)}
+              onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
@@ -5046,7 +5040,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             </filter>
           </defs>
         )}
-        <g transform={viewProps.rotate ? `rotate(${viewProps.rotate})` : undefined}>
+        <g style={viewProps.spin ? { animation: `pim-spin ${viewProps.spin}s linear infinite`, transformOrigin: 'center', transformBox: 'fill-box' } : undefined}>
         <g filter={hasShadow ? `url(#${shadowFilterId})` : undefined}>
         {viewProps.borderFx ? (
           // Decorated perimeter (jagged / wave / petal / …). Replaces the plain body; uses node fill+stroke.
@@ -5668,7 +5662,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetRotate, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
@@ -5840,7 +5834,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             <div style={{ fontSize: '0.62rem', color: '#7080a0', letterSpacing: '0.08em', padding: '2px 9px 4px' }}>STYLE</div>
             {sub('color', '🎨', 'Color')}
             {sub('shape', '◆', 'Shape')}
-            {sub('border', '❋', 'Border', viewProps.borderFx || viewProps.rotate)}
+            {sub('border', '❋', 'Border', viewProps.borderFx || viewProps.spin)}
             {sub('shadow', '🌑', 'Shadow', viewProps.shadow && (viewProps.shadow.opacity ?? 0) > 0)}
             {sub('styles', '🎭', 'Styles')}
             {sub('motion', '🌀', 'Motion', viewProps.nodeMotion || viewProps.nodeColorCycle)}
@@ -5884,8 +5878,8 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         const fx = viewProps.borderFx || null
         const amp = viewProps.borderFxAmp ?? 0.15
         const count = viewProps.borderFxCount ?? 8
-        const rot = viewProps.rotate || 0
-        const TREATMENTS = [['none', 'None'], ['jagged', 'Jagged'], ['zigzag', 'Zigzag'], ['wave', 'Wave'], ['petal', 'Petal'], ['scallop', 'Scallop'], ['bloom', 'Bloom'], ['gear', 'Gear']]
+        const spin = viewProps.spin || 0   // seconds per revolution (0 = no spin)
+        const TREATMENTS = [['none', 'None'], ['star', 'Star'], ['jagged', 'Jagged'], ['zigzag', 'Zigzag'], ['wave', 'Wave'], ['petal', 'Petal'], ['scallop', 'Scallop'], ['bloom', 'Bloom'], ['gear', 'Gear']]
         const pillBtn = (active) => ({ background: active ? '#2d3a6a' : '#12122a', border: `1px solid ${active ? '#5b6af0' : '#2a3358'}`, color: active ? '#fff' : '#aab4dd', borderRadius: 6, cursor: 'pointer', fontSize: '0.72rem', padding: '4px 9px' })
         const slider = (label, val, min, max, step, fmt, on) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -5904,9 +5898,16 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             {fx && slider('Depth', amp, 0.03, 0.5, 0.01, v => `${Math.round(v * 100)}%`, v => onSetBorderFxAmp?.(v))}
             {fx && slider('Count', count, 3, 40, 1, v => `${Math.round(v)}`, v => onSetBorderFxCount?.(Math.round(v)))}
             <div style={{ borderTop: '1px solid #2a3358', margin: '2px 0' }} />
-            {slider('Rotation', rot, 0, 360, 1, v => `${Math.round(v)}°`, v => onSetRotate?.(Math.round(v)))}
-            {rot !== 0 && <button style={{ ...pillBtn(false), alignSelf: 'flex-start' }} onClick={() => onSetRotate?.(0)}>Reset rotation</button>}
-            <div style={{ fontSize: '0.66rem', color: '#8090b8', lineHeight: 1.4 }}>Treatments reshape the outline into a decorated blob. Rotation spins the shape (label stays upright).</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: '0.72rem', color: '#7080a0', letterSpacing: '0.06em' }}>SPIN</span>
+              <button onClick={() => onSetSpin?.(spin ? 0 : 6)}
+                style={{ background: spin ? '#20264e' : 'transparent', border: '1px solid #3a4a8a', color: spin ? '#c5d0ff' : '#8090b8', borderRadius: 5, cursor: 'pointer', fontSize: '0.7rem', padding: '2px 9px' }}>
+                {spin ? 'On' : 'Off'}
+              </button>
+            </div>
+            {/* Slider is revolutions-per-minute for intuition; stored as seconds/rev. Higher = faster. */}
+            {spin > 0 && slider('Speed', 60 / spin, 3, 120, 1, v => `${Math.round(v)} rpm`, v => onSetSpin?.(60 / Math.max(1, v)))}
+            <div style={{ fontSize: '0.66rem', color: '#8090b8', lineHeight: 1.4 }}>Treatments reshape the outline into a decorated blob. Spin rotates the shape continuously (the label stays upright).</div>
           </div>
         )
       })()}
