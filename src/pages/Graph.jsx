@@ -4293,7 +4293,7 @@ const tc = {
   colInput: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 4px', fontSize: 11.5, outline: 'none', minWidth: 0 },
   colMenuBtn: { background: 'transparent', border: 'none', color: '#7b8fcc', cursor: 'pointer', fontSize: 13, padding: '0 2px', lineHeight: 1, flexShrink: 0 },
   resizeHandle: { position: 'absolute', right: -3, top: 0, bottom: 0, width: 6, cursor: 'col-resize', zIndex: 2 },
-  colMenu: { position: 'absolute', top: colH - 2, right: 0, zIndex: 20, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 140 },
+  colMenu: { position: 'absolute', top: 28, right: 0, zIndex: 20, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 140 },
   menuLabel: { fontSize: 10, color: '#8090b8', fontWeight: 600, padding: '3px 8px 2px', textTransform: 'uppercase', letterSpacing: 0.4 },
   menuItem: (active, color) => ({ padding: '5px 10px', fontSize: 12, color: color || (active ? '#8ecbff' : '#c5d0ff'), cursor: 'pointer', borderRadius: 4, background: active ? '#20264e' : 'transparent' }),
   body: { flex: 1, overflowY: 'auto', overflowX: 'hidden' },
