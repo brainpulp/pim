@@ -585,7 +585,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
       scheduleRender()
     }, 0)
-  }, [addTableNode]) // eslint-disable-line
+  }, []) // eslint-disable-line  (addTableNode/scheduleRender declared later; accessed only at call time)
 
   // "Make current view a slide": create a frame sized to exactly the visible viewport (current
   // pan/zoom) and add it to the current slideshow — a one-click snapshot of what you're looking at.
