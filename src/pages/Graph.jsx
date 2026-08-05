@@ -573,6 +573,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }, 0)
   }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line
 
+  // Create a table node at the current viewport center (sidebar "+" menu path — no right-click needed).
+  const addTableToCenter = useCallback(() => {
+    if (!svgRef.current) return
+    const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
+    pushUndo()
+    const id = addTableNode(cx, cy)
+    setSelected({ id, type: 'node' })
+    setTimeout(() => {
+      const sn = simNodesRef.current.find(n => n.id === id)
+      if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
+      scheduleRender()
+    }, 0)
+  }, [addTableNode]) // eslint-disable-line
+
   // "Make current view a slide": create a frame sized to exactly the visible viewport (current
   // pan/zoom) and add it to the current slideshow — a one-click snapshot of what you're looking at.
   const makeCurrentViewAsSlide = useCallback(() => {
@@ -2142,6 +2156,31 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [scheduleRender])
 
+  // Drill zoom memory: entering a drill fits the drilled subtree to the screen; exiting restores the
+  // exact pan/zoom you had before you drilled in. Centralised here so every drill entry point (node
+  // menu, outline, breadcrumb) behaves the same.
+  const preDrillTransformRef = useRef(null)
+  const prevDrillRef = useRef(drillRoot)
+  useEffect(() => {
+    const prev = prevDrillRef.current
+    if (prev === drillRoot) return
+    prevDrillRef.current = drillRoot
+    if (!prev && drillRoot) {
+      preDrillTransformRef.current = zoomTransformRef.current           // remember where we were…
+      setTimeout(() => zoomExtents(), 60)                               // …then fit the subtree
+    } else if (prev && !drillRoot) {
+      const t = preDrillTransformRef.current                           // exiting → restore prior view
+      if (t && svgRef.current && zoomBehaviorRef.current) {
+        d3.select(svgRef.current).transition().duration(500).call(zoomBehaviorRef.current.transform, t)
+        zoomTransformRef.current = t
+        scheduleRender()
+      }
+      preDrillTransformRef.current = null
+    } else {
+      setTimeout(() => zoomExtents(), 60)                               // drilled straight into another subtree
+    }
+  }, [drillRoot, zoomExtents]) // eslint-disable-line
+
   // Jump to a node from search. A node can be absent from the canvas for three reasons:
   // it's hidden, the view is drilled into another subtree, or a collapsed ancestor folds
   // it away. Clear all three so the node actually shows, then select and center it.
@@ -2647,6 +2686,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : null)); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
+                      ['Table', () => { addTableToCenter(); setShowAddMenu(false) }],
                       ['View', () => { addView(); setShowAddMenu(false) }],
                     ].map(([label, action]) => (
                       <button key={label} onClick={action}
@@ -3266,7 +3306,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
               onSetShadow={v => setNodeViewProp(hn.id, 'shadow', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
-              onDrill={() => { setDrillRoot(hn.id); close(); setTimeout(zoomExtents, 50) }}
+              onDrill={() => { setDrillRoot(hn.id); close() }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
               hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
