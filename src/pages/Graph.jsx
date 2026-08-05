@@ -143,6 +143,35 @@ function dashArray(dash, sw = 1.5) {
   return undefined
 }
 
+// A decorated node perimeter (border "treatment") as a closed SVG path, sized to an ellipse (hw×hh).
+// Radial radius r(θ) is modulated per style; the fill/stroke of the node are applied to the path.
+// Types: jagged · zigzag · wave · petal · scallop · gear · bloom.
+function borderFxPath(fx, hw, hh, count, amp) {
+  const C = Math.max(3, Math.round(count || 8))
+  const A = Math.max(0, Math.min(0.6, amp ?? 0.15))
+  const M = fx === 'jagged' ? C * 2 : Math.max(180, C * 18)
+  const rAt = (th) => {
+    const s = Math.sin(C * th)
+    switch (fx) {
+      case 'wave': return 1 + A * s
+      case 'petal': return 1 + A * Math.abs(s)
+      case 'scallop': return 1 + A * Math.abs(s)
+      case 'bloom': return 1 + A * Math.pow(Math.abs(Math.cos(C * th / 2)), 3)
+      case 'gear': return 1 + A * (s >= 0 ? 1 : 0)
+      case 'zigzag': { const ph = ((C * th) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI); const tri = ph < Math.PI ? ph / Math.PI : 2 - ph / Math.PI; return 1 + A * tri }
+      case 'jagged': { const h = Math.abs(Math.sin(th * 91.7 + C * 7.13) * 43758.5453) % 1; return 1 + A * h }
+      default: return 1
+    }
+  }
+  let d = ''
+  for (let i = 0; i < M; i++) {
+    const th = (i / M) * Math.PI * 2
+    const r = rAt(th)
+    d += (i === 0 ? 'M' : 'L') + (hw * r * Math.cos(th)).toFixed(1) + ',' + (hh * r * Math.sin(th)).toFixed(1)
+  }
+  return d + 'Z'
+}
+
 function ShapeBody({ shape, halfW, halfH, r, fill, stroke, strokeWidth, strokeDash, filter, imageUrl, nodeId }) {
   const dash = dashArray(strokeDash, strokeWidth)
   const cap = strokeDash === 'dotted' ? 'round' : undefined
@@ -3344,6 +3373,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetBorderBlur={v => setNodeViewProp(hn.id, 'borderBlur', v)}
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
               onSetShadow={v => setNodeViewProp(hn.id, 'shadow', v)}
+              onSetBorderFx={v => setNodeViewProp(hn.id, 'borderFx', v)}
+              onSetBorderFxAmp={v => setNodeViewProp(hn.id, 'borderFxAmp', v)}
+              onSetBorderFxCount={v => setNodeViewProp(hn.id, 'borderFxCount', v)}
+              onSetRotate={v => setNodeViewProp(hn.id, 'rotate', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
@@ -5013,8 +5046,16 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             </filter>
           </defs>
         )}
+        <g transform={viewProps.rotate ? `rotate(${viewProps.rotate})` : undefined}>
         <g filter={hasShadow ? `url(#${shadowFilterId})` : undefined}>
-        {viewProps.borderBlur > 0 ? (
+        {viewProps.borderFx ? (
+          // Decorated perimeter (jagged / wave / petal / …). Replaces the plain body; uses node fill+stroke.
+          <path d={borderFxPath(viewProps.borderFx, bodyHalfW, bodyHalfH, viewProps.borderFxCount, viewProps.borderFxAmp)}
+            fill={fill} stroke={viewProps.strokeColor || 'none'}
+            strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0}
+            strokeDasharray={dashArray(viewProps.strokeDash, viewProps.strokeWidth)}
+            strokeLinejoin={(viewProps.borderFx === 'petal' || viewProps.borderFx === 'scallop' || viewProps.borderFx === 'wave' || viewProps.borderFx === 'bloom') ? 'round' : 'miter'} />
+        ) : viewProps.borderBlur > 0 ? (
           // SVG feGaussianBlur with sRGB on the primitive: avoids the linearRGB white
           // fringe AND the Chromium white-box bug that CSS filter+transform triggers.
           // The body feathers to transparent; no crisp overlay, no colored glow.
@@ -5033,6 +5074,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
             stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} strokeDash={viewProps.strokeDash} />
         )}
+        </g>
         </g>
 
         {/* Background image — covers the node body, clipped to its shape, behind the label */}
@@ -5626,7 +5668,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetRotate, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
@@ -5634,7 +5676,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
   // Panels grouped under the top-level "Style" row — rendered as a persistent two-pane popover
   // (sub-list on the left, active pane on the right) so you can hop between them without the list vanishing.
-  const STYLE_PANES = ['color', 'shape', 'shadow', 'styles', 'motion', 'radiate']
+  const STYLE_PANES = ['color', 'shape', 'border', 'shadow', 'styles', 'motion', 'radiate']
   // Hover-intent: don't switch/close the flyout the instant a row is grazed — wait a beat so the pointer
   // can travel diagonally to the open flyout without intermediate rows yanking it away.
   const panelTimerRef = useRef(null)
@@ -5798,6 +5840,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             <div style={{ fontSize: '0.62rem', color: '#7080a0', letterSpacing: '0.08em', padding: '2px 9px 4px' }}>STYLE</div>
             {sub('color', '🎨', 'Color')}
             {sub('shape', '◆', 'Shape')}
+            {sub('border', '❋', 'Border', viewProps.borderFx || viewProps.rotate)}
             {sub('shadow', '🌑', 'Shadow', viewProps.shadow && (viewProps.shadow.opacity ?? 0) > 0)}
             {sub('styles', '🎭', 'Styles')}
             {sub('motion', '🌀', 'Motion', viewProps.nodeMotion || viewProps.nodeColorCycle)}
@@ -5833,6 +5876,37 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             {slider('Softness', 'softness', 0, 30, 1, sh.softness ?? 5, v => `${Math.round(v)}px`)}
             {slider('Opacity', 'opacity', 0, 1, 0.05, sh.opacity ?? 0.4, v => `${Math.round(v * 100)}%`)}
             <div style={{ fontSize: '0.66rem', color: '#8090b8', lineHeight: 1.4 }}>Casts a soft drop shadow down-right. New nodes inherit your latest look.</div>
+          </div>
+        )
+      })()}
+      {/* â"€â"€ Border treatment panel (decorated perimeter + rotation) â"€â"€ */}
+      {panel === 'border' && (() => {
+        const fx = viewProps.borderFx || null
+        const amp = viewProps.borderFxAmp ?? 0.15
+        const count = viewProps.borderFxCount ?? 8
+        const rot = viewProps.rotate || 0
+        const TREATMENTS = [['none', 'None'], ['jagged', 'Jagged'], ['zigzag', 'Zigzag'], ['wave', 'Wave'], ['petal', 'Petal'], ['scallop', 'Scallop'], ['bloom', 'Bloom'], ['gear', 'Gear']]
+        const pillBtn = (active) => ({ background: active ? '#2d3a6a' : '#12122a', border: `1px solid ${active ? '#5b6af0' : '#2a3358'}`, color: active ? '#fff' : '#aab4dd', borderRadius: 6, cursor: 'pointer', fontSize: '0.72rem', padding: '4px 9px' })
+        const slider = (label, val, min, max, step, fmt, on) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: '#8090b8' }}><span>{label}</span><span style={{ color: '#c5d0ff' }}>{fmt(val)}</span></div>
+            <input type="range" min={min} max={max} step={step} value={val} onChange={e => on(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#5b6af0', cursor: 'pointer' }} />
+          </div>
+        )
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 210 }}>
+            <span style={{ fontSize: '0.72rem', color: '#7080a0', letterSpacing: '0.06em' }}>BORDER TREATMENT</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {TREATMENTS.map(([v, lbl]) => (
+                <button key={v} style={pillBtn((fx || 'none') === v)} onClick={() => onSetBorderFx?.(v === 'none' ? null : v)}>{lbl}</button>
+              ))}
+            </div>
+            {fx && slider('Depth', amp, 0.03, 0.5, 0.01, v => `${Math.round(v * 100)}%`, v => onSetBorderFxAmp?.(v))}
+            {fx && slider('Count', count, 3, 40, 1, v => `${Math.round(v)}`, v => onSetBorderFxCount?.(Math.round(v)))}
+            <div style={{ borderTop: '1px solid #2a3358', margin: '2px 0' }} />
+            {slider('Rotation', rot, 0, 360, 1, v => `${Math.round(v)}°`, v => onSetRotate?.(Math.round(v)))}
+            {rot !== 0 && <button style={{ ...pillBtn(false), alignSelf: 'flex-start' }} onClick={() => onSetRotate?.(0)}>Reset rotation</button>}
+            <div style={{ fontSize: '0.66rem', color: '#8090b8', lineHeight: 1.4 }}>Treatments reshape the outline into a decorated blob. Rotation spins the shape (label stays upright).</div>
           </div>
         )
       })()}

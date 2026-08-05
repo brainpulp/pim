@@ -17,6 +17,8 @@ const views = [{
   slideshows: [{ id: 'ss', name: 'Default', slides: [] }], activeSlideshowId: 'ss',
   nodeProps: { a: { fx: 0, fy: 0 }, b: { fx: 130, fy: 70 }, c: { fx: -130, fy: 70 } },
 }]
+import useGraphStore from './lib/graphStore'
+window.__store = useGraphStore   // exposed for headless tests only (harness is not in the production build)
 const sharedData = { nodes, edges, views, active_view_id: viewId, property_defs: [] }
 
 createRoot(document.getElementById('root')).render(
