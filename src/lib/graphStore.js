@@ -323,10 +323,18 @@ const useGraphStore = create((set, get) => ({
 
   // â”€â”€ View-dependent node props â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   setNodeViewProp: (nodeId, prop, value) => set(s => {
-    const out = { views: patchViewNode(s.views, s.activeViewId, nodeId, { [prop]: value }) }
-    // Remember style changes so the next new node inherits them.
+    const views = patchViewNode(s.views, s.activeViewId, nodeId, { [prop]: value })
+    const out = { views }
+    // Touching ANY style prop makes this node's WHOLE look the default for new nodes — color, motion,
+    // border, shadow, everything — not just the one prop you changed. Snapshot the node's full style.
     if (LAST_STYLE_PROPS.includes(prop) && !(prop === 'shape' && !BASIC_SHAPES.has(value))) {
-      const ls = { ...s.lastStyle, [prop]: value }
+      const vp = views.find(v => v.id === s.activeViewId)?.nodeProps?.[nodeId] || {}
+      const ls = {}
+      LAST_STYLE_PROPS.forEach(k => {
+        if (!(k in vp)) return
+        if (k === 'shape' && !BASIC_SHAPES.has(vp[k])) return   // never propagate frame/3d/image as a default
+        ls[k] = vp[k]
+      })
       saveLastStyle(ls); out.lastStyle = ls
     }
     return out
