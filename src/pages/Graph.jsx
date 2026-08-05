@@ -560,7 +560,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const vp = views.find(v => v.id === activeViewId)?.nodeProps || {}
     const currentFrameCount = Object.values(vp).filter(p => p.shape === 'frame').length
     const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
-    const id = addNode('Frame', null, cx, cy)
+    const gs = useGraphStore.getState()
+    const dr = gs.views.find(v => v.id === gs.activeViewId)?.drillRoot
+    const id = addNode('Frame', dr || null, cx, cy)
     setNodeViewProp(id, 'shape', 'frame')
     setNodeViewProp(id, 'fillColor', 'none')
     setNodeViewProp(id, 'strokeColor', null)
@@ -579,6 +581,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
     pushUndo()
     const id = addTableNode(cx, cy)
+    // If we're drilled into a subtree, attach the new table to the drilled node so it's visible here
+    // (an orphan would fall outside visibleNodeIds and silently not render).
+    const st = useGraphStore.getState()
+    const dr = st.views.find(v => v.id === st.activeViewId)?.drillRoot
+    if (dr) addEdge(dr, id)
     setSelected({ id, type: 'node' })
     setTimeout(() => {
       const sn = simNodesRef.current.find(n => n.id === id)
@@ -2683,7 +2690,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   <div style={{ position:'absolute', bottom:'110%', left:0, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', zIndex:40, boxShadow:'0 4px 20px rgba(0,0,0,0.7)', minWidth:160 }}
                     onClick={e => e.stopPropagation()}>
                     {[
-                      ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : null)); setShowAddMenu(false) }],
+                      ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : (drillRoot || null))); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
                       ['Table', () => { addTableToCenter(); setShowAddMenu(false) }],
@@ -3009,7 +3016,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const { sx, sy } = newNodeAt
               setNewNodeAt(null)
               if (!label) return
-              const id = addNode(label, null, sx, sy)
+              const id = addNode(label, drillRoot || null, sx, sy)
               setTimeout(() => {
                 const sn = simNodesRef.current.find(n => n.id === id)
                 if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy }
@@ -3073,7 +3080,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('▭', 'New frame here', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
-                      const id = addNode('Frame', null, sx, sy)
+                      const id = addNode('Frame', drillRoot || null, sx, sy)
                       setNodeViewProp(id, 'shape', 'frame'); setNodeViewProp(id, 'fillColor', 'none'); setNodeViewProp(id, 'strokeColor', null)
                       addSlide(id)
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
@@ -3083,6 +3090,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addTableNode(sx, sy)
+                      if (drillRoot) addEdge(drillRoot, id)   // keep it inside the drilled subtree so it renders
                       setSelected({ id, type: 'node' })
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
