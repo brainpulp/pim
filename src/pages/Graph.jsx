@@ -2905,6 +2905,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
             {/* 3b placeholder — 3D viewer is rendered as absolute div outside SVG below */}
 
+            {/* Children-effects halos — painted BEHIND the nodes so the blurred glow pulses behind the crisp node. */}
+            {effectParentList.length > 0 && (
+              <EffectsOverlay parents={effectParentList} simNodesRef={simNodesRef} getVP={getVP}
+                visibleRef={visibleNodeIdsRef} childrenOrdered={childrenOrdered} scheduleRender={scheduleRender} />
+            )}
+
             {/* 4. Regular nodes on top */}
             {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
@@ -2983,12 +2989,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onDelete={() => { pushUndo(); deleteNode(n.id) }} />
               )
             })}
-
-            {/* Children-effects overlay (chase / colour wave / pulse / twinkle / ripple / orbit). */}
-            {effectParentList.length > 0 && (
-              <EffectsOverlay parents={effectParentList} simNodesRef={simNodesRef} getVP={getVP}
-                visibleRef={visibleNodeIdsRef} childrenOrdered={childrenOrdered} scheduleRender={scheduleRender} />
-            )}
 
             {/* Rubber-band selection rect — on top of nodes/images */}
             {rubberBand && (() => {
@@ -4078,7 +4078,8 @@ function EffectsOverlay({ parents, simNodesRef, getVP, visibleRef, childrenOrder
         return (
           <g key={key} transform={`translate(${node.x || 0},${node.y || 0})`} style={{ transition: 'opacity 0.12s linear' }}>
             {(style === 'color' || style === 'both') && shapeOutline(shape, hw * scale, hh * scale, { fill: color, opacity: intensity * 0.42 })}
-            {(style === 'halo' || style === 'both') && shapeOutline(shape, (hw + m) * scale, (hh + m) * scale, { fill: 'none', stroke: color, strokeWidth: 4, opacity: intensity, style: { filter: `drop-shadow(0 0 7px ${color})` } })}
+            {/* Halo = a blurred, node-shaped glow (the blur feature) that pulses BEHIND the crisp node. */}
+            {(style === 'halo' || style === 'both') && shapeOutline(shape, (hw + m) * scale * 1.12, (hh + m) * scale * 1.12, { fill: color, opacity: Math.min(1, intensity * 1.05), style: { filter: `blur(${Math.max(5, Math.round(Math.min(hw, hh) * 0.55))}px)` } })}
           </g>
         )
       })}
