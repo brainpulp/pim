@@ -157,6 +157,39 @@ export async function saveProjectToNotion(nodes, propertyDefs) {
   return pushNotion(changes) // { updated, errors }
 }
 
+// Upload a base64 data-URL image to Storage; returns a public URL (or the original on failure).
+// Photos were being embedded as base64 in view.images[].src, bloating the project row to MBs — which
+// made loads crawl and oversized saves fail silently. Offloading keeps the row tiny.
+export async function uploadImageDataUrl(dataUrl, projectId) {
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return dataUrl
+  try {
+    const res = await fetch(dataUrl); const blob = await res.blob()
+    const ext = ((blob.type.split('/')[1] || 'png').split('+')[0]).slice(0, 5)
+    const path = `${projectId}/img-${crypto.randomUUID()}.${ext}`
+    const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: blob.type || 'image/png' })
+    if (error) throw error
+    const { data } = supabase.storage.from(BUCKET).getPublicUrl(path)
+    return data.publicUrl
+  } catch (e) { console.warn('Image offload failed, keeping inline:', e?.message || e); return dataUrl }
+}
+
+// Offload every embedded base64 image in a project's views to Storage. Returns { views, changed }.
+export async function compactProjectViews(projectId, views) {
+  let changed = 0
+  const out = await Promise.all((views || []).map(async v => {
+    if (!v?.images?.length) return v
+    const images = await Promise.all(v.images.map(async img => {
+      if (img?.src && typeof img.src === 'string' && img.src.startsWith('data:')) {
+        const url = await uploadImageDataUrl(img.src, projectId)
+        if (url && url !== img.src) { changed++; return { ...img, src: url } }
+      }
+      return img
+    }))
+    return { ...v, images }
+  }))
+  return { views: out, changed }
+}
+
 // Upload a 3D model file to Supabase Storage; returns { url, type }
 export async function uploadModel(file, projectId, nodeId) {
   const ext = file.name.split('.').pop().toLowerCase()

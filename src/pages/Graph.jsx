@@ -4,7 +4,7 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
 import OutlinePanel from '../components/OutlinePanel'
-import { saveProject, uploadModel, uploadThumbnail } from '../lib/db'
+import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
@@ -2187,7 +2187,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const [cx, cy] = zoomTransformRef.current.invert([
             (rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2,
           ])
-          addImage(src, cx, cy, w, h)
+          const imgId = addImage(src, cx, cy, w, h)
+          uploadImageDataUrl(src, projectId).then(url => { if (url && url !== src) updateImage(imgId, { src: url }) })
         }
         el.src = ev.target.result
       }
@@ -2297,7 +2298,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const MAX = 220
             const ar = el.naturalWidth / el.naturalHeight || 1
             const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
-            addImage(reader.result, sx, sy, w, h)
+            const imgId2 = addImage(reader.result, sx, sy, w, h)
+            uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId2, { src: url }) })
           }
           el.src = reader.result
         }

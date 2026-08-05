@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, Component } from 'react'
 import { supabase } from './lib/supabase'
-import { renameProject, loadProject, listProjects } from './lib/db'
+import { renameProject, loadProject, listProjects, compactProjectViews, saveProject } from './lib/db'
 import useGraphStore from './lib/graphStore'
 import Auth from './components/Auth'
 import Projects from './pages/Projects'
@@ -91,7 +91,20 @@ export default function App() {
     setProjectLoadErr(null)
     if (useGraphStore.getState().loadedProjectId !== project.id) {
       loadProject(project.id)
-        .then(d => { if (!cancelled) loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles, loadedProjectId: project.id }) })
+        .then(async d => {
+          if (cancelled) return
+          loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles, loadedProjectId: project.id })
+          // One-time compaction: offload any embedded base64 images to Storage so the project row
+          // shrinks — this is what was making loads slow and oversized saves silently fail.
+          try {
+            const { views: v2, changed } = await compactProjectViews(project.id, d.views)
+            if (changed && !cancelled && useGraphStore.getState().loadedProjectId === project.id) {
+              const s = useGraphStore.getState()
+              loadProjectData({ nodes: s.nodes, edges: s.edges, views: v2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles, loadedProjectId: project.id })
+              await saveProject(project.id, { nodes: s.nodes, edges: s.edges, views: v2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles })
+            }
+          } catch (e) { console.warn('Compaction skipped:', e?.message || e) }
+        })
         .catch(e => { if (!cancelled) { console.error('Load failed:', e); setProjectLoadErr(e.message || 'Failed to load project') } })
     }
     return () => { cancelled = true }

@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
 import * as d3 from 'd3'
 import useGraphStore, { FILL_COLORS } from '../lib/graphStore'
-import { saveProject } from '../lib/db'
+import { saveProject, uploadImageDataUrl } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
 import { buildNestedTagTree } from '../lib/hierarchy'
 import NodePropsEditor from '../components/NodePropsEditor'
@@ -448,7 +448,9 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
         const w = Math.round(el.width * scale), h = Math.round(el.height * scale)
         const rect = svgRef.current?.getBoundingClientRect(), k = tf.k || 1
         const cx = ((rect?.width ?? 800) / 2 - tf.x) / k, cy = ((rect?.height ?? 600) / 2 - tf.y) / k
-        addImage(src, cx, cy, w, h); saveAll()
+        const id = addImage(src, cx, cy, w, h); saveAll()
+        // Offload the base64 to Storage and swap in the URL, so the project row stays small.
+        uploadImageDataUrl(src, projectId).then(url => { if (url && url !== src) { updateImage(id, { src: url }); saveAll() } })
       }
       el.src = src
     }
