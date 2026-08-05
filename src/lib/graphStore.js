@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { slugifyFlowId } from './flowchart'
 
 const uid = () => crypto.randomUUID()
 
@@ -747,6 +748,62 @@ const useGraphStore = create((set, get) => ({
       ...n, table: { ...n.table, columns: n.table.columns.map(c => c.id !== colId ? c : { ...c, ...patch }) },
     }),
   })),
+
+  // ── Flowchart (Mermaid text ⇄ graph) ────────────────────────────────────────
+  setEdgeLabel: (edgeId, label) => set(s => ({
+    edges: s.edges.map(e => e.id === edgeId ? { ...e, label: label || undefined } : e),
+  })),
+
+  // Give each listed node a short readable `flowId` (used in the flowchart text) if it lacks one.
+  ensureFlowIds: (ids) => {
+    const s = get()
+    const want = new Set(ids || [])
+    if (![...want].some(id => { const n = s.nodes.find(x => x.id === id); return n && !n.flowId })) return
+    const taken = new Set(s.nodes.map(n => n.flowId).filter(Boolean))
+    set({
+      nodes: s.nodes.map(n => (want.has(n.id) && !n.flowId) ? { ...n, flowId: slugifyFlowId(n.label, taken) } : n),
+    })
+  },
+
+  // Apply a parsed flowchart ({ nodes:[{flowId,label,shape}], edges:[{source,target,label}] } where
+  // source/target are flowIds) back into the graph. Matches nodes by flowId → preserves positions and
+  // identity for survivors, creates new nodes at `layout[flowId]`, reconciles edges AMONG the flowchart
+  // nodes (add/remove/label), and never deletes nodes (safe: removing a text line just orphans it).
+  applyFlowchart: (parsed, layout = {}) => {
+    const s = get()
+    const activeViewId = s.activeViewId
+    const view = s.views.find(v => v.id === activeViewId)
+    const nodeProps = { ...(view?.nodeProps || {}) }
+    const flowToId = {}
+    s.nodes.forEach(n => { if (n.flowId) flowToId[n.flowId] = n.id })
+    const nodesOut = [...s.nodes]
+    parsed.nodes.forEach(pn => {
+      let id = flowToId[pn.flowId]
+      if (!id) {
+        id = uid(); flowToId[pn.flowId] = id
+        const pos = layout[pn.flowId] || { x: 0, y: 0 }
+        nodesOut.push({ id, label: pn.label ?? pn.flowId, notes: '', flowId: pn.flowId })
+        nodeProps[id] = { ...DEFAULT_NODE_PROPS, shape: pn.shape || 'rect', fx: pos.x, fy: pos.y }
+      } else {
+        const idx = nodesOut.findIndex(n => n.id === id)
+        if (idx >= 0 && pn.label != null && nodesOut[idx].label !== pn.label) nodesOut[idx] = { ...nodesOut[idx], label: pn.label }
+        if (pn.shape) nodeProps[id] = { ...DEFAULT_NODE_PROPS, ...(nodeProps[id] || {}), shape: pn.shape }
+      }
+    })
+    const fcIds = new Set(parsed.nodes.map(pn => flowToId[pn.flowId]).filter(Boolean))
+    const desired = parsed.edges
+      .map(e => ({ source: flowToId[e.source], target: flowToId[e.target], label: e.label }))
+      .filter(e => e.source && e.target)
+    const existingByKey = {}
+    s.edges.forEach(e => { existingByKey[e.source + '>' + e.target] = e })
+    // keep every edge that isn't internal to this flowchart; rebuild the internal ones from the text
+    const edgesOut = s.edges.filter(e => !(fcIds.has(e.source) && fcIds.has(e.target)))
+    desired.forEach(e => {
+      const prev = existingByKey[e.source + '>' + e.target]
+      edgesOut.push({ id: prev?.id || uid(), source: e.source, target: e.target, label: e.label || undefined })
+    })
+    set({ nodes: nodesOut, edges: edgesOut, views: s.views.map(v => v.id === activeViewId ? { ...v, nodeProps } : v) })
+  },
 
   setDrillRoot: (nodeId) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, drillRoot: nodeId } : v),

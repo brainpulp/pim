@@ -13,7 +13,7 @@ const nodes = [
 ]
 const edges = [{ id: 'e1', source: 'a', target: 'b' }, { id: 'e2', source: 'a', target: 'c' }]
 const views = [{
-  id: viewId, name: 'Main', drillRoot: 'a', bgColor: '#0c0c1a', images: [], slides: [],
+  id: viewId, name: 'Main', drillRoot: null, bgColor: '#0c0c1a', images: [], slides: [],
   slideshows: [{ id: 'ss', name: 'Default', slides: [] }], activeSlideshowId: 'ss',
   nodeProps: { a: { fx: 0, fy: 0 }, b: { fx: 130, fy: 70 }, c: { fx: -130, fy: 70 } },
 }]

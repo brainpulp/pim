@@ -8,6 +8,7 @@ import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '.
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
+import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 
 // Central "gesture cursor": while a drag/pan/connect is in progress we set the cursor on <body>, which
 // overrides whatever element is under the pointer, then clear it on gesture end. One source of truth
@@ -429,6 +430,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [bulkMenu, setBulkMenu] = useState(null)         // { px, py, ids } right-click menu for a multi-selection
   const [bulkPanel, setBulkPanel] = useState(null)       // 'color' | 'shape' submenu open in the bulk menu
   const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
+  const [showFlowchart, setShowFlowchart] = useState(false)  // flowchart text⇄graph panel
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
@@ -810,6 +812,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const deleteTableRow    = useGraphStore(s => s.deleteTableRow)
   const deleteTableColumn = useGraphStore(s => s.deleteTableColumn)
   const updateTableColumn = useGraphStore(s => s.updateTableColumn)
+  const ensureFlowIds     = useGraphStore(s => s.ensureFlowIds)
+  const applyFlowchart    = useGraphStore(s => s.applyFlowchart)
   const listNodeSet    = useMemo(() => new Set(listNodeIds), [listNodeIds])
   const tableNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.table).map(n => n.id)), [storeNodes])
   const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
@@ -2589,7 +2593,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Blur fade: if an endpoint node is blurred, the edge dissolves into its halo.
     const sBlur = svp.borderBlur || 0, tBlur = tvp.borderBlur || 0
     const lineLen = Math.hypot(tipX - x1, tipY - y1) || 1
-    return { id: e.id, x1, y1, x2: basX, y2: basY, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen, opacity: edgeOpacity }
+    const label = storeEdges.find(x => x.id === e.id)?.label || ''
+    return { id: e.id, x1, y1, x2: basX, y2: basY, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen, opacity: edgeOpacity, label }
   }).filter(Boolean)
 
   const frameSimNodes = simNodesRef.current.filter(n => (viewNodeProps[n.id]?.shape) === 'frame')
@@ -2650,6 +2655,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <button style={sideToolBtnStyle} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
             <button style={sideToolBtnStyle} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
             <button style={sideToolBtnStyle} onClick={() => setShowExport(true)} title="Export outline / graph to PDF or Word">⤓ Export</button>
+            <button style={{ ...sideToolBtnStyle, color: showFlowchart ? '#8ecbff' : undefined }} onClick={() => setShowFlowchart(v => !v)} title="Flowchart: edit as text (Mermaid) ⇄ graphics, two-way synced">⤳ Flow</button>
             <button style={{ ...sideToolBtnStyle, color: hideFrameOutlines ? '#f6ad55' : undefined }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">{hideFrameOutlines ? '⊞' : '⊟'}</button>
             {/* BG color */}
             <div style={{ position:'relative' }}>
@@ -2793,7 +2799,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             ))}
 
             {/* 2. Edges â€" node fill covers the tips cleanly. Hidden in Organize unless "segments" on. */}
-            {(!organize || organize.showSegments) && edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen, opacity }) => {
+            {(!organize || organize.showSegments) && edgeData.map(({ id, x1, y1, tipX, tipY, arrowPts, mx, my, edgeColor, isSel, sBlur, tBlur, lineLen, opacity, label }) => {
               const hasBlur = sBlur > 0 || tBlur > 0
               const gid = `eg-${id}`
               const sFade = Math.min(0.5, (sBlur * 2) / lineLen)
@@ -2817,6 +2823,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 {!hasBlur && <polygon points={arrowPts} fill={bgColor} fillOpacity={0.4} stroke={bgColor} strokeWidth={isSel?4:2.5} strokeOpacity={0.4} strokeLinejoin="round" />}
                 <line x1={x1} y1={y1} x2={tipX} y2={tipY} stroke={lineStroke} strokeWidth={isSel?2.5:1.5} filter={hasBlur ? undefined : "url(#edge-shadow)"} />
                 <polygon points={arrowPts} fill={lineStroke} stroke={lineStroke} strokeWidth={isSel?2.5:1.5} strokeLinejoin="round" filter={hasBlur ? undefined : "url(#edge-shadow)"} />
+                {label && (
+                  <g transform={`translate(${(x1 + tipX) / 2},${(y1 + tipY) / 2})`} style={{ pointerEvents: 'none' }}>
+                    <rect x={-(String(label).length * 3.4 + 5)} y={-8} width={String(label).length * 6.8 + 10} height={16} rx={4}
+                      fill={bgColor} fillOpacity={0.9} stroke="#2a3358" strokeWidth={0.8} />
+                    <text textAnchor="middle" dominantBaseline="central" fontSize={10.5} fill="#c5d0ff" style={{ userSelect: 'none' }}>{label}</text>
+                  </g>
+                )}
                 {isSel && (
                   <g transform={`translate(${mx},${my})`} onClick={ev => { ev.stopPropagation(); removeEdge(id); setSelected(null) }} style={{ cursor:'pointer' }}>
                     <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
@@ -3181,6 +3194,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         {showExport && (
           <ExportDialog projectName={projectName} nodes={storeNodes} edges={storeEdges} views={views}
             activeViewId={activeViewId} captureGraphSVG={captureGraphSVG} onClose={() => setShowExport(false)} />
+        )}
+
+        {showFlowchart && (
+          <FlowchartPanel visibleIds={visibleNodeIds}
+            centerXY={() => svgRef.current ? zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2]) : [0, 0]}
+            onApplied={() => { simRef.current?.alpha(0.5).restart(); scheduleRender() }}
+            onClose={() => setShowFlowchart(false)} />
         )}
 
         {/* Always-on 3D viewers (rotate mode 'always', not currently selected) */}
@@ -3921,6 +3941,91 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
       )}
     </div>
   )
+}
+
+// ─── FlowchartPanel ───────────────────────────────────────────────────────────
+// A docked text editor (Mermaid-flavored) that two-way syncs with the graph: the canvas' visible
+// nodes/edges are serialized to text; editing the text (debounced) parses and applies back, matching
+// nodes by their stable `flowId` so hand-placed positions survive. New nodes get an auto-layout.
+function FlowchartPanel({ visibleIds, centerXY, onApplied, onClose }) {
+  const nodes = useGraphStore(s => s.nodes)
+  const edges = useGraphStore(s => s.edges)
+  const ensureFlowIds = useGraphStore(s => s.ensureFlowIds)
+  const applyFlowchart = useGraphStore(s => s.applyFlowchart)
+  const [text, setText] = useState('')
+  const [status, setStatus] = useState('')
+  const focusedRef = useRef(false)
+  const applyingRef = useRef(false)
+  const debRef = useRef(null)
+
+  const regen = useCallback(() => {
+    ensureFlowIds([...visibleIds])
+    const st = useGraphStore.getState()
+    const props = st.views.find(v => v.id === st.activeViewId)?.nodeProps || {}
+    const byId = Object.fromEntries(st.nodes.map(n => [n.id, n]))
+    const vis = st.nodes.filter(n => visibleIds.has(n.id))
+    const flowIdOf = id => byId[id]?.flowId || id
+    const shapeOf = id => props[id]?.shape || 'rect'
+    const visEdges = st.edges.filter(e => visibleIds.has(e.source) && visibleIds.has(e.target))
+    setText(graphToMermaid(vis, visEdges, shapeOf, flowIdOf))
+  }, [visibleIds, ensureFlowIds])
+
+  useEffect(() => { regen() }, [])                                             // eslint-disable-line
+  useEffect(() => { if (!focusedRef.current && !applyingRef.current) regen() }, [nodes, edges]) // eslint-disable-line
+
+  const applyNow = (val) => {
+    try {
+      const parsed = parseMermaid(val)
+      const [cx, cy] = (centerXY && centerXY()) || [0, 0]
+      const layout = layeredLayout(parsed.nodes, parsed.edges, { ox: cx, oy: cy })
+      applyingRef.current = true
+      applyFlowchart(parsed, layout)
+      onApplied && onApplied()
+      setStatus(`${parsed.nodes.length} nodes · ${parsed.edges.length} links`)
+      setTimeout(() => { applyingRef.current = false }, 60)
+    } catch (e) { setStatus('Parse error: ' + (e?.message || e)) }
+  }
+
+  const onEdit = (val) => {
+    setText(val)
+    if (debRef.current) clearTimeout(debRef.current)
+    debRef.current = setTimeout(() => applyNow(val), 550)
+  }
+
+  return (
+    <div style={fcp.panel} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
+      <div style={fcp.header}>
+        <span style={{ fontWeight: 700, fontSize: 13, color: '#c5d0ff' }}>⤳ Flowchart</span>
+        <span style={{ fontSize: 11, color: '#8090b8', marginLeft: 'auto' }}>text ⇄ graph</span>
+        <button style={fcp.close} onClick={onClose} title="Close">×</button>
+      </div>
+      <div style={{ fontSize: 11, color: '#8090b8', padding: '0 12px 6px', lineHeight: 1.45 }}>
+        Edit as text — the graph updates live. Shapes:&nbsp;
+        <code style={fcp.code}>[ ]</code> box · <code style={fcp.code}>( )</code> round · <code style={fcp.code}>{'{ }'}</code> decision · <code style={fcp.code}>([ ])</code> start/end. Links: <code style={fcp.code}>A --&gt; B</code>, <code style={fcp.code}>A --&gt;|yes| B</code>.
+      </div>
+      <textarea value={text}
+        onFocus={() => { focusedRef.current = true }}
+        onBlur={() => { focusedRef.current = false }}
+        onChange={e => onEdit(e.target.value)}
+        onKeyDown={e => e.stopPropagation()}
+        spellCheck={false} style={fcp.textarea} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px' }}>
+        <button style={fcp.apply} onClick={() => applyNow(text)}>Apply</button>
+        <button style={fcp.ghost} onClick={regen} title="Rebuild the text from the current graph">Sync from graph</button>
+        <span style={{ fontSize: 11, color: status.startsWith('Parse') ? '#f0a0a0' : '#8090b8', marginLeft: 'auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{status}</span>
+      </div>
+    </div>
+  )
+}
+
+const fcp = {
+  panel: { position: 'absolute', top: 0, right: 0, bottom: 0, width: 360, maxWidth: '46vw', zIndex: 36, background: '#12122a', borderLeft: '1px solid #2d3a6a', boxShadow: '-8px 0 28px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', fontFamily: '-apple-system, sans-serif' },
+  header: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: '1px solid #23233e' },
+  close: { background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px' },
+  code: { background: '#1c1c38', color: '#c5d0ff', borderRadius: 4, padding: '1px 4px', fontSize: 10.5, fontFamily: 'ui-monospace, monospace' },
+  textarea: { flex: 1, margin: '0 12px', background: '#0d0d1e', border: '1px solid #2a3358', borderRadius: 8, color: '#dbe4ff', fontSize: 12.5, fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: 1.55, padding: 10, outline: 'none', resize: 'none', whiteSpace: 'pre' },
+  apply: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '5px 12px' },
+  ghost: { background: 'transparent', border: '1px solid #2a3358', color: '#aab4dd', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '5px 10px' },
 }
 
 // ─── ExportDialog ───────────────────────────────────────────────────────────
