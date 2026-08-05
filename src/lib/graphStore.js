@@ -33,7 +33,7 @@ export const PALETTE = [
 export const SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none', 'image']
 
 // Cosmetic props captured by a saved node "style" (snapshot). View-dependent props only.
-export const STYLE_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'scale', 'nodeEmojis']
+export const STYLE_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'scale', 'nodeEmojis', 'shadow', 'opacity']
 
 export const COLOR_PALETTE = PALETTE
 export const FILL_COLORS = PALETTE
@@ -67,6 +67,15 @@ const patchViewNode = (views, activeViewId, nodeId, patch) =>
 const _undoHistory = []
 const MAX_UNDO = 50
 
+// Cosmetic props that make up a node's "look". New nodes inherit the last-changed values of these
+// (see lastStyle below), so styling one node carries forward to the next you create — even across
+// sessions (persisted to localStorage). Shape is captured only for basic shapes, never frame/3d/image.
+const LAST_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape', 'shadow', 'nodeMotion', 'nodeColorCycle']
+const BASIC_SHAPES = new Set(['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none'])
+const LS_KEY = 'pim_last_node_style'
+const loadLastStyle = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {} } catch { return {} } }
+const saveLastStyle = (obj) => { try { localStorage.setItem(LS_KEY, JSON.stringify(obj)) } catch { /* ignore */ } }
+
 const useGraphStore = create((set, get) => ({
   // Which project's snapshot is currently in the store (guards loads + gates autosave across all tabs).
   loadedProjectId: null,
@@ -81,6 +90,9 @@ const useGraphStore = create((set, get) => ({
 
   // â”€â”€ Reusable node styles (cosmetic snapshots, view-independent list). Applied into a view's nodeProps.
   styles: [],
+
+  // Last cosmetic values applied to any node — new nodes inherit these. Persisted across sessions.
+  lastStyle: loadLastStyle(),
 
   // â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
@@ -147,7 +159,11 @@ const useGraphStore = create((set, get) => ({
     const st = s.styles.find(x => x.id === styleId); if (!st) return {}
     let views = s.views
     ;(nodeIds || []).forEach(nid => { views = patchViewNode(views, s.activeViewId, nid, st.props) })
-    return { views }
+    // Applying a saved style also sets it as the look new nodes inherit.
+    const ls = { ...s.lastStyle }
+    Object.entries(st.props).forEach(([k, v]) => { if (LAST_STYLE_PROPS.includes(k) && !(k === 'shape' && !BASIC_SHAPES.has(v))) ls[k] = v })
+    saveLastStyle(ls)
+    return { views, lastStyle: ls }
   }),
 
   // â”€â”€ Node ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -164,7 +180,7 @@ const useGraphStore = create((set, get) => ({
         ...v,
         nodeProps: {
           ...v.nodeProps,
-          [id]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) },
+          [id]: { ...DEFAULT_NODE_PROPS, ...(s.lastStyle || {}), ...(x !== null ? { fx: x, fy: y } : {}) },
         },
       }),
     }))
@@ -305,9 +321,15 @@ const useGraphStore = create((set, get) => ({
   }),
 
   // â”€â”€ View-dependent node props â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  setNodeViewProp: (nodeId, prop, value) => set(s => ({
-    views: patchViewNode(s.views, s.activeViewId, nodeId, { [prop]: value }),
-  })),
+  setNodeViewProp: (nodeId, prop, value) => set(s => {
+    const out = { views: patchViewNode(s.views, s.activeViewId, nodeId, { [prop]: value }) }
+    // Remember style changes so the next new node inherits them.
+    if (LAST_STYLE_PROPS.includes(prop) && !(prop === 'shape' && !BASIC_SHAPES.has(value))) {
+      const ls = { ...s.lastStyle, [prop]: value }
+      saveLastStyle(ls); out.lastStyle = ls
+    }
+    return out
+  }),
 
   setContainedIn: (nodeId, containerId) => set(s => ({
     views: patchViewNode(s.views, s.activeViewId, nodeId, { containedIn: containerId }),

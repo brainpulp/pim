@@ -2293,6 +2293,29 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [drilledImageId, clientToSim])
 
   // Paste an image from the clipboard at a given sim position (used by the context menu).
+  // Open a file picker and drop the chosen image onto the canvas at (sx, sy).
+  const addImageFileAt = useCallback((sx, sy) => {
+    const input = document.createElement('input')
+    input.type = 'file'; input.accept = 'image/*'
+    input.onchange = () => {
+      const file = input.files?.[0]; if (!file) return
+      const reader = new FileReader()
+      reader.onload = () => {
+        const el = new window.Image()
+        el.onload = () => {
+          const MAX = 220
+          const ar = el.naturalWidth / el.naturalHeight || 1
+          const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
+          const imgId = addImage(reader.result, sx, sy, w, h)
+          uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId, { src: url }) })
+        }
+        el.src = reader.result
+      }
+      reader.readAsDataURL(file)
+    }
+    input.click()
+  }, [addImage, updateImage, projectId])
+
   const pasteImageAt = useCallback(async (sx, sy) => {
     try {
       const clip = await navigator.clipboard.read()
@@ -3024,8 +3047,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
+                    {item('🖼️', 'Add image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                    {item('🗂️', 'New view', () => { pushUndo(); addView(); close() })}
+                    {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
                     {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
                     {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
                     {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
@@ -3238,6 +3264,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onApplyStyle={id => { pushUndo(); const ids = selectedNodeIds.size > 1 ? [...selectedNodeIds] : [hn.id]; applyStyleAction(id, ids) }}
               onSetBorderBlur={v => setNodeViewProp(hn.id, 'borderBlur', v)}
               onSetOpacity={v => setNodeViewProp(hn.id, 'opacity', v)}
+              onSetShadow={v => setNodeViewProp(hn.id, 'shadow', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDrill={() => { setDrillRoot(hn.id); close(); setTimeout(zoomExtents, 50) }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
@@ -4693,6 +4720,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const motion = viewProps.nodeMotion
   const colorCycle = viewProps.nodeColorCycle || 0
   const isActive = isSelected
+  // Drop shadow (view-dependent): { distance, opacity, softness } | null. Cast diagonally down-right.
+  const shadow = viewProps.shadow
+  const hasShadow = shadow && (shadow.opacity ?? 0) > 0 && ((shadow.distance ?? 0) > 0 || (shadow.softness ?? 0) > 0)
+  const shadowFilterId = `nsh-${node.id}`
 
   // ── In-node images: above/below/beside images live INSIDE the node's EXISTING shape —
   // the node never grows. Images shrink to fit whatever space is available instead, and
@@ -4782,6 +4813,15 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         isActive={isActive}
         opacity={viewProps.opacity}
       >
+        {hasShadow && (
+          <defs>
+            <filter id={shadowFilterId} x="-80%" y="-80%" width="260%" height="260%">
+              <feDropShadow dx={(shadow.distance ?? 6) * 0.72} dy={(shadow.distance ?? 6) * 0.72}
+                stdDeviation={shadow.softness ?? 4} floodColor="#000000" floodOpacity={shadow.opacity ?? 0.35} />
+            </filter>
+          </defs>
+        )}
+        <g filter={hasShadow ? `url(#${shadowFilterId})` : undefined}>
         {viewProps.borderBlur > 0 ? (
           // SVG feGaussianBlur with sRGB on the primitive: avoids the linearRGB white
           // fringe AND the Chromium white-box bug that CSS filter+transform triggers.
@@ -4801,6 +4841,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
             stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} strokeDash={viewProps.strokeDash} />
         )}
+        </g>
 
         {/* Background image — covers the node body, clipped to its shape, behind the label */}
         {bgImg && (
@@ -5393,12 +5434,22 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
   const shape = viewProps.shape || 'circle'
-  const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
+  const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
+  // Panels grouped under the top-level "Style" row — rendered as a persistent two-pane popover
+  // (sub-list on the left, active pane on the right) so you can hop between them without the list vanishing.
+  const STYLE_PANES = ['color', 'shape', 'shadow', 'styles', 'motion', 'radiate']
+  // Hover-intent: don't switch/close the flyout the instant a row is grazed — wait a beat so the pointer
+  // can travel diagonally to the open flyout without intermediate rows yanking it away.
+  const panelTimerRef = useRef(null)
+  const cancelPanelTimer = () => { if (panelTimerRef.current) { clearTimeout(panelTimerRef.current); panelTimerRef.current = null } }
+  const queuePanel = (p, top) => { cancelPanelTimer(); panelTimerRef.current = setTimeout(() => { setPanel(p); if (top != null) setPanelTop(top) }, 160) }
+  const openPanelNow = (p, top) => { cancelPanelTimer(); setPanel(p); if (top != null) setPanelTop(top) }
+  useEffect(() => () => cancelPanelTimer(), [])
   const [newStyleName, setNewStyleName] = useState('')
   const [notesDraft, setNotesDraft] = useState(notes)
   const [emojiInput, setEmojiInput] = useState('')
@@ -5470,10 +5521,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   // opts.opens: panel id to open on hover (submenu row), or null to close any open flyout
   // (leaf/action row). Undefined = don't touch the flyout on hover.
   const textRow = (label, onClick, opts = {}) => {
-    const isOpen = opts.opens != null && panel === opts.opens
+    const isOpen = opts.opens != null && (panel === opts.opens || (opts.opens === 'color' && STYLE_PANES.includes(panel)))
     return (
-      <div onClick={e => { if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop); onClick?.() }}
-        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens !== undefined) { setPanel(opts.opens); if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop) } }}
+      <div onClick={e => { cancelPanelTimer(); if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop); onClick?.() }}
+        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens !== undefined) queuePanel(opts.opens, opts.opens != null ? e.currentTarget.offsetTop : null) }}
         onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#23234a' : 'transparent' }}
         style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
           background: isOpen ? '#23234a' : 'transparent',
@@ -5513,9 +5564,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     >
       {/* â"€â"€ Main text menu (always visible; sub-sections fly out beside it) â"€â"€ */}
       <>
-        {textRow('Color', () => setPanel('color'), { icon: '🎨', right: '›', opens: 'color' })}
-        {textRow('Shape', () => setPanel('shape'), { icon: '◆', right: '›', opens: 'shape' })}
-        {textRow('Styles', () => setPanel('styles'), { icon: '🎭', right: styles.length ? String(styles.length) : '›', rightColor: styles.length ? '#88b4e8' : '#8090b8', opens: 'styles' })}
+        {textRow('Style', () => openPanelNow('color'), { icon: '🎨', right: '›', opens: 'color' })}
         {textRow(selCount > 1 ? `Arrange (${selCount} selected)` : 'Arrange', () => setPanel('arrange'), { icon: '▦', right: '›', opens: 'arrange' })}
         {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { icon: '🔗', right: '›', opens: 'imageUrl' })}
         {textRow('Notes', () => setPanel('note'), { icon: '📝', right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
@@ -5525,8 +5574,6 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         })())}
         {textRow('Emoji', () => setPanel('emoji'), { icon: '😀', right: '›', opens: 'emoji' })}
         {textRow('Image', () => setPanel('image'), { icon: '🖼️', right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
-        {textRow('Motion & color cycle', () => setPanel('motion'), { icon: '🌀', right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8', opens: 'motion' })}
-        {textRow('Radiate to children', () => setPanel('radiate'), { icon: '📡', right: '›', opens: 'radiate' })}
         {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { icon: '✨', right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
         {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
           if (depthExpand !== null) { onSetDepthExpand?.(null) }
@@ -5541,7 +5588,62 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       </>
 
       {/* â"€â"€ Fly-out sub-menu (holds whichever section is active) â"€â"€ */}
-      {panel && (<div style={flyout} onMouseDown={e => e.stopPropagation()}>
+      {panel && (<div
+        style={STYLE_PANES.includes(panel) ? { ...flyout, display: 'flex', gap: 10, maxWidth: 540, alignItems: 'flex-start' } : flyout}
+        onMouseDown={e => e.stopPropagation()} onMouseEnter={cancelPanelTimer}>
+      {/* Persistent sub-list for the grouped Style panes (Color / Shape / Shadow / …) */}
+      {STYLE_PANES.includes(panel) && (() => {
+        const sub = (target, icon, label, on) => (
+          <div key={target} onMouseEnter={() => openPanelNow(target)} onClick={() => openPanelNow(target)}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap',
+              fontSize: '0.8rem', background: panel === target ? '#23234a' : 'transparent', color: panel === target ? '#c5d0ff' : '#aab4dd' }}>
+            <span style={{ width: 15, textAlign: 'center', fontSize: '0.85rem' }}>{icon}</span><span>{label}</span>
+            {on && <span style={{ marginLeft: 'auto', color: '#88b4e8', fontSize: '0.7rem' }}>•</span>}
+          </div>
+        )
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 126, borderRight: '1px solid #23233e', paddingRight: 8, flexShrink: 0 }}>
+            <div style={{ fontSize: '0.62rem', color: '#7080a0', letterSpacing: '0.08em', padding: '2px 9px 4px' }}>STYLE</div>
+            {sub('color', '🎨', 'Color')}
+            {sub('shape', '◆', 'Shape')}
+            {sub('shadow', '🌑', 'Shadow', viewProps.shadow && (viewProps.shadow.opacity ?? 0) > 0)}
+            {sub('styles', '🎭', 'Styles')}
+            {sub('motion', '🌀', 'Motion', viewProps.nodeMotion || viewProps.nodeColorCycle)}
+            {sub('radiate', '📡', 'Radiate')}
+          </div>
+        )
+      })()}
+      {/* â"€â"€ Shadow panel â"€â"€ */}
+      {panel === 'shadow' && (() => {
+        const sh = viewProps.shadow || {}
+        const on = (sh.opacity ?? 0) > 0
+        const set = (patch) => onSetShadow?.({ distance: sh.distance ?? 8, softness: sh.softness ?? 5, opacity: sh.opacity ?? 0.4, ...patch })
+        const slider = (label, key, min, max, step, val, fmt) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: '#8090b8' }}>
+              <span>{label}</span><span style={{ color: '#c5d0ff' }}>{fmt(val)}</span>
+            </div>
+            <input type="range" min={min} max={max} step={step} value={val}
+              onChange={e => set({ [key]: parseFloat(e.target.value) })}
+              style={{ width: '100%', accentColor: '#5b6af0', cursor: 'pointer' }} />
+          </div>
+        )
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 196 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: '0.72rem', color: '#7080a0', letterSpacing: '0.06em' }}>SHADOW</span>
+              <button onClick={() => on ? onSetShadow?.(null) : set({ opacity: 0.4 })}
+                style={{ background: on ? '#20264e' : 'transparent', border: '1px solid #3a4a8a', color: on ? '#c5d0ff' : '#8090b8', borderRadius: 5, cursor: 'pointer', fontSize: '0.7rem', padding: '2px 9px' }}>
+                {on ? 'On' : 'Off'}
+              </button>
+            </div>
+            {slider('Distance', 'distance', 0, 30, 1, sh.distance ?? 8, v => `${Math.round(v)}px`)}
+            {slider('Softness', 'softness', 0, 30, 1, sh.softness ?? 5, v => `${Math.round(v)}px`)}
+            {slider('Opacity', 'opacity', 0, 1, 0.05, sh.opacity ?? 0.4, v => `${Math.round(v * 100)}%`)}
+            <div style={{ fontSize: '0.66rem', color: '#8090b8', lineHeight: 1.4 }}>Casts a soft drop shadow down-right. New nodes inherit your latest look.</div>
+          </div>
+        )
+      })()}
       {/* â"€â"€ Properties panel (Notion-style DB fields for this node) â"€â"€ */}
       {panel === 'props' && (
         <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:220 }}>
