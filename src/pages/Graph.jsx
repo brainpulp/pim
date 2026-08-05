@@ -1278,14 +1278,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     let rmb = null
     // Listen on window (not just the svg) so right-clicks that land on the HTML toolbar/menu overlays
     // covering the canvas are still tracked; overlay targets are skipped when opening our menu.
-    const onDownCapture = ev => { if (ev.button === 2) rmb = { x: ev.clientX, y: ev.clientY, moved: false, target: ev.target } }
+    // Context trigger = right mouse (button 2) OR Mac-style Ctrl+left-click (button 0 + ctrlKey). The
+    // latter never sent button 2, so ctrl-clickers (trackpads, no right button) saw no menu at all.
+    const onDownCapture = ev => {
+      if (ev.button === 2 || (ev.button === 0 && ev.ctrlKey && !ev.metaKey)) {
+        rmb = { x: ev.clientX, y: ev.clientY, moved: false, target: ev.target, ctrl: ev.button === 0 }
+      }
+    }
     const onMoveCapture = ev => { if (rmb && Math.hypot(ev.clientX - rmb.x, ev.clientY - rmb.y) >= 5) rmb.moved = true }
     // Suppress the native menu everywhere (window capture) — binding only to the svg let it leak over
     // the HTML overlays (NodeToolbar, menus) that sit above the canvas. Keep it on form fields.
     const onContext = ev => { const t = ev.target; if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return; ev.preventDefault() }
     const OVERLAY_SEL = '[data-nodetoolbar],[data-menu],[data-slide-sidebar],input,textarea,select,a,button'
     const onUpCapture = ev => {
-      if (ev.button !== 2 || !rmb) return
+      if (!rmb) return
+      const wasCtrl = rmb.ctrl   // Ctrl+click → only the background menu (nodes keep ctrl-click multi-select)
       const dragged = rmb.moved
       const cx = rmb.x, cy = rmb.y
       const overlay = rmb.target?.closest?.(OVERLAY_SEL)
@@ -1306,7 +1313,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
         if (Math.abs(sx - n.x) <= halfW && Math.abs(sy - n.y) <= halfH) hitNode = n
       }
-      if (hitNode) {
+      if (hitNode && !wasCtrl) {
         setContextMenu(null); setPhotoMenu(null)
         // Right-clicking a node that's part of a multi-selection → bulk menu for ALL selected.
         const curSel = selectedNodeIdsRef.current
@@ -1325,13 +1332,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
       let hitImg = null
       imgs.forEach(im => { if (im.visible !== false && Math.abs(sx - im.x) <= im.width / 2 && Math.abs(sy - im.y) <= im.height / 2) hitImg = im })
-      if (hitImg) {
+      if (hitImg && !wasCtrl) {
         setContextMenu(null); setNodeMenu(null)
         setSelectedImageIds(prev => prev.has(hitImg.id) ? prev : new Set([hitImg.id]))
         setPhotoMenu({ px, py, imageId: hitImg.id })
         return
       }
 
+      if (wasCtrl && (hitNode || hitImg)) return   // ctrl-click on a node/image → leave it to multi-select
       setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
     }
@@ -2989,7 +2997,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               if (!node?.table) return null
               return (
                 <TableCard key={'tbl' + n.id} node={n} title={node.label} table={node.table} zoomRef={zoomTransformRef}
-                  fill={getVP(n.id).fillColor} selected={selected?.type === 'node' && selected.id === n.id}
+                  fill={getVP(n.id).fillColor} scale={getVP(n.id).tableScale || 1} palette={COLOR_PALETTE}
+                  selected={selected?.type === 'node' && selected.id === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onRename={label => updateLabel(n.id, label)}
@@ -2999,7 +3008,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onDeleteRow={rowId => deleteTableRow(n.id, rowId)}
                   onDeleteColumn={colId => deleteTableColumn(n.id, colId)}
                   onUpdateColumn={(colId, patch) => updateTableColumn(n.id, colId, patch)}
-                  onDelete={() => { pushUndo(); deleteNode(n.id) }} />
+                  onSetColor={c => setNodeViewProp(n.id, 'fillColor', c)}
+                  onSetScale={k => setNodeViewProp(n.id, 'tableScale', k)}
+                  onDelete={() => setConfirmDeleteNodes([n.id])} />
               )
             })}
 
@@ -4299,7 +4310,7 @@ const lc = {
 // title or a column header to rename; the ⋮ column menu changes type / edits options / deletes;
 // drag a column's right edge to resize. Connect it with edges or leave it floating like any node.
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
-function TableCard({ node, title, table, fill, selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onDelete }) {
+function TableCard({ node, title, table, fill, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onSetColor, onSetScale, onDelete }) {
   const columns = table.columns || [], rows = table.rows || []
   const GUT = 26, ADD = 30, rowH = 30, headerH = 34, colH = 30, footH = 30, maxBodyH = 380
   const colsW = columns.reduce((a, c) => a + (c.width || 120), 0)
@@ -4313,15 +4324,24 @@ function TableCard({ node, title, table, fill, selected, zoomRef, onHeaderDown, 
   useEffect(() => { if (!editTitle) setTitleDraft(title || '') }, [title, editTitle])
   const [menuCol, setMenuCol] = useState(null)       // colId with its ⋮ menu open
   const [editColId, setEditColId] = useState(null)   // colId whose name is being edited
+  const [showColors, setShowColors] = useState(false)
 
-  // Column resize — convert screen dx to canvas dx via the live zoom scale.
+  // effective screen→content scale accounts for both canvas zoom and the table's own scale.
+  const eff = () => (zoomRef?.current?.k || 1) * (scale || 1)
+
+  // Column resize — drag a column's right edge; convert screen dx to content dx.
   const startResize = (e, col) => {
     e.preventDefault(); e.stopPropagation()
     const startX = e.clientX, startW = col.width || 120
-    const move = ev => {
-      const k = zoomRef?.current?.k || 1
-      onUpdateColumn(col.id, { width: Math.max(46, Math.round(startW + (ev.clientX - startX) / k)) })
-    }
+    const move = ev => onUpdateColumn(col.id, { width: Math.max(46, Math.round(startW + (ev.clientX - startX) / eff())) })
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  // Whole-table resize — drag the bottom-right corner to scale the card up/down.
+  const startScale = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const startX = e.clientX, s0 = scale || 1, k = zoomRef?.current?.k || 1
+    const move = ev => onSetScale(Math.max(0.4, Math.min(4, s0 + (ev.clientX - startX) / (k * 260))))
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
@@ -4330,7 +4350,8 @@ function TableCard({ node, title, table, fill, selected, zoomRef, onHeaderDown, 
   const stop = e => e.stopPropagation()
 
   return (
-    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
+    <g transform={`translate(${(node.x || 0) - (W * scale) / 2},${(node.y || 0) - (H * scale) / 2}) scale(${scale})`}>
+    <foreignObject x={0} y={0} width={W} height={H + 14} style={{ overflow: 'visible' }}>
       <div style={tc.card(accent, selected)} onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}>
         {/* Header (drag to move) */}
         <div style={tc.header(accent)} onMouseDown={onHeaderDown} onClick={e => { stop(e); onSelect() }} title="Drag to move · double-click title to rename">
@@ -4343,6 +4364,17 @@ function TableCard({ node, title, table, fill, selected, zoomRef, onHeaderDown, 
             <span style={tc.title} onMouseDown={stop} onDoubleClick={e => { stop(e); setTitleDraft(title || ''); setEditTitle(true) }}>{title || 'Table'}</span>
           )}
           <span style={tc.count}>{rows.length}×{columns.length}</span>
+          <div style={{ position: 'relative' }}>
+            <button style={tc.headBtn} title="Table color" onMouseDown={stop} onClick={e => { stop(e); setShowColors(v => !v) }}>◑</button>
+            {showColors && (
+              <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
+                {palette.map(c => (
+                  <div key={c} title={c} onClick={() => { onSetColor(c); setShowColors(false) }}
+                    style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />
+                ))}
+              </div>
+            )}
+          </div>
           <button style={tc.headBtn} title="Delete table" onMouseDown={stop} onClick={e => { stop(e); onDelete() }}>×</button>
         </div>
 
@@ -4404,9 +4436,14 @@ function TableCard({ node, title, table, fill, selected, zoomRef, onHeaderDown, 
         {/* Footer */}
         <div style={tc.footer} onMouseDown={stop}>
           <button style={tc.addRowBtn} onClick={e => { stop(e); onAddRow() }}>+ Row</button>
+          <span style={{ marginLeft: 'auto', fontSize: 10, color: '#7080a0' }}>drag ⌟ to resize</span>
         </div>
       </div>
     </foreignObject>
+    {/* Whole-table resize handle (bottom-right corner) */}
+    <rect x={W - 13} y={H - 13} width={16} height={16} rx={3} fill="#1a1f4a" stroke="#5b6af0" strokeWidth={1}
+      style={{ cursor: 'nwse-resize' }} onMouseDown={startScale} />
+    </g>
   )
 }
 
@@ -4485,6 +4522,7 @@ const tc = {
   footer: { flexShrink: 0, padding: '5px 8px', borderTop: '1px solid #2a3358', background: '#101024' },
   addRowBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 5, cursor: 'pointer', fontSize: 11.5, padding: '3px 10px' },
   addColBtn: { background: '#171733', border: 'none', borderLeft: '1px solid #23233e', color: '#7b8fcc', cursor: 'pointer', fontSize: 16, flexShrink: 0, lineHeight: 1 },
+  colorPop: { position: 'absolute', top: 22, right: 0, zIndex: 30, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', display: 'flex', flexWrap: 'wrap', gap: 4, width: 150 },
 }
 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
