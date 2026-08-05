@@ -782,7 +782,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // ── List-card ("show children as list") support ──────────────────────────────
   const toggleListNode = useGraphStore(s => s.toggleListNode)
   const moveChild      = useGraphStore(s => s.moveChild)
+  const addTableNode      = useGraphStore(s => s.addTableNode)
+  const setTableCell      = useGraphStore(s => s.setTableCell)
+  const addTableRow       = useGraphStore(s => s.addTableRow)
+  const addTableColumn    = useGraphStore(s => s.addTableColumn)
+  const deleteTableRow    = useGraphStore(s => s.deleteTableRow)
+  const deleteTableColumn = useGraphStore(s => s.deleteTableColumn)
+  const updateTableColumn = useGraphStore(s => s.updateTableColumn)
   const listNodeSet    = useMemo(() => new Set(listNodeIds), [listNodeIds])
+  const tableNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.table).map(n => n.id)), [storeNodes])
+  const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
   const nodeLabelById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.label])), [storeNodes])
   const childrenOrdered = useMemo(() => { const m = {}; storeEdges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [storeEdges])
   // Flatten a node's whole subtree into indented rows (edge order; cycle-safe) for the list card.
@@ -2827,7 +2836,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {/* 3b placeholder — 3D viewer is rendered as absolute div outside SVG below */}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id)).map(n => {
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
               const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
               return (
@@ -2884,6 +2893,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onReorder={reorderRow}
                 onExit={() => toggleListNode(n.id)} />
             ))}
+
+            {/* Table nodes — a node carrying `table` is drawn as an editable spreadsheet card. */}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && tableNodeSet.has(n.id)).map(n => {
+              const node = storeNodeById[n.id]
+              if (!node?.table) return null
+              return (
+                <TableCard key={'tbl' + n.id} node={n} title={node.label} table={node.table} zoomRef={zoomTransformRef}
+                  fill={getVP(n.id).fillColor} selected={selected?.type === 'node' && selected.id === n.id}
+                  onHeaderDown={e => handleNodeMouseDown(e, n.id)}
+                  onSelect={() => setSelected({ id: n.id, type: 'node' })}
+                  onRename={label => updateLabel(n.id, label)}
+                  onCell={(rowId, colId, value) => setTableCell(n.id, rowId, colId, value)}
+                  onAddRow={() => addTableRow(n.id)}
+                  onAddColumn={type => addTableColumn(n.id, type)}
+                  onDeleteRow={rowId => deleteTableRow(n.id, rowId)}
+                  onDeleteColumn={colId => deleteTableColumn(n.id, colId)}
+                  onUpdateColumn={(colId, patch) => updateTableColumn(n.id, colId, patch)}
+                  onDelete={() => { pushUndo(); deleteNode(n.id) }} />
+              )
+            })}
 
             {/* Children-effects overlay (chase / colour wave / pulse / twinkle / ripple / orbit). */}
             {effectParentList.length > 0 && (
@@ -2942,12 +2971,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         {/* Right-click context menu */}
         {contextMenu && (() => {
           const close = () => { setContextMenu(null); setCtxColors(false) }
-          const item = (label, onClick) => (
+          const item = (icon, label, onClick) => (
             <div onClick={onClick}
               onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-              {label}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                {icon && <span style={{ width: 16, textAlign: 'center', fontSize: '0.88rem', opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
+                <span>{label}</span>
+              </span>
             </div>
           )
           return (
@@ -2963,7 +2995,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 }}>
                 {ctxColors ? (
                   <>
-                    {item(<span style={{ color: '#8090b8' }}>‹ Background color</span>, () => setCtxColors(false))}
+                    {item(null, <span style={{ color: '#8090b8' }}>‹ Background color</span>, () => setCtxColors(false))}
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 168, padding: '4px 8px 6px' }}>
                       {[...BG_COLORS, ...COLOR_PALETTE].map(c => (
                         <div key={c} title={c} onClick={() => { setViewBgColor(c); close() }}
@@ -2974,8 +3006,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   </>
                 ) : (
                   <>
-                    {item('New node here', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
-                    {item('New frame here', () => {
+                    {item('✚', 'New node here', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
+                    {item('▭', 'New frame here', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addNode('Frame', null, sx, sy)
@@ -2984,11 +3016,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
-                    {item('Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
-                    {item(<>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
-                    {item('Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
-                    {item('Fit to view', () => { zoomExtents(); close() })}
+                    {item('▦', 'New table here', () => {
+                      pushUndo()
+                      const { sx, sy } = contextMenu
+                      const id = addTableNode(sx, sy)
+                      setSelected({ id, type: 'node' })
+                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                      close()
+                    })}
+                    {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
+                    {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
+                    {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
+                    {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
+                    {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
                   </>
                 )}
               </div>
@@ -3001,15 +3041,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const ids = bulkMenu.ids
           const close = () => { setBulkMenu(null); setBulkPanel(null) }
           const setAll = (prop, val) => { pushUndo(); ids.forEach(id => setNodeViewProp(id, prop, val)) }
-          const item = (label, onClick) => (
+          const item = (icon, label, onClick) => (
             <div onClick={onClick}
               onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-              {label}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                {icon && <span style={{ width: 16, textAlign: 'center', fontSize: '0.88rem', opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
+                <span>{label}</span>
+              </span>
             </div>
           )
-          const back = (label) => item(<span style={{ color: '#8090b8' }}>‹ {label}</span>, () => setBulkPanel(null))
+          const back = (label) => item(null, <span style={{ color: '#8090b8' }}>‹ {label}</span>, () => setBulkPanel(null))
           const swatchGrid = (withNone, onPick) => (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 178, padding: '4px 8px 6px' }}>
               {withNone && <div title="None" onClick={() => { onPick('__none__'); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: 'transparent', border: '1.5px solid #5b6af0', cursor: 'pointer', color: '#8090b8', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>∅</div>}
@@ -3018,7 +3061,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               ))}
             </div>
           )
-          const listPanel = (opts, onPick) => opts.map(([label, val], i) => <div key={i}>{item(label, () => { onPick(val); close() })}</div>)
+          const listPanel = (opts, onPick) => opts.map(([label, val], i) => <div key={i}>{item(null, label, () => { onPick(val); close() })}</div>)
           const PANELS = {
             fill:   () => <>{back('Fill color')}{swatchGrid(true, c => setAll('fillColor', c === '__none__' ? 'none' : c))}</>,
             text:   () => <>{back('Text color')}{swatchGrid(false, c => setAll('textColor', c))}</>,
@@ -3029,9 +3072,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             opacity:() => <>{back('Opacity')}{listPanel([['100%', 1], ['75%', 0.75], ['50%', 0.5], ['25%', 0.25]], v => setAll('opacity', v))}</>,
             size:   () => <>{back('Size')}{listPanel([['Small', 0.6], ['Medium', 1], ['Large', 1.5], ['Extra large', 2.2]], v => setAll('scale', v))}</>,
             motion: () => <>{back('Motion')}{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
-            style:  () => <>{back('Apply style')}{storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>}</>,
+            style:  () => <>{back('Apply style')}{storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(null, st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>}</>,
           }
-          const row = (label, panel) => item(<>{label}<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel(panel))
+          const row = (icon, label, panel) => item(icon, <>{label}<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel(panel))
           return (
             <>
               <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
@@ -3040,20 +3083,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
                 {bulkPanel && PANELS[bulkPanel] ? PANELS[bulkPanel]() : (
                   <>
-                    {row('Fill color', 'fill')}
-                    {row('Text color', 'text')}
-                    {row('Border color', 'stroke')}
-                    {row('Border width', 'width')}
-                    {row('Border style', 'dash')}
-                    {row('Shape', 'shape')}
-                    {row('Size', 'size')}
-                    {row('Opacity', 'opacity')}
-                    {row('Motion', 'motion')}
-                    {row('Apply style', 'style')}
+                    {row('🎨', 'Fill color', 'fill')}
+                    {row('🅰️', 'Text color', 'text')}
+                    {row('▢', 'Border color', 'stroke')}
+                    {row('┃', 'Border width', 'width')}
+                    {row('┅', 'Border style', 'dash')}
+                    {row('◆', 'Shape', 'shape')}
+                    {row('⇲', 'Size', 'size')}
+                    {row('◐', 'Opacity', 'opacity')}
+                    {row('🌀', 'Motion', 'motion')}
+                    {row('🎭', 'Apply style', 'style')}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
-                    {item('Release anchors', () => { ids.forEach(id => releaseAnchor(id)); ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = null; sn.fy = null } }); simRef.current?.alpha(0.4).restart(); close() })}
-                    {item('Hide these', () => { pushUndo(); ids.forEach(id => setNodeViewProp(id, 'visible', false)); setSelectedNodeIds(new Set()); close() })}
-                    {item(<span style={{ color: '#f0a0a0' }}>Delete these</span>, () => { setConfirmDeleteNodes(ids); close() })}
+                    {item('⚓', 'Release anchors', () => { ids.forEach(id => releaseAnchor(id)); ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = null; sn.fy = null } }); simRef.current?.alpha(0.4).restart(); close() })}
+                    {item('🙈', 'Hide these', () => { pushUndo(); ids.forEach(id => setNodeViewProp(id, 'visible', false)); setSelectedNodeIds(new Set()); close() })}
+                    {item('🗑️', <span style={{ color: '#f0a0a0' }}>Delete these</span>, () => { setConfirmDeleteNodes(ids); close() })}
                   </>
                 )}
               </div>
@@ -4067,6 +4110,200 @@ const lc = {
   input: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 5px', fontSize: 12.5, outline: 'none', minWidth: 0 },
   actions: { display: 'flex', gap: 1, flexShrink: 0 },
   rowBtn: { background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: 10, padding: '0 3px', lineHeight: 1 },
+}
+
+// ─── TableCard ────────────────────────────────────────────────────────────────
+// A node carrying `table = { columns, rows }` rendered as an editable spreadsheet inside a
+// <foreignObject> (so inputs/selects/scroll work). Drag the header to move; double-click the
+// title or a column header to rename; the ⋮ column menu changes type / edits options / deletes;
+// drag a column's right edge to resize. Connect it with edges or leave it floating like any node.
+const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
+function TableCard({ node, title, table, fill, selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onDelete }) {
+  const columns = table.columns || [], rows = table.rows || []
+  const GUT = 26, ADD = 30, rowH = 30, headerH = 34, colH = 30, footH = 30, maxBodyH = 380
+  const colsW = columns.reduce((a, c) => a + (c.width || 120), 0)
+  const W = GUT + colsW + ADD
+  const bodyH = Math.min(maxBodyH, rows.length * rowH + 2)
+  const H = headerH + colH + bodyH + footH
+  const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#3a4a8a'
+
+  const [editTitle, setEditTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState(title || '')
+  useEffect(() => { if (!editTitle) setTitleDraft(title || '') }, [title, editTitle])
+  const [menuCol, setMenuCol] = useState(null)       // colId with its ⋮ menu open
+  const [editColId, setEditColId] = useState(null)   // colId whose name is being edited
+
+  // Column resize — convert screen dx to canvas dx via the live zoom scale.
+  const startResize = (e, col) => {
+    e.preventDefault(); e.stopPropagation()
+    const startX = e.clientX, startW = col.width || 120
+    const move = ev => {
+      const k = zoomRef?.current?.k || 1
+      onUpdateColumn(col.id, { width: Math.max(46, Math.round(startW + (ev.clientX - startX) / k)) })
+    }
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+
+  const commitTitle = () => { const t = titleDraft.trim(); onRename(t || title || 'Table'); setEditTitle(false) }
+  const stop = e => e.stopPropagation()
+
+  return (
+    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
+      <div style={tc.card(accent, selected)} onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}>
+        {/* Header (drag to move) */}
+        <div style={tc.header(accent)} onMouseDown={onHeaderDown} onClick={e => { stop(e); onSelect() }} title="Drag to move · double-click title to rename">
+          <span style={{ fontSize: 12, opacity: 0.85 }}>▦</span>
+          {editTitle ? (
+            <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)} onMouseDown={stop} onClick={stop}
+              onBlur={commitTitle} onKeyDown={e => { stop(e); if (e.key === 'Enter') { e.preventDefault(); commitTitle() } if (e.key === 'Escape') setEditTitle(false) }}
+              style={tc.titleInput} />
+          ) : (
+            <span style={tc.title} onMouseDown={stop} onDoubleClick={e => { stop(e); setTitleDraft(title || ''); setEditTitle(true) }}>{title || 'Table'}</span>
+          )}
+          <span style={tc.count}>{rows.length}×{columns.length}</span>
+          <button style={tc.headBtn} title="Delete table" onMouseDown={stop} onClick={e => { stop(e); onDelete() }}>×</button>
+        </div>
+
+        {/* Column headers */}
+        <div style={{ display: 'flex', height: colH, flexShrink: 0, borderBottom: '1px solid #2a3358', position: 'relative' }}>
+          <div style={{ ...tc.gutCell, width: GUT, borderRight: '1px solid #23233e' }} />
+          {columns.map(col => (
+            <div key={col.id} style={{ ...tc.colHead, width: col.width || 120 }}>
+              {editColId === col.id ? (
+                <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
+                  onBlur={e => { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) }}
+                  onKeyDown={e => { stop(e); if (e.key === 'Enter') { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) } if (e.key === 'Escape') setEditColId(null) }}
+                  style={tc.colInput} />
+              ) : (
+                <span style={tc.colName} title={`${col.name} · ${TYPE_LABELS[col.type] || col.type}`} onDoubleClick={e => { stop(e); setEditColId(col.id) }}>{col.name}</span>
+              )}
+              <button style={tc.colMenuBtn} title="Column options" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>
+              <div onMouseDown={e => { stop(e); startResize(e, col) }} style={tc.resizeHandle} title="Drag to resize" />
+              {menuCol === col.id && (
+                <div style={tc.colMenu} onMouseDown={stop} onClick={stop} onWheel={stop}>
+                  <div style={tc.menuLabel}>Type</div>
+                  {['text', 'number', 'checkbox', 'select', 'date'].map(t => (
+                    <div key={t} style={tc.menuItem(col.type === t)} onClick={() => { onUpdateColumn(col.id, { type: t, ...(t === 'select' && !col.options ? { options: ['Option'] } : {}) }); setMenuCol(null) }}>{TYPE_LABELS[t]}</div>
+                  ))}
+                  {col.type === 'select' && (
+                    <>
+                      <div style={{ ...tc.menuLabel, marginTop: 4 }}>Options</div>
+                      <SelectOptionsEditor options={col.options || []} onChange={opts => onUpdateColumn(col.id, { options: opts })} />
+                    </>
+                  )}
+                  <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
+                  <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(col.id); setMenuCol(null) }}>Delete column</div>
+                </div>
+              )}
+            </div>
+          ))}
+          <button style={{ ...tc.addColBtn, width: ADD }} title="Add column" onMouseDown={stop} onClick={e => { stop(e); onAddColumn('text') }}>+</button>
+        </div>
+
+        {/* Rows */}
+        <div style={{ ...tc.body, maxHeight: maxBodyH }} onMouseDown={stop} onWheel={stop}>
+          {rows.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: '8px 10px' }}>No rows yet.</div>}
+          {rows.map((r, ri) => (
+            <div key={r.id} style={{ ...tc.row, height: rowH }} className="tc-row">
+              <div style={{ ...tc.gutCell, width: GUT }}>
+                <span style={tc.rowNum}>{ri + 1}</span>
+                <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>
+              </div>
+              {columns.map(col => (
+                <div key={col.id} style={{ ...tc.cell, width: col.width || 120 }}>
+                  <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} />
+                </div>
+              ))}
+              <div style={{ width: ADD, flexShrink: 0 }} />
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={tc.footer} onMouseDown={stop}>
+          <button style={tc.addRowBtn} onClick={e => { stop(e); onAddRow() }}>+ Row</button>
+        </div>
+      </div>
+    </foreignObject>
+  )
+}
+
+function TableCell({ col, value, onChange }) {
+  const [draft, setDraft] = useState(value ?? '')
+  useEffect(() => { setDraft(value ?? '') }, [value])
+  const stop = e => e.stopPropagation()
+  if (col.type === 'checkbox') {
+    return <input type="checkbox" checked={!!value} onMouseDown={stop} onChange={e => onChange(e.target.checked)}
+      style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer', margin: '0 auto' }} />
+  }
+  if (col.type === 'select') {
+    return (
+      <select value={value ?? ''} onMouseDown={stop} onChange={e => onChange(e.target.value)} style={tc.select}>
+        <option value="">—</option>
+        {(col.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    )
+  }
+  const inputType = col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'
+  return (
+    <input type={inputType} value={draft} onMouseDown={stop} onClick={stop}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={() => { if ((draft ?? '') !== (value ?? '')) onChange(draft) }}
+      onKeyDown={e => { stop(e); if (e.key === 'Enter') e.currentTarget.blur() }}
+      style={tc.cellInput} />
+  )
+}
+
+function SelectOptionsEditor({ options, onChange }) {
+  const [adding, setAdding] = useState('')
+  const stop = e => e.stopPropagation()
+  return (
+    <div style={{ padding: '2px 6px 4px' }}>
+      {options.map((o, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+          <input defaultValue={o} onMouseDown={stop} onClick={stop}
+            onBlur={e => { const v = e.target.value.trim(); const next = [...options]; if (v) next[i] = v; else next.splice(i, 1); onChange(next) }}
+            onKeyDown={e => { stop(e); if (e.key === 'Enter') e.currentTarget.blur() }}
+            style={{ ...tc.cellInput, background: '#0f0f22', border: '1px solid #2a3358', borderRadius: 4, height: 20, flex: 1 }} />
+          <button style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12 }} onMouseDown={stop} onClick={() => onChange(options.filter((_, j) => j !== i))}>×</button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 4 }}>
+        <input value={adding} placeholder="Add option…" onMouseDown={stop} onClick={stop} onChange={e => setAdding(e.target.value)}
+          onKeyDown={e => { stop(e); if (e.key === 'Enter') { const v = adding.trim(); if (v) { onChange([...options, v]); setAdding('') } } }}
+          style={{ ...tc.cellInput, background: '#0f0f22', border: '1px solid #2a3358', borderRadius: 4, height: 20, flex: 1 }} />
+      </div>
+    </div>
+  )
+}
+
+const tc = {
+  card: (accent, sel) => ({ width: '100%', height: '100%', background: '#12122a', border: `1px solid ${sel ? '#5b6af0' : accent}`, borderRadius: 10, boxShadow: sel ? '0 0 0 2px rgba(91,106,240,0.35), 0 8px 28px rgba(0,0,0,0.55)' : '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }),
+  header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 8px', background: accent, cursor: 'grab', flexShrink: 0, color: '#fff' }),
+  title: { fontWeight: 700, fontSize: 13, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
+  titleInput: { flex: 1, background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.4)', color: '#fff', borderRadius: 4, padding: '1px 6px', fontSize: 13, outline: 'none', minWidth: 0 },
+  count: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
+  headBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 15, lineHeight: 1, padding: '1px 6px' },
+  gutCell: { display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: '#101024', position: 'relative' },
+  rowNum: { fontSize: 10, color: '#7080a0', fontVariantNumeric: 'tabular-nums' },
+  rowDel: { position: 'absolute', inset: 0, background: 'rgba(20,20,42,0.9)', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 13, opacity: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  colHead: { position: 'relative', display: 'flex', alignItems: 'center', gap: 2, padding: '0 4px 0 8px', flexShrink: 0, background: '#171733', borderRight: '1px solid #23233e', boxSizing: 'border-box' },
+  colName: { flex: 1, fontSize: 11.5, fontWeight: 600, color: '#c5d0ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
+  colInput: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 4px', fontSize: 11.5, outline: 'none', minWidth: 0 },
+  colMenuBtn: { background: 'transparent', border: 'none', color: '#7b8fcc', cursor: 'pointer', fontSize: 13, padding: '0 2px', lineHeight: 1, flexShrink: 0 },
+  resizeHandle: { position: 'absolute', right: -3, top: 0, bottom: 0, width: 6, cursor: 'col-resize', zIndex: 2 },
+  colMenu: { position: 'absolute', top: colH - 2, right: 0, zIndex: 20, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 140 },
+  menuLabel: { fontSize: 10, color: '#8090b8', fontWeight: 600, padding: '3px 8px 2px', textTransform: 'uppercase', letterSpacing: 0.4 },
+  menuItem: (active, color) => ({ padding: '5px 10px', fontSize: 12, color: color || (active ? '#8ecbff' : '#c5d0ff'), cursor: 'pointer', borderRadius: 4, background: active ? '#20264e' : 'transparent' }),
+  body: { flex: 1, overflowY: 'auto', overflowX: 'hidden' },
+  row: { display: 'flex', borderBottom: '1px solid #1c1c38', flexShrink: 0 },
+  cell: { display: 'flex', alignItems: 'center', flexShrink: 0, borderRight: '1px solid #1c1c38', boxSizing: 'border-box', padding: '0 2px' },
+  cellInput: { width: '100%', background: 'transparent', border: 'none', color: '#dbe4ff', fontSize: 12, padding: '0 4px', height: '100%', outline: 'none', boxSizing: 'border-box' },
+  select: { width: '100%', background: 'transparent', border: 'none', color: '#dbe4ff', fontSize: 12, padding: '0 2px', height: '100%', outline: 'none', cursor: 'pointer' },
+  footer: { flexShrink: 0, padding: '5px 8px', borderTop: '1px solid #2a3358', background: '#101024' },
+  addRowBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 5, cursor: 'pointer', fontSize: 11.5, padding: '3px 10px' },
+  addColBtn: { background: '#171733', border: 'none', borderLeft: '1px solid #23233e', color: '#7b8fcc', cursor: 'pointer', fontSize: 16, flexShrink: 0, lineHeight: 1 },
 }
 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -5241,7 +5478,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
           background: isOpen ? '#23234a' : 'transparent',
           whiteSpace:'nowrap', borderRadius:4, display:'flex', justifyContent:'space-between', gap:16 }}>
-        <span>{label}</span>{opts.right && <span style={{ color: opts.rightColor || '#8090b8' }}>{opts.right}</span>}
+        <span style={{ display:'flex', alignItems:'center', gap:9 }}>
+          {opts.icon && <span style={{ width:16, textAlign:'center', fontSize:'0.88rem', opacity:0.9, flexShrink:0 }}>{opts.icon}</span>}
+          <span>{label}</span>
+        </span>{opts.right && <span style={{ color: opts.rightColor || '#8090b8' }}>{opts.right}</span>}
       </div>
     )
   }
@@ -5273,31 +5513,31 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     >
       {/* â"€â"€ Main text menu (always visible; sub-sections fly out beside it) â"€â"€ */}
       <>
-        {textRow('Color', () => setPanel('color'), { right: '›', opens: 'color' })}
-        {textRow('Shape', () => setPanel('shape'), { right: '›', opens: 'shape' })}
-        {textRow('Styles', () => setPanel('styles'), { right: styles.length ? String(styles.length) : '›', rightColor: styles.length ? '#88b4e8' : '#8090b8', opens: 'styles' })}
-        {textRow(selCount > 1 ? `Arrange (${selCount} selected)` : 'Arrange', () => setPanel('arrange'), { right: '›', opens: 'arrange' })}
-        {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { right: '›', opens: 'imageUrl' })}
-        {textRow('Notes', () => setPanel('note'), { right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
+        {textRow('Color', () => setPanel('color'), { icon: '🎨', right: '›', opens: 'color' })}
+        {textRow('Shape', () => setPanel('shape'), { icon: '◆', right: '›', opens: 'shape' })}
+        {textRow('Styles', () => setPanel('styles'), { icon: '🎭', right: styles.length ? String(styles.length) : '›', rightColor: styles.length ? '#88b4e8' : '#8090b8', opens: 'styles' })}
+        {textRow(selCount > 1 ? `Arrange (${selCount} selected)` : 'Arrange', () => setPanel('arrange'), { icon: '▦', right: '›', opens: 'arrange' })}
+        {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { icon: '🔗', right: '›', opens: 'imageUrl' })}
+        {textRow('Notes', () => setPanel('note'), { icon: '📝', right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
         {textRow('Properties', () => setPanel('props'), (() => {
           const set = Object.values(nodeProps).filter(v => v != null && v !== '' && !(Array.isArray(v) && v.length === 0)).length
-          return { right: set > 0 ? String(set) : '›', rightColor: set > 0 ? '#88b4e8' : '#8090b8', opens: 'props' }
+          return { icon: '🏷️', right: set > 0 ? String(set) : '›', rightColor: set > 0 ? '#88b4e8' : '#8090b8', opens: 'props' }
         })())}
-        {textRow('Emoji', () => setPanel('emoji'), { right: '›', opens: 'emoji' })}
-        {textRow('Image', () => setPanel('image'), { right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
-        {textRow('Motion & color cycle', () => setPanel('motion'), { right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8', opens: 'motion' })}
-        {textRow('Radiate to children', () => setPanel('radiate'), { right: '›', opens: 'radiate' })}
-        {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
+        {textRow('Emoji', () => setPanel('emoji'), { icon: '😀', right: '›', opens: 'emoji' })}
+        {textRow('Image', () => setPanel('image'), { icon: '🖼️', right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
+        {textRow('Motion & color cycle', () => setPanel('motion'), { icon: '🌀', right: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '•' : '›', rightColor: (viewProps.nodeMotion || viewProps.nodeColorCycle) ? '#88b4e8' : '#8090b8', opens: 'motion' })}
+        {textRow('Radiate to children', () => setPanel('radiate'), { icon: '📡', right: '›', opens: 'radiate' })}
+        {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { icon: '✨', right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
         {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
           if (depthExpand !== null) { onSetDepthExpand?.(null) }
           else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
-        }, { right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
+        }, { icon: '⊕', right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
-        {textRow('Drill in', onDrill, { opens: null })}
-        {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
-        {textRow('Hide', onHide, { opens: null })}
-        {isAnchored && textRow('Release anchor', onRelease, { color: '#f6ad55', opens: null })}
-        {textRow('Delete', onDelete, { color: '#f87171', opens: null })}
+        {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
+        {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
+        {textRow('Hide', onHide, { icon: '🙈', opens: null })}
+        {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}
+        {textRow('Delete', onDelete, { icon: '🗑️', color: '#f87171', opens: null })}
       </>
 
       {/* â"€â"€ Fly-out sub-menu (holds whichever section is active) â"€â"€ */}

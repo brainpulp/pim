@@ -657,6 +657,75 @@ const useGraphStore = create((set, get) => ({
     return { edges }
   }),
 
+  // ── Table nodes ───────────────────────────────────────────────────────────
+  // A table node is any node carrying a view-independent `table` = { columns, rows }.
+  //   columns: [{ id, name, type:'text'|'number'|'checkbox'|'select'|'date', width, options? }]
+  //   rows:    [{ id, cells: { [colId]: value } }]
+  // Rendered as an editable HTML card in a foreignObject (like list cards); it is a normal
+  // node otherwise (participates in the sim, can be connected by edges or float anchored).
+  addTableNode: (x = null, y = null) => {
+    const id = uid()
+    const c1 = uid(), c2 = uid(), c3 = uid()
+    const table = {
+      columns: [
+        { id: c1, name: 'Name', type: 'text', width: 150 },
+        { id: c2, name: 'Status', type: 'select', width: 118, options: ['Todo', 'Doing', 'Done'] },
+        { id: c3, name: 'Done', type: 'checkbox', width: 62 },
+      ],
+      rows: [uid(), uid(), uid()].map(rid => ({ id: rid, cells: {} })),
+    }
+    set(s => ({
+      nodes: [...s.nodes, { id, label: 'Table', notes: '', table }],
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, nodeProps: { ...v.nodeProps, [id]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
+      }),
+    }))
+    return id
+  },
+
+  setTableCell: (nodeId, rowId, colId, value) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : {
+      ...n, table: { ...n.table, rows: n.table.rows.map(r => r.id !== rowId ? r : { ...r, cells: { ...r.cells, [colId]: value } }) },
+    }),
+  })),
+
+  addTableRow: (nodeId) => {
+    const rid = uid()
+    set(s => ({
+      nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : { ...n, table: { ...n.table, rows: [...n.table.rows, { id: rid, cells: {} }] } }),
+    }))
+    return rid
+  },
+
+  addTableColumn: (nodeId, type = 'text') => {
+    const cid = uid()
+    const col = { id: cid, name: 'Column', type, width: type === 'checkbox' ? 62 : 120, ...(type === 'select' ? { options: ['Option'] } : {}) }
+    set(s => ({
+      nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : { ...n, table: { ...n.table, columns: [...n.table.columns, col] } }),
+    }))
+    return cid
+  },
+
+  deleteTableRow: (nodeId, rowId) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : { ...n, table: { ...n.table, rows: n.table.rows.filter(r => r.id !== rowId) } }),
+  })),
+
+  deleteTableColumn: (nodeId, colId) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : {
+      ...n, table: {
+        ...n.table,
+        columns: n.table.columns.filter(c => c.id !== colId),
+        rows: n.table.rows.map(r => { const cells = { ...r.cells }; delete cells[colId]; return { ...r, cells } }),
+      },
+    }),
+  })),
+
+  updateTableColumn: (nodeId, colId, patch) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : {
+      ...n, table: { ...n.table, columns: n.table.columns.map(c => c.id !== colId ? c : { ...c, ...patch }) },
+    }),
+  })),
+
   setDrillRoot: (nodeId) => set(s => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, drillRoot: nodeId } : v),
   })),
