@@ -4332,144 +4332,138 @@ const lc = {
 }
 
 // ─── TableCard ────────────────────────────────────────────────────────────────
-// A node carrying `table = { columns, rows }` rendered as an editable spreadsheet inside a
-// <foreignObject> (so inputs/selects/scroll work). Drag the header to move; double-click the
-// title or a column header to rename; the ⋮ column menu changes type / edits options / deletes;
-// drag a column's right edge to resize. Connect it with edges or leave it floating like any node.
+// A node carrying `table = { columns, rows }`, drawn as MINIMAL text + grid lines directly on the canvas
+// (transparent — no card). All chrome (title bar, add/delete affordances, resize handles) appears only on
+// hover, so at rest it's just the data. Positioned top-left-anchored so the bottom-right handle grows it
+// down-right (not center-pivoted). Rendered in a <foreignObject> so inputs/selects just work.
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
-function TableCard({ node, title, table, fill, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onSetColor, onSetScale, onDelete }) {
+const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
+const TC_TXT = '#e8ecff'
+function TableCard({ node, title, table, fill, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onSetColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
-  const GUT = 26, ADD = 30, rowH = 30, headerH = 34, colH = 30, footH = 30, maxBodyH = 380
-  const colsW = columns.reduce((a, c) => a + (c.width || 120), 0)
-  const W = GUT + colsW + ADD
-  const bodyH = Math.min(maxBodyH, rows.length * rowH + 2)
-  const H = headerH + colH + bodyH + footH
-  const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#3a4a8a'
+  const colHdrH = 24, rowH = 26
+  const W = Math.max(80, columns.reduce((a, c) => a + (c.width || 120), 0))
+  const H = colHdrH + rows.length * rowH
+  const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#5b6af0'
 
+  const [hov, setHov] = useState(false)
   const [editTitle, setEditTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState(title || '')
   useEffect(() => { if (!editTitle) setTitleDraft(title || '') }, [title, editTitle])
-  const [menuCol, setMenuCol] = useState(null)       // colId with its ⋮ menu open
-  const [editColId, setEditColId] = useState(null)   // colId whose name is being edited
+  const [menuCol, setMenuCol] = useState(null)
+  const [editColId, setEditColId] = useState(null)
   const [showColors, setShowColors] = useState(false)
 
-  // effective screen→content scale accounts for both canvas zoom and the table's own scale.
   const eff = () => (zoomRef?.current?.k || 1) * (scale || 1)
-
-  // Column resize — drag a column's right edge; convert screen dx to content dx.
-  const startResize = (e, col) => {
+  const startResize = (e, col) => {   // drag a column's right edge
     e.preventDefault(); e.stopPropagation()
     const startX = e.clientX, startW = col.width || 120
     const move = ev => onUpdateColumn(col.id, { width: Math.max(46, Math.round(startW + (ev.clientX - startX) / eff())) })
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
-  // Whole-table resize — drag the bottom-right corner to scale the card up/down.
-  const startScale = (e) => {
+  const startScale = (e) => {   // bottom-right corner → scale the whole table (top-left stays fixed)
     e.preventDefault(); e.stopPropagation()
-    const startX = e.clientX, s0 = scale || 1, k = zoomRef?.current?.k || 1
-    const move = ev => onSetScale(Math.max(0.4, Math.min(4, s0 + (ev.clientX - startX) / (k * 260))))
+    const startX = e.clientX, startY = e.clientY, s0 = scale || 1, k = zoomRef?.current?.k || 1
+    const move = ev => onSetScale(Math.max(0.4, Math.min(4, s0 + ((ev.clientX - startX) + (ev.clientY - startY)) / 2 / (k * 220))))
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
-
   const commitTitle = () => { const t = titleDraft.trim(); onRename(t || title || 'Table'); setEditTitle(false) }
   const stop = e => e.stopPropagation()
+  const cellBox = (w) => ({ width: w, flexShrink: 0, boxSizing: 'border-box', borderRight: `1px solid ${TC_LINE}`, borderBottom: `1px solid ${TC_LINE}`, display: 'flex', alignItems: 'center', padding: '0 5px', overflow: 'hidden' })
 
+  // top-left anchored: translate is independent of scale, so bottom-right handle grows it down-right.
+  // A padded region around the grid so the hover affordances (which sit just outside the grid edges)
+  // stay inside the foreignObject's hit-rect — otherwise `overflow:visible` shows them but they aren't
+  // clickable, and the gap between grid and affordance drops the hover.
+  const PADT = 24, PADR = 34, PADB = 26, PADL = 18
   return (
-    <g transform={`translate(${(node.x || 0) - (W * scale) / 2},${(node.y || 0) - (H * scale) / 2}) scale(${scale})`}>
-    <foreignObject x={0} y={0} width={W} height={H + 14} style={{ overflow: 'visible' }}>
-      <div style={tc.card(accent, selected)} onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}>
-        {/* Header (drag to move) */}
-        <div style={tc.header(accent)} onMouseDown={onHeaderDown} onClick={e => { stop(e); onSelect() }} title="Drag to move · double-click title to rename">
-          <span style={{ fontSize: 12, opacity: 0.85 }}>▦</span>
-          {editTitle ? (
-            <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)} onMouseDown={stop} onClick={stop}
-              onBlur={commitTitle} onKeyDown={e => { stop(e); if (e.key === 'Enter') { e.preventDefault(); commitTitle() } if (e.key === 'Escape') setEditTitle(false) }}
-              style={tc.titleInput} />
-          ) : (
-            <span style={tc.title} onMouseDown={stop} onDoubleClick={e => { stop(e); setTitleDraft(title || ''); setEditTitle(true) }}>{title || 'Table'}</span>
-          )}
-          <span style={tc.count}>{rows.length}×{columns.length}</span>
-          <div style={{ position: 'relative' }}>
-            <button style={tc.headBtn} title="Table color" onMouseDown={stop} onClick={e => { stop(e); setShowColors(v => !v) }}>◑</button>
-            {showColors && (
-              <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
-                {palette.map(c => (
-                  <div key={c} title={c} onClick={() => { onSetColor(c); setShowColors(false) }}
-                    style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />
-                ))}
-              </div>
-            )}
-          </div>
-          <button style={tc.headBtn} title="Delete table" onMouseDown={stop} onClick={e => { stop(e); onDelete() }}>×</button>
-        </div>
+    <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
+    <foreignObject x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
+      <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false) }}
+        onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
+        style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
+          pointerEvents: hov ? 'auto' : 'none' }}>
+      {/* grid-anchor is always interactive so hovering it reveals the (otherwise click-through) padding */}
+      <div onMouseEnter={() => setHov(true)} style={{ position: 'absolute', left: PADL, top: PADT, width: W, pointerEvents: 'auto' }}>
 
-        {/* Column headers */}
-        <div style={{ display: 'flex', height: colH, flexShrink: 0, borderBottom: '1px solid #2a3358', position: 'relative' }}>
-          <div style={{ ...tc.gutCell, width: GUT, borderRight: '1px solid #23233e' }} />
-          {columns.map(col => (
-            <div key={col.id} style={{ ...tc.colHead, width: col.width || 120 }}>
-              {editColId === col.id ? (
-                <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
-                  onBlur={e => { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) }}
-                  onKeyDown={e => { stop(e); if (e.key === 'Enter') { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) } if (e.key === 'Escape') setEditColId(null) }}
-                  style={tc.colInput} />
-              ) : (
-                <span style={tc.colName} title={`${col.name} · ${TYPE_LABELS[col.type] || col.type}`} onDoubleClick={e => { stop(e); setEditColId(col.id) }}>{col.name}</span>
-              )}
-              <button style={tc.colMenuBtn} title="Column options" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>
-              <div onMouseDown={e => { stop(e); startResize(e, col) }} style={tc.resizeHandle} title="Drag to resize" />
-              {menuCol === col.id && (
-                <div style={tc.colMenu} onMouseDown={stop} onClick={stop} onWheel={stop}>
-                  <div style={tc.menuLabel}>Type</div>
-                  {['text', 'number', 'checkbox', 'select', 'date'].map(t => (
-                    <div key={t} style={tc.menuItem(col.type === t)} onClick={() => { onUpdateColumn(col.id, { type: t, ...(t === 'select' && !col.options ? { options: ['Option'] } : {}) }); setMenuCol(null) }}>{TYPE_LABELS[t]}</div>
-                  ))}
-                  {col.type === 'select' && (
-                    <>
-                      <div style={{ ...tc.menuLabel, marginTop: 4 }}>Options</div>
-                      <SelectOptionsEditor options={col.options || []} onChange={opts => onUpdateColumn(col.id, { options: opts })} />
-                    </>
-                  )}
-                  <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
-                  <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(col.id); setMenuCol(null) }}>Delete column</div>
+        {/* Hover-only header: drag handle · title · colour · delete (floats above the grid) */}
+        {hov && (
+          <div style={{ position: 'absolute', left: 0, top: -23, height: 20, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            <span onMouseDown={onHeaderDown} title="Drag to move" style={{ cursor: 'grab', color: '#8090b8', fontSize: 12, lineHeight: 1 }}>✥</span>
+            {editTitle ? (
+              <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)} onMouseDown={stop} onClick={stop}
+                onBlur={commitTitle} onKeyDown={e => { stop(e); if (e.key === 'Enter') { e.preventDefault(); commitTitle() } if (e.key === 'Escape') setEditTitle(false) }}
+                style={{ background: '#0d0d1e', border: '1px solid #3a4a8a', color: '#fff', borderRadius: 4, padding: '0 5px', fontSize: 12, height: 18, outline: 'none' }} />
+            ) : (
+              <span onDoubleClick={e => { stop(e); setTitleDraft(title || ''); setEditTitle(true) }}
+                style={{ color: TC_TXT, fontSize: 12, fontWeight: 600, cursor: 'text', maxWidth: W - 60, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title || 'Table'}</span>
+            )}
+            <div style={{ position: 'relative' }}>
+              <button style={tc.hbtn} title="Table colour" onMouseDown={stop} onClick={e => { stop(e); setShowColors(v => !v) }}>◑</button>
+              {showColors && (
+                <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
+                  {palette.map(c => <div key={c} title={c} onClick={() => { onSetColor(c); setShowColors(false) }} style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
                 </div>
               )}
             </div>
-          ))}
-          <button style={{ ...tc.addColBtn, width: ADD }} title="Add column" onMouseDown={stop} onClick={e => { stop(e); onAddColumn('text') }}>+</button>
-        </div>
+            <button style={{ ...tc.hbtn, color: '#f0a0a0' }} title="Delete table" onMouseDown={stop} onClick={e => { stop(e); onDelete() }}>🗑</button>
+          </div>
+        )}
 
-        {/* Rows */}
-        <div style={{ ...tc.body, maxHeight: maxBodyH }} onMouseDown={stop} onWheel={stop}>
-          {rows.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: '8px 10px' }}>No rows yet.</div>}
-          {rows.map((r, ri) => (
-            <div key={r.id} style={{ ...tc.row, height: rowH }} className="tc-row">
-              <div style={{ ...tc.gutCell, width: GUT }}>
-                <span style={tc.rowNum}>{ri + 1}</span>
-                <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>
+        {/* Grid — transparent, lines + text only. Outer top/left borders complete the grid. */}
+        <div style={{ borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', outline: selected ? `1.5px solid ${accent}` : 'none' }}>
+          {/* Column header row */}
+          <div style={{ display: 'flex', height: colHdrH }}>
+            {columns.map(col => (
+              <div key={col.id} style={{ ...cellBox(col.width || 120), position: 'relative', gap: 2 }}>
+                {editColId === col.id ? (
+                  <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
+                    onBlur={e => { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) }}
+                    onKeyDown={e => { stop(e); if (e.key === 'Enter') { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) } if (e.key === 'Escape') setEditColId(null) }}
+                    style={{ flex: 1, minWidth: 0, background: '#0d0d1e', border: '1px solid #3a4a8a', color: '#fff', borderRadius: 3, padding: '0 3px', fontSize: 11, outline: 'none' }} />
+                ) : (
+                  <span title={`${col.name} · ${TYPE_LABELS[col.type] || col.type}`} onDoubleClick={e => { stop(e); setEditColId(col.id) }}
+                    style={{ flex: 1, fontSize: 11, fontWeight: 700, color: TC_TXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}>{col.name}</span>
+                )}
+                {hov && <button style={tc.colMenuBtn} title="Column type / delete" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>}
+                {hov && <div onMouseDown={e => { stop(e); startResize(e, col) }} style={tc.resizeHandle} title="Drag to resize column" />}
+                {menuCol === col.id && (
+                  <div style={tc.colMenu} onMouseDown={stop} onClick={stop} onWheel={stop}>
+                    <div style={tc.menuLabel}>Type</div>
+                    {['text', 'number', 'checkbox', 'select', 'date'].map(t => (
+                      <div key={t} style={tc.menuItem(col.type === t)} onClick={() => { onUpdateColumn(col.id, { type: t, ...(t === 'select' && !col.options ? { options: ['Option'] } : {}) }); setMenuCol(null) }}>{TYPE_LABELS[t]}</div>
+                    ))}
+                    {col.type === 'select' && (<><div style={{ ...tc.menuLabel, marginTop: 4 }}>Options</div><SelectOptionsEditor options={col.options || []} onChange={opts => onUpdateColumn(col.id, { options: opts })} /></>)}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
+                    <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(col.id); setMenuCol(null) }}>Delete column</div>
+                  </div>
+                )}
               </div>
+            ))}
+            {hov && <button style={tc.addColBtn} title="Add column" onMouseDown={stop} onClick={e => { stop(e); onAddColumn('text') }}>＋</button>}
+          </div>
+          {/* Data rows */}
+          {rows.map(r => (
+            <div key={r.id} className="tc-row" style={{ display: 'flex', height: rowH, position: 'relative' }}>
               {columns.map(col => (
-                <div key={col.id} style={{ ...tc.cell, width: col.width || 120 }}>
+                <div key={col.id} style={cellBox(col.width || 120)}>
                   <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} />
                 </div>
               ))}
-              <div style={{ width: ADD, flexShrink: 0 }} />
+              {hov && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
             </div>
           ))}
         </div>
 
-        {/* Footer */}
-        <div style={tc.footer} onMouseDown={stop}>
-          <button style={tc.addRowBtn} onClick={e => { stop(e); onAddRow() }}>+ Row</button>
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: '#7080a0' }}>drag ⌟ to resize</span>
-        </div>
+        {/* Hover-only add-row + resize corner */}
+        {hov && <button style={tc.addRowBtn} onMouseDown={stop} onClick={e => { stop(e); onAddRow() }}>＋ row</button>}
+        {hov && <div title="Drag to resize table" onMouseDown={startScale}
+          style={{ position: 'absolute', right: -5, bottom: -5, width: 11, height: 11, background: accent, borderRadius: 2, cursor: 'nwse-resize', boxShadow: '0 0 0 1px rgba(0,0,0,0.4)' }} />}
+      </div>
       </div>
     </foreignObject>
-    {/* Whole-table resize handle (bottom-right corner) */}
-    <rect x={W - 13} y={H - 13} width={16} height={16} rx={3} fill="#1a1f4a" stroke="#5b6af0" strokeWidth={1}
-      style={{ cursor: 'nwse-resize' }} onMouseDown={startScale} />
     </g>
   )
 }
@@ -4524,32 +4518,18 @@ function SelectOptionsEditor({ options, onChange }) {
 }
 
 const tc = {
-  card: (accent, sel) => ({ width: '100%', height: '100%', background: '#12122a', border: `1px solid ${sel ? '#5b6af0' : accent}`, borderRadius: 10, boxShadow: sel ? '0 0 0 2px rgba(91,106,240,0.35), 0 8px 28px rgba(0,0,0,0.55)' : '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }),
-  header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 8px', background: accent, cursor: 'grab', flexShrink: 0, color: '#fff' }),
-  title: { fontWeight: 700, fontSize: 13, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
-  titleInput: { flex: 1, background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.4)', color: '#fff', borderRadius: 4, padding: '1px 6px', fontSize: 13, outline: 'none', minWidth: 0 },
-  count: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
-  headBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 15, lineHeight: 1, padding: '1px 6px' },
-  gutCell: { display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: '#101024', position: 'relative' },
-  rowNum: { fontSize: 10, color: '#7080a0', fontVariantNumeric: 'tabular-nums' },
-  rowDel: { position: 'absolute', inset: 0, background: 'rgba(20,20,42,0.9)', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 13, opacity: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  colHead: { position: 'relative', display: 'flex', alignItems: 'center', gap: 2, padding: '0 4px 0 8px', flexShrink: 0, background: '#171733', borderRight: '1px solid #23233e', boxSizing: 'border-box' },
-  colName: { flex: 1, fontSize: 11.5, fontWeight: 600, color: '#c5d0ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
-  colInput: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 4px', fontSize: 11.5, outline: 'none', minWidth: 0 },
-  colMenuBtn: { background: 'transparent', border: 'none', color: '#7b8fcc', cursor: 'pointer', fontSize: 13, padding: '0 2px', lineHeight: 1, flexShrink: 0 },
-  resizeHandle: { position: 'absolute', right: -3, top: 0, bottom: 0, width: 6, cursor: 'col-resize', zIndex: 2 },
-  colMenu: { position: 'absolute', top: 28, right: 0, zIndex: 20, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 140 },
+  hbtn: { background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '1px 3px' },
+  colMenuBtn: { background: 'transparent', border: 'none', color: '#7b8fcc', cursor: 'pointer', fontSize: 12, padding: '0 1px', lineHeight: 1, flexShrink: 0 },
+  resizeHandle: { position: 'absolute', right: -3, top: 0, bottom: 0, width: 7, cursor: 'col-resize', zIndex: 2 },
+  colMenu: { position: 'absolute', top: 24, right: 0, zIndex: 20, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 140 },
   menuLabel: { fontSize: 10, color: '#8090b8', fontWeight: 600, padding: '3px 8px 2px', textTransform: 'uppercase', letterSpacing: 0.4 },
   menuItem: (active, color) => ({ padding: '5px 10px', fontSize: 12, color: color || (active ? '#8ecbff' : '#c5d0ff'), cursor: 'pointer', borderRadius: 4, background: active ? '#20264e' : 'transparent' }),
-  body: { flex: 1, overflowY: 'auto', overflowX: 'hidden' },
-  row: { display: 'flex', borderBottom: '1px solid #1c1c38', flexShrink: 0 },
-  cell: { display: 'flex', alignItems: 'center', flexShrink: 0, borderRight: '1px solid #1c1c38', boxSizing: 'border-box', padding: '0 2px' },
-  cellInput: { width: '100%', background: 'transparent', border: 'none', color: '#dbe4ff', fontSize: 12, padding: '0 4px', height: '100%', outline: 'none', boxSizing: 'border-box' },
-  select: { width: '100%', background: 'transparent', border: 'none', color: '#dbe4ff', fontSize: 12, padding: '0 2px', height: '100%', outline: 'none', cursor: 'pointer' },
-  footer: { flexShrink: 0, padding: '5px 8px', borderTop: '1px solid #2a3358', background: '#101024' },
-  addRowBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 5, cursor: 'pointer', fontSize: 11.5, padding: '3px 10px' },
-  addColBtn: { background: '#171733', border: 'none', borderLeft: '1px solid #23233e', color: '#7b8fcc', cursor: 'pointer', fontSize: 16, flexShrink: 0, lineHeight: 1 },
-  colorPop: { position: 'absolute', top: 22, right: 0, zIndex: 30, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', display: 'flex', flexWrap: 'wrap', gap: 4, width: 150 },
+  cellInput: { width: '100%', background: 'transparent', border: 'none', color: TC_TXT, fontSize: 12, padding: 0, height: '100%', outline: 'none', boxSizing: 'border-box' },
+  select: { width: '100%', background: 'transparent', border: 'none', color: TC_TXT, fontSize: 12, padding: 0, height: '100%', outline: 'none', cursor: 'pointer' },
+  addRowBtn: { position: 'absolute', left: 0, top: '100%', marginTop: 2, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 11, padding: '2px 4px', whiteSpace: 'nowrap' },
+  addColBtn: { position: 'absolute', left: '100%', top: 0, height: 24, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '0 5px' },
+  rowDel: { position: 'absolute', left: -17, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#f0a0a0', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 },
+  colorPop: { position: 'absolute', top: 20, right: 0, zIndex: 30, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', display: 'flex', flexWrap: 'wrap', gap: 4, width: 150 },
 }
 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
