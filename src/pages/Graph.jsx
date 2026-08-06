@@ -1352,30 +1352,39 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
     }
-    // Primary path: the native `contextmenu` event fires for right mouse, Mac Ctrl+click, AND trackpad
-    // two-finger / secondary click — on every device. (Chrome suppresses it after a right-drag pan.)
+    // Menu triggers, split by gesture so a right-DRAG (pan) never opens the menu:
+    //  • A tracked press (right mouse button, or Ctrl+left) opens the menu on MOUSEUP, and only if the
+    //    pointer didn't move — so right-drag panning is clean.
+    //  • The native `contextmenu` event opens it only when there was NO tracked press (e.g. a trackpad
+    //    two-finger / secondary tap that sends no button-2 mousedown), so those devices still get a menu.
+    let press = null   // { x, y, t, moved, ctrl }
+    const onDown = ev => {
+      if (ev.button === 2) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: false }
+      else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: true }
+      else press = null
+    }
+    const onMove = ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) >= 5) press.moved = true }
+    const onUp = ev => {
+      if (press && !press.moved && (ev.button === 2 || (ev.button === 0 && press.ctrl))) openMenuAt(press.x, press.y, press.t, press.ctrl)
+      press = null
+    }
     const onContext = ev => {
       const t = ev.target
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // keep native menu on form fields
       ev.preventDefault()
-      openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey)
+      if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
+      openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey)   // untracked gesture (trackpad tap) → open now
     }
-    // Fallback: some environments fire Ctrl+left-click WITHOUT a contextmenu event. Catch it on mouseup
-    // (skip if it was a drag). Idempotent with onContext when both fire.
-    let ctrlDown = null
-    const onMouseDownCtrl = ev => { ctrlDown = (ev.button === 0 && ev.ctrlKey && !ev.metaKey) ? { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false } : null }
-    const onMouseMoveCtrl = ev => { if (ctrlDown && Math.hypot(ev.clientX - ctrlDown.x, ev.clientY - ctrlDown.y) >= 5) ctrlDown.moved = true }
-    const onMouseUpCtrl = ev => { if (ctrlDown && !ctrlDown.moved && ev.button === 0) openMenuAt(ctrlDown.x, ctrlDown.y, ctrlDown.t, true); ctrlDown = null }
     window.addEventListener('contextmenu', onContext, true)
-    window.addEventListener('mousedown', onMouseDownCtrl, true)
-    window.addEventListener('mousemove', onMouseMoveCtrl, true)
-    window.addEventListener('mouseup', onMouseUpCtrl, true)
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('mousemove', onMove, true)
+    window.addEventListener('mouseup', onUp, true)
     return () => {
       svg.on('.zoom', null)
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('mousemove', onMove, true)
+      window.removeEventListener('mouseup', onUp, true)
       window.removeEventListener('contextmenu', onContext, true)
-      window.removeEventListener('mousedown', onMouseDownCtrl, true)
-      window.removeEventListener('mousemove', onMouseMoveCtrl, true)
-      window.removeEventListener('mouseup', onMouseUpCtrl, true)
     }
   }, [scheduleRender, loading])
 
