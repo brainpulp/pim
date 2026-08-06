@@ -1385,21 +1385,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     //    pointer didn't move — so right-drag panning is clean.
     //  • The native `contextmenu` event opens it only when there was NO tracked press (e.g. a trackpad
     //    two-finger / secondary tap that sends no button-2 mousedown), so those devices still get a menu.
-    let press = null   // { x, y, t, moved, ctrl }
+    let press = null           // { x, y, t, moved, ctrl }
+    let suppressContext = false // a right-DRAG just ended → swallow the trailing `contextmenu` (Linux/Win fire it AFTER mouseup)
     const onDown = ev => {
+      suppressContext = false  // new gesture — clear any stale suppression
       if (ev.button === 2) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: false }
       else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: true }
       else press = null
     }
     const onMove = ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) >= 5) press.moved = true }
     const onUp = ev => {
-      if (press && !press.moved && (ev.button === 2 || (ev.button === 0 && press.ctrl))) openMenuAt(press.x, press.y, press.t, press.ctrl)
+      if (press && press.moved) suppressContext = true   // dragged → the contextmenu that fires right after must NOT open the menu
+      else if (press && (ev.button === 2 || (ev.button === 0 && press.ctrl))) openMenuAt(press.x, press.y, press.t, press.ctrl)
       press = null
     }
     const onContext = ev => {
       const t = ev.target
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // keep native menu on form fields
       ev.preventDefault()
+      if (suppressContext) { suppressContext = false; return }   // trailing event from a drag → ignore
       if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
       openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey)   // untracked gesture (trackpad tap) → open now
     }
@@ -4455,6 +4459,9 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   const [menuCol, setMenuCol] = useState(null)
   const [editColId, setEditColId] = useState(null)
   const [showColors, setShowColors] = useState(false)
+  const [borderHov, setBorderHov] = useState(false)   // hovering any of the 4 move-borders → light the whole-table ring
+  const [drop, setDrop] = useState(null)              // live reorder destination: { kind:'col'|'row', id }
+  const [dragging, setDragging] = useState(false)     // a reorder drag is in progress
 
   const eff = () => (zoomRef?.current?.k || 1) * (scale || 1)
   const startColResize = (e, col) => {
@@ -4471,12 +4478,23 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
-  // Reorder by dragging a grip — target found via the element under the pointer (handles any widths).
+  // Reorder by dragging a grip — the destination COLUMN/ROW (never a grid line) under the pointer is
+  // highlighted live, before mouseup, so you can see where it will land.
   const startReorder = (e, id, attr, onMove) => {
     e.preventDefault(); e.stopPropagation()
+    const kind = attr === 'data-tcol' ? 'col' : 'row'
+    setDragging(true); setDrop(null)
     let target = null
-    const move = ev => { const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.(`[${attr}]`); if (el) target = el.getAttribute(attr) }
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); if (target && target !== id) onMove(id, target) }
+    const move = ev => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.(`[${attr}]`)
+      target = el ? el.getAttribute(attr) : null
+      setDrop(target && target !== id ? { kind, id: target } : null)
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up)
+      setDragging(false); setDrop(null)
+      if (target && target !== id) onMove(id, target)
+    }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
   const startScale = (e) => {   // bottom-right corner → scale the whole table (top-left stays fixed)
@@ -4498,10 +4516,10 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   return (
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
     <foreignObject x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
-      <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false) }}
+      <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setBorderHov(false) }}
         onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
-          pointerEvents: hov ? 'auto' : 'none' }}>
+          pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
       {/* grid-anchor is always interactive so hovering it reveals the (otherwise click-through) padding */}
       <div onMouseEnter={() => setHov(true)} style={{ position: 'absolute', left: PADL, top: PADT, width: W, pointerEvents: 'auto' }}>
 
@@ -4532,12 +4550,12 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
         )}
 
         {/* Grid — background (or transparent), lines + text. */}
-        <div style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: selected ? `0 0 0 1.5px ${accent}` : 'none' }}>
+        <div style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: (selected || borderHov) ? `0 0 0 1.5px ${accent}` : 'none' }}>
           {/* Column header row */}
           <div style={{ display: 'flex', height: colHdrH }}>
             {columns.map(col => (
               <div key={col.id} data-tcol={col.id} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2 }}>
-                {hov && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
+                {hov && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ position: 'relative', zIndex: 9, cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
                 {editColId === col.id ? (
                   <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
                     onBlur={e => { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) }}
@@ -4572,7 +4590,7 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
                 </div>
               ))}
               {hov && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
-                style={{ position: 'absolute', left: -28, top: '50%', transform: 'translateY(-50%)', cursor: 'grab', color: '#7b8fcc', fontSize: 11, lineHeight: 1 }}>⣿</span>}
+                style={{ position: 'absolute', zIndex: 9, left: -28, top: '50%', transform: 'translateY(-50%)', cursor: 'grab', color: '#7b8fcc', fontSize: 11, lineHeight: 1 }}>⣿</span>}
               {hov && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
             </div>
           ))}
@@ -4591,14 +4609,22 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
           {hov && columns.length > 0 && <div className="tc-linediv" onMouseDown={e => startColResize(e, columns[columns.length - 1])} title="Drag to resize column" style={{ position: 'absolute', left: W - 3, top: 0, width: 6, height: colHdrH, cursor: 'col-resize', zIndex: 7 }} />}
           {hov && rows.length > 0 && <div className="tc-linediv" onMouseDown={e => startRowResize(e, rows[rows.length - 1].id, rowHeights[rowHeights.length - 1])} title="Drag to resize row" style={{ position: 'absolute', left: -6, top: rowTop[rows.length - 1] + rowHeights[rowHeights.length - 1] - 3, width: 6, height: 6, cursor: 'row-resize', zIndex: 7 }} />}
 
-          {/* Move-the-table borders — drag any of the 4 edges (they highlight on hover). */}
+          {/* Live reorder destination — a solid highlight over the target COLUMN or ROW (never a line). */}
+          {drop && drop.kind === 'col' && (() => { const ci = columns.findIndex(c => c.id === drop.id); if (ci < 0) return null
+            return <div style={{ position: 'absolute', left: colX[ci], top: 0, width: colW(columns[ci]), height: H, background: 'rgba(91,106,240,0.22)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 8 }} /> })()}
+          {drop && drop.kind === 'row' && (() => { const ri = rows.findIndex(r => r.id === drop.id); if (ri < 0) return null
+            return <div style={{ position: 'absolute', left: 0, top: rowTop[ri], width: W, height: rowHeights[ri], background: 'rgba(91,106,240,0.22)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 8 }} /> })()}
+
+          {/* Move-the-table borders — drag any of the 4 edges. Hovering ANY of them lights the whole-table
+              selection ring (same style/thickness as selecting it), not each border individually. */}
           {hov && [
             { k: 't', s: { left: 0, top: -3, width: W, height: 6 } },
             { k: 'b', s: { left: 0, top: H - 3, width: W, height: 6 } },
             { k: 'l', s: { left: -3, top: 0, width: 6, height: H } },
             { k: 'r', s: { left: W - 3, top: colHdrH, width: 6, height: H - colHdrH } },
           ].map(({ k, s }) => (
-            <div key={'mb' + k} className="tc-moveborder" onMouseDown={onHeaderDown} title="Drag to move table"
+            <div key={'mb' + k} onMouseDown={onHeaderDown} title="Drag to move table"
+              onMouseEnter={() => setBorderHov(true)} onMouseLeave={() => setBorderHov(false)}
               style={{ position: 'absolute', ...s, cursor: 'move', zIndex: 5 }} />
           ))}
         </div>
@@ -4665,16 +4691,16 @@ function SelectOptionsEditor({ options, onChange }) {
 
 const tc = {
   hbtn: { background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '1px 3px' },
-  colMenuBtn: { background: 'transparent', border: 'none', color: '#7b8fcc', cursor: 'pointer', fontSize: 12, padding: '0 1px', lineHeight: 1, flexShrink: 0 },
+  colMenuBtn: { position: 'relative', zIndex: 9, background: 'transparent', border: 'none', color: '#7b8fcc', cursor: 'pointer', fontSize: 12, padding: '0 1px', lineHeight: 1, flexShrink: 0 },
   resizeHandle: { position: 'absolute', right: -3, top: 0, bottom: 0, width: 7, cursor: 'col-resize', zIndex: 2 },
   colMenu: { position: 'absolute', top: 24, right: 0, zIndex: 20, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 140 },
   menuLabel: { fontSize: 10, color: '#8090b8', fontWeight: 600, padding: '3px 8px 2px', textTransform: 'uppercase', letterSpacing: 0.4 },
   menuItem: (active, color) => ({ padding: '5px 10px', fontSize: 12, color: color || (active ? '#8ecbff' : '#c5d0ff'), cursor: 'pointer', borderRadius: 4, background: active ? '#20264e' : 'transparent' }),
   cellInput: { width: '100%', background: 'transparent', border: 'none', color: TC_TXT, fontSize: 12, padding: 0, height: '100%', outline: 'none', boxSizing: 'border-box' },
   select: { width: '100%', background: 'transparent', border: 'none', color: TC_TXT, fontSize: 12, padding: 0, height: '100%', outline: 'none', cursor: 'pointer' },
-  addRowBtn: { position: 'absolute', left: 0, top: '100%', marginTop: 2, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 11, padding: '2px 4px', whiteSpace: 'nowrap' },
-  addColBtn: { position: 'absolute', left: '100%', top: 0, height: 24, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '0 5px' },
-  rowDel: { position: 'absolute', left: -17, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#f0a0a0', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 },
+  addRowBtn: { position: 'absolute', zIndex: 9, left: 0, top: '100%', marginTop: 2, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 11, padding: '2px 4px', whiteSpace: 'nowrap' },
+  addColBtn: { position: 'absolute', zIndex: 9, left: '100%', top: 0, height: 24, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '0 5px' },
+  rowDel: { position: 'absolute', zIndex: 9, left: -17, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#f0a0a0', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 },
   colorPop: { position: 'absolute', top: 20, right: 0, zIndex: 30, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', display: 'flex', flexWrap: 'wrap', gap: 4, width: 150 },
 }
 
