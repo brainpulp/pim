@@ -436,6 +436,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [selected, setSelected] = useState(null)
   const selectedRef = useRef(null)
   useEffect(() => { selectedRef.current = selected }, [selected])
+  // Publish node selection to the shared channel so the docked outliner can follow along.
+  useEffect(() => { if (selected?.type === 'node') setSelectedNodeId(selected.id) }, [selected, setSelectedNodeId])
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const [isPanning, setIsPanning] = useState(false)
   const [depthExpand, setDepthExpand] = useState(null) // null = off, { nodeId, radius } = expand from node
@@ -582,6 +584,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const updateLabel     = useGraphStore(s => s.updateLabel)
   const updateNotes     = useGraphStore(s => s.updateNotes)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
+  const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
   const setContainedIn  = useGraphStore(s => s.setContainedIn)
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
