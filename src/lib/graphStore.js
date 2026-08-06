@@ -772,6 +772,30 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
+  moveTableColumn: (nodeId, colId, toIndex) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId || !n.table) return n
+      const cols = [...n.table.columns]; const from = cols.findIndex(c => c.id === colId); if (from < 0) return n
+      const [m] = cols.splice(from, 1); cols.splice(Math.max(0, Math.min(cols.length, toIndex)), 0, m)
+      return { ...n, table: { ...n.table, columns: cols } }
+    }),
+  })),
+
+  moveTableRow: (nodeId, rowId, toIndex) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId || !n.table) return n
+      const rows = [...n.table.rows]; const from = rows.findIndex(r => r.id === rowId); if (from < 0) return n
+      const [m] = rows.splice(from, 1); rows.splice(Math.max(0, Math.min(rows.length, toIndex)), 0, m)
+      return { ...n, table: { ...n.table, rows } }
+    }),
+  })),
+
+  setTableRowHeight: (nodeId, rowId, height) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : {
+      ...n, table: { ...n.table, rows: n.table.rows.map(r => r.id === rowId ? { ...r, height } : r) },
+    }),
+  })),
+
   // ── Flowchart (Mermaid text ⇄ graph) ────────────────────────────────────────
   setEdgeLabel: (edgeId, label) => set(s => ({
     edges: s.edges.map(e => e.id === edgeId ? { ...e, label: label || undefined } : e),

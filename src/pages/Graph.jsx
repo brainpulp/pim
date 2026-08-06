@@ -867,6 +867,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const deleteTableRow    = useGraphStore(s => s.deleteTableRow)
   const deleteTableColumn = useGraphStore(s => s.deleteTableColumn)
   const updateTableColumn = useGraphStore(s => s.updateTableColumn)
+  const moveTableColumn   = useGraphStore(s => s.moveTableColumn)
+  const moveTableRow      = useGraphStore(s => s.moveTableRow)
+  const setTableRowHeight = useGraphStore(s => s.setTableRowHeight)
   const ensureFlowIds     = useGraphStore(s => s.ensureFlowIds)
   const applyFlowchart    = useGraphStore(s => s.applyFlowchart)
   const addDrawing        = useGraphStore(s => s.addDrawing)
@@ -3100,7 +3103,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onDeleteRow={rowId => deleteTableRow(n.id, rowId)}
                   onDeleteColumn={colId => deleteTableColumn(n.id, colId)}
                   onUpdateColumn={(colId, patch) => updateTableColumn(n.id, colId, patch)}
-                  onSetColor={c => setNodeViewProp(n.id, 'fillColor', c)}
+                  onMoveColumn={(colId, targetColId) => { const idx = (node.table.columns || []).findIndex(c => c.id === targetColId); if (idx >= 0) moveTableColumn(n.id, colId, idx) }}
+                  onMoveRow={(rowId, targetRowId) => { const idx = (node.table.rows || []).findIndex(r => r.id === targetRowId); if (idx >= 0) moveTableRow(n.id, rowId, idx) }}
+                  onSetRowHeight={(rowId, h) => setTableRowHeight(n.id, rowId, h)}
+                  onSetColor={c => setNodeViewProp(n.id, 'fillColor', c === 'none' ? 'none' : c)}
                   onSetScale={k => setNodeViewProp(n.id, 'tableScale', k)}
                   onDelete={() => setConfirmDeleteNodes([n.id])} />
               )
@@ -4430,12 +4436,17 @@ const lc = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onSetColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
-  const colHdrH = 24, rowH = 26
-  const W = Math.max(80, columns.reduce((a, c) => a + (c.width || 120), 0))
-  const H = colHdrH + rows.length * rowH
-  const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#5b6af0'
+  const colHdrH = 24
+  const rowHeights = rows.map(r => r.height || 26)
+  const colW = c => c.width || 120
+  const W = Math.max(80, columns.reduce((a, c) => a + colW(c), 0))
+  const H = colHdrH + rowHeights.reduce((a, h) => a + h, 0)
+  const bg = fill && fill !== 'none' && fill !== 'transparent' ? fill : null
+  const accent = bg || '#5b6af0'
+  const colX = []; { let a = 0; columns.forEach(c => { colX.push(a); a += colW(c) }) }
+  const rowTop = []; { let a = colHdrH; rowHeights.forEach(h => { rowTop.push(a); a += h }) }
 
   const [hov, setHov] = useState(false)
   const [editTitle, setEditTitle] = useState(false)
@@ -4446,11 +4457,26 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   const [showColors, setShowColors] = useState(false)
 
   const eff = () => (zoomRef?.current?.k || 1) * (scale || 1)
-  const startResize = (e, col) => {   // drag a column's right edge
+  const startColResize = (e, col) => {
     e.preventDefault(); e.stopPropagation()
-    const startX = e.clientX, startW = col.width || 120
+    const startX = e.clientX, startW = colW(col)
     const move = ev => onUpdateColumn(col.id, { width: Math.max(46, Math.round(startW + (ev.clientX - startX) / eff())) })
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  const startRowResize = (e, rowId, h0) => {
+    e.preventDefault(); e.stopPropagation()
+    const startY = e.clientY
+    const move = ev => onSetRowHeight(rowId, Math.max(18, Math.round(h0 + (ev.clientY - startY) / eff())))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  // Reorder by dragging a grip — target found via the element under the pointer (handles any widths).
+  const startReorder = (e, id, attr, onMove) => {
+    e.preventDefault(); e.stopPropagation()
+    let target = null
+    const move = ev => { const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.(`[${attr}]`); if (el) target = el.getAttribute(attr) }
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); if (target && target !== id) onMove(id, target) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
   const startScale = (e) => {   // bottom-right corner → scale the whole table (top-left stays fixed)
@@ -4468,7 +4494,7 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   // A padded region around the grid so the hover affordances (which sit just outside the grid edges)
   // stay inside the foreignObject's hit-rect — otherwise `overflow:visible` shows them but they aren't
   // clickable, and the gap between grid and affordance drops the hover.
-  const PADT = 24, PADR = 34, PADB = 26, PADL = 18
+  const PADT = 24, PADR = 34, PADB = 26, PADL = 30
   return (
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
     <foreignObject x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
@@ -4492,9 +4518,11 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
                 style={{ color: TC_TXT, fontSize: 12, fontWeight: 600, cursor: 'text', maxWidth: W - 60, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title || 'Table'}</span>
             )}
             <div style={{ position: 'relative' }}>
-              <button style={tc.hbtn} title="Table colour" onMouseDown={stop} onClick={e => { stop(e); setShowColors(v => !v) }}>◑</button>
+              <button style={tc.hbtn} title="Table background colour" onMouseDown={stop} onClick={e => { stop(e); setShowColors(v => !v) }}>◑</button>
               {showColors && (
                 <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
+                  <div title="Transparent" onClick={() => { onSetColor('none'); setShowColors(false) }}
+                    style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid #5b6af0', background: 'repeating-conic-gradient(#555 0% 25%, #222 0% 50%) 50% / 8px 8px' }} />
                   {palette.map(c => <div key={c} title={c} onClick={() => { onSetColor(c); setShowColors(false) }} style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
                 </div>
               )}
@@ -4503,12 +4531,13 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
           </div>
         )}
 
-        {/* Grid — transparent, lines + text only. Outer top/left borders complete the grid. */}
-        <div style={{ borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', outline: selected ? `1.5px solid ${accent}` : 'none' }}>
+        {/* Grid — background (or transparent), lines + text. */}
+        <div style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: selected ? `0 0 0 1.5px ${accent}` : 'none' }}>
           {/* Column header row */}
           <div style={{ display: 'flex', height: colHdrH }}>
             {columns.map(col => (
-              <div key={col.id} style={{ ...cellBox(col.width || 120), position: 'relative', gap: 2 }}>
+              <div key={col.id} data-tcol={col.id} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2 }}>
+                {hov && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
                 {editColId === col.id ? (
                   <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
                     onBlur={e => { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) }}
@@ -4519,7 +4548,6 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
                     style={{ flex: 1, fontSize: 11, fontWeight: 700, color: TC_TXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}>{col.name}</span>
                 )}
                 {hov && <button style={tc.colMenuBtn} title="Column type / delete" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>}
-                {hov && <div onMouseDown={e => { stop(e); startResize(e, col) }} style={tc.resizeHandle} title="Drag to resize column" />}
                 {menuCol === col.id && (
                   <div style={tc.colMenu} onMouseDown={stop} onClick={stop} onWheel={stop}>
                     <div style={tc.menuLabel}>Type</div>
@@ -4536,15 +4564,42 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
             {hov && <button style={tc.addColBtn} title="Add column" onMouseDown={stop} onClick={e => { stop(e); onAddColumn('text') }}>＋</button>}
           </div>
           {/* Data rows */}
-          {rows.map(r => (
-            <div key={r.id} className="tc-row" style={{ display: 'flex', height: rowH, position: 'relative' }}>
+          {rows.map((r, ri) => (
+            <div key={r.id} data-trow={r.id} className="tc-row" style={{ display: 'flex', height: rowHeights[ri], position: 'relative' }}>
               {columns.map(col => (
-                <div key={col.id} style={cellBox(col.width || 120)}>
+                <div key={col.id} style={cellBox(colW(col))}>
                   <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} />
                 </div>
               ))}
+              {hov && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
+                style={{ position: 'absolute', left: -28, top: '50%', transform: 'translateY(-50%)', cursor: 'grab', color: '#7b8fcc', fontSize: 11, lineHeight: 1 }}>⣿</span>}
               {hov && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
             </div>
+          ))}
+
+          {/* Google-Docs-style resize handles: grab a grid line and drag. Interior lines only, so the outer
+              borders stay free for moving. */}
+          {hov && columns.map((col, ci) => ci < columns.length - 1 && (
+            <div key={'cd' + col.id} className="tc-linediv" onMouseDown={e => startColResize(e, col)} title="Drag to resize column"
+              style={{ position: 'absolute', left: colX[ci] + colW(col) - 3, top: 0, width: 6, height: H, cursor: 'col-resize', zIndex: 6 }} />
+          ))}
+          {hov && rows.map((r, ri) => ri < rows.length - 1 && (
+            <div key={'rd' + r.id} className="tc-linediv" onMouseDown={e => startRowResize(e, r.id, rowHeights[ri])} title="Drag to resize row"
+              style={{ position: 'absolute', left: 0, top: rowTop[ri] + rowHeights[ri] - 3, width: W, height: 6, cursor: 'row-resize', zIndex: 6 }} />
+          ))}
+          {/* Last column / last row remain resizable via a thin handle on their own edge. */}
+          {hov && columns.length > 0 && <div className="tc-linediv" onMouseDown={e => startColResize(e, columns[columns.length - 1])} title="Drag to resize column" style={{ position: 'absolute', left: W - 3, top: 0, width: 6, height: colHdrH, cursor: 'col-resize', zIndex: 7 }} />}
+          {hov && rows.length > 0 && <div className="tc-linediv" onMouseDown={e => startRowResize(e, rows[rows.length - 1].id, rowHeights[rowHeights.length - 1])} title="Drag to resize row" style={{ position: 'absolute', left: -6, top: rowTop[rows.length - 1] + rowHeights[rowHeights.length - 1] - 3, width: 6, height: 6, cursor: 'row-resize', zIndex: 7 }} />}
+
+          {/* Move-the-table borders — drag any of the 4 edges (they highlight on hover). */}
+          {hov && [
+            { k: 't', s: { left: 0, top: -3, width: W, height: 6 } },
+            { k: 'b', s: { left: 0, top: H - 3, width: W, height: 6 } },
+            { k: 'l', s: { left: -3, top: 0, width: 6, height: H } },
+            { k: 'r', s: { left: W - 3, top: colHdrH, width: 6, height: H - colHdrH } },
+          ].map(({ k, s }) => (
+            <div key={'mb' + k} className="tc-moveborder" onMouseDown={onHeaderDown} title="Drag to move table"
+              style={{ position: 'absolute', ...s, cursor: 'move', zIndex: 5 }} />
           ))}
         </div>
 
