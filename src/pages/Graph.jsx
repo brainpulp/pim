@@ -511,6 +511,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const prevFrameCountRef = useRef(0)
   const [presentingSlideIdx, setPresentingSlideIdx] = useState(null)
   const presentingSlideIdxRef = useRef(null)
+  const slideNavFocusRef = useRef(false)   // true when the slide sidebar was the last thing clicked → arrows scrub slides
+  const slideCursorRef = useRef(0)         // which slide the arrow-scrub cursor is on (edit mode, not presenting)
   const [sidebarWidth, setSidebarWidth] = useState(220)
   const liveThumbsRef = useRef({}) // nodeId → latest PNG data URL; updated immediately on capture
   const [fullscreen3dId, setFullscreen3dId] = useState(null)
@@ -1407,13 +1409,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
       openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey)   // untracked gesture (trackpad tap) → open now
     }
+    // Slide-scrub focus: arrow keys page through slides ONLY when the slide sidebar was the last thing
+    // clicked. Clicking anywhere else (canvas, a node, another panel) disables it, so arrows go back to
+    // navigating the tree. Capture-phase so it still sees the sidebar's own stopPropagation'd mousedown.
+    const onDownFocus = ev => {
+      const inSidebar = ev.target?.closest?.('[data-slide-sidebar]')
+      slideNavFocusRef.current = !!inSidebar
+      if (inSidebar) {
+        const row = ev.target.closest?.('[data-slide-idx]')
+        if (row) slideCursorRef.current = parseInt(row.dataset.slideIdx) || 0
+      }
+    }
     window.addEventListener('contextmenu', onContext, true)
     window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('mousedown', onDownFocus, true)
     window.addEventListener('mousemove', onMove, true)
     window.addEventListener('mouseup', onUp, true)
     return () => {
       svg.on('.zoom', null)
       window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('mousedown', onDownFocus, true)
       window.removeEventListener('mousemove', onMove, true)
       window.removeEventListener('mouseup', onUp, true)
       window.removeEventListener('contextmenu', onContext, true)
@@ -1505,6 +1520,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (e.key === 'ArrowRight') { e.preventDefault(); navigateSlide(1); return }
         if (e.key === 'ArrowUp') { e.preventDefault(); if (slideSimNodes.length > 0) { setPresentingSlideIdx(0); zoomToFrame(slideSimNodes[0]) } return }
         if (e.key === 'ArrowDown') { e.preventDefault(); if (slideSimNodes.length > 0) { const last = slideSimNodes.length - 1; setPresentingSlideIdx(last); zoomToFrame(slideSimNodes[last]) } return }
+        return
+      }
+
+      // Slide-scrub in EDIT mode: when the slide sidebar was last clicked, arrows zoom to the next/prev
+      // slide without entering presentation. Clicking elsewhere clears the focus (handled on mousedown).
+      if (slideNavFocusRef.current && slideSimNodes.length > 0 &&
+          (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault()
+        const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1
+        slideCursorRef.current = Math.max(0, Math.min(slideSimNodes.length - 1, slideCursorRef.current + dir))
+        zoomToFrame(slideSimNodes[slideCursorRef.current])
         return
       }
 
@@ -3116,6 +3142,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onMoveRow={(rowId, targetRowId) => { const idx = (node.table.rows || []).findIndex(r => r.id === targetRowId); if (idx >= 0) moveTableRow(n.id, rowId, idx) }}
                   onSetRowHeight={(rowId, h) => setTableRowHeight(n.id, rowId, h)}
                   onSetColor={c => setNodeViewProp(n.id, 'fillColor', c === 'none' ? 'none' : c)}
+                  textColor={getVP(n.id).textColor}
+                  onSetTextColor={c => setNodeViewProp(n.id, 'textColor', c === '__default__' ? null : c)}
                   onSetScale={k => setNodeViewProp(n.id, 'tableScale', k)}
                   onDelete={() => setConfirmDeleteNodes([n.id])} />
               )
@@ -3904,7 +3932,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
   const nonSlideFrames = frameSimNodes.filter(n => !slideIds.includes(n.id))
 
   return (
-    <div ref={containerRef} onMouseDown={e => e.stopPropagation()}
+    <div ref={containerRef} data-slide-sidebar="1" onMouseDown={e => e.stopPropagation()}
       style={{ width: 190, flexShrink: 0, borderLeft: '1px solid #1e1e2e', background: '#0d0d1a',
         overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px 8px 16px' }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, paddingBottom:6, borderBottom:'1px solid #1e1e2e' }}>
@@ -4445,8 +4473,9 @@ const lc = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
+  const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
   const rowHeights = rows.map(r => r.height || 26)
   const colW = c => c.width || 120
@@ -4464,6 +4493,7 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   const [menuCol, setMenuCol] = useState(null)
   const [editColId, setEditColId] = useState(null)
   const [showColors, setShowColors] = useState(false)
+  const [showTextColors, setShowTextColors] = useState(false)
   const [borderHov, setBorderHov] = useState(false)   // hovering any of the 4 move-borders → light the whole-table ring
   const [drop, setDrop] = useState(null)              // live reorder destination: { kind:'col'|'row', id }
   const [dragging, setDragging] = useState(false)     // a reorder drag is in progress
@@ -4521,7 +4551,7 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   return (
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
     <foreignObject x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
-      <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setBorderHov(false) }}
+      <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
         onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
           pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
@@ -4538,15 +4568,25 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
                 style={{ background: '#0d0d1e', border: '1px solid #3a4a8a', color: '#fff', borderRadius: 4, padding: '0 5px', fontSize: 12, height: 18, outline: 'none' }} />
             ) : (
               <span onDoubleClick={e => { stop(e); setTitleDraft(title || ''); setEditTitle(true) }}
-                style={{ color: TC_TXT, fontSize: 12, fontWeight: 600, cursor: 'text', maxWidth: W - 60, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title || 'Table'}</span>
+                style={{ color: txt, fontSize: 12, fontWeight: 600, cursor: 'text', maxWidth: W - 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title || 'Table'}</span>
             )}
             <div style={{ position: 'relative' }}>
-              <button style={tc.hbtn} title="Table background colour" onMouseDown={stop} onClick={e => { stop(e); setShowColors(v => !v) }}>◑</button>
+              <button style={tc.hbtn} title="Table background colour" onMouseDown={stop} onClick={e => { stop(e); setShowTextColors(false); setShowColors(v => !v) }}>◑</button>
               {showColors && (
                 <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
                   <div title="Transparent" onClick={() => { onSetColor('none'); setShowColors(false) }}
                     style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid #5b6af0', background: 'repeating-conic-gradient(#555 0% 25%, #222 0% 50%) 50% / 8px 8px' }} />
                   {palette.map(c => <div key={c} title={c} onClick={() => { onSetColor(c); setShowColors(false) }} style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
+                </div>
+              )}
+            </div>
+            <div style={{ position: 'relative' }}>
+              <button style={{ ...tc.hbtn, fontWeight: 800 }} title="Table text colour" onMouseDown={stop} onClick={e => { stop(e); setShowColors(false); setShowTextColors(v => !v) }}>A</button>
+              {showTextColors && (
+                <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
+                  <div title="Default" onClick={() => { onSetTextColor('__default__'); setShowTextColors(false) }}
+                    style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid #5b6af0', background: TC_TXT, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16162a', fontSize: 11, fontWeight: 800 }}>A</div>
+                  {palette.map(c => <div key={c} title={c} onClick={() => { onSetTextColor(c); setShowTextColors(false) }} style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
                 </div>
               )}
             </div>
@@ -4568,7 +4608,7 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
                     style={{ flex: 1, minWidth: 0, background: '#0d0d1e', border: '1px solid #3a4a8a', color: '#fff', borderRadius: 3, padding: '0 3px', fontSize: 11, outline: 'none' }} />
                 ) : (
                   <span title={`${col.name} · ${TYPE_LABELS[col.type] || col.type}`} onDoubleClick={e => { stop(e); setEditColId(col.id) }}
-                    style={{ flex: 1, fontSize: 11, fontWeight: 700, color: TC_TXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}>{col.name}</span>
+                    style={{ flex: 1, fontSize: 11, fontWeight: 700, color: txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}>{col.name}</span>
                 )}
                 {hov && <button style={tc.colMenuBtn} title="Column type / delete" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>}
                 {menuCol === col.id && (
@@ -4591,7 +4631,7 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
             <div key={r.id} data-trow={r.id} className="tc-row" style={{ display: 'flex', height: rowHeights[ri], position: 'relative' }}>
               {columns.map(col => (
                 <div key={col.id} style={cellBox(colW(col))}>
-                  <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} />
+                  <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} textColor={txt} />
                 </div>
               ))}
               {hov && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
@@ -4645,17 +4685,18 @@ function TableCard({ node, title, table, fill, scale = 1, palette = [], selected
   )
 }
 
-function TableCell({ col, value, onChange }) {
+function TableCell({ col, value, onChange, textColor }) {
   const [draft, setDraft] = useState(value ?? '')
   useEffect(() => { setDraft(value ?? '') }, [value])
   const stop = e => e.stopPropagation()
+  const col2 = textColor || TC_TXT
   if (col.type === 'checkbox') {
     return <input type="checkbox" checked={!!value} onMouseDown={stop} onChange={e => onChange(e.target.checked)}
       style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer', margin: '0 auto' }} />
   }
   if (col.type === 'select') {
     return (
-      <select value={value ?? ''} onMouseDown={stop} onChange={e => onChange(e.target.value)} style={tc.select}>
+      <select value={value ?? ''} onMouseDown={stop} onChange={e => onChange(e.target.value)} style={{ ...tc.select, color: col2 }}>
         <option value="">—</option>
         {(col.options || []).map(o => <option key={o} value={o}>{o}</option>)}
       </select>
@@ -4667,7 +4708,7 @@ function TableCell({ col, value, onChange }) {
       onChange={e => setDraft(e.target.value)}
       onBlur={() => { if ((draft ?? '') !== (value ?? '')) onChange(draft) }}
       onKeyDown={e => { stop(e); if (e.key === 'Enter') e.currentTarget.blur() }}
-      style={tc.cellInput} />
+      style={{ ...tc.cellInput, color: col2 }} />
   )
 }
 
