@@ -10,6 +10,44 @@ import useGraphStore from '../lib/graphStore'
 
 const TEXT_COLORS = ['#111827', '#e11d48', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#6b7280', '#ffffff']
 
+// ── Editable keyboard shortcuts ──────────────────────────────────────────────
+// Each action maps to a normalized combo string. 'Mod' = ⌘ on Mac / Ctrl elsewhere.
+const SHORTCUT_ACTIONS = [
+  { id: 'newItem',  label: 'New item' },
+  { id: 'indent',   label: 'Indent (demote)' },
+  { id: 'outdent',  label: 'Outdent (promote)' },
+  { id: 'moveUp',   label: 'Move up' },
+  { id: 'moveDown', label: 'Move down' },
+  { id: 'collapse', label: 'Collapse' },
+  { id: 'expand',   label: 'Expand' },
+  { id: 'deleteItem', label: 'Delete empty item' },
+]
+const DEFAULT_KEYS = {
+  newItem: 'Enter', indent: 'Tab', outdent: 'Shift+Tab',
+  moveUp: 'Alt+ArrowUp', moveDown: 'Alt+ArrowDown',
+  collapse: 'Mod+ArrowUp', expand: 'Mod+ArrowDown', deleteItem: 'Backspace',
+}
+// Normalize a keydown into a combo string. Returns null for a lone modifier press.
+function comboFromEvent(e) {
+  if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return null
+  const parts = []
+  if (e.metaKey || e.ctrlKey) parts.push('Mod')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+  parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key)
+  return parts.join('+')
+}
+// Pretty-print a combo for display.
+function prettyCombo(combo) {
+  if (!combo) return '—'
+  const mac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || '')
+  return combo.split('+').map(p => ({
+    Mod: mac ? '⌘' : 'Ctrl', Alt: mac ? '⌥' : 'Alt', Shift: '⇧',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    Enter: '⏎', Backspace: '⌫', Tab: '⇥', Escape: 'Esc',
+  }[p] || p)).join(mac ? '' : '+')
+}
+
 export default function Writer({ projectName }) {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
@@ -31,6 +69,13 @@ export default function Writer({ projectName }) {
 
   const [dark, setDark] = useState(() => { try { return localStorage.getItem('pim_writer_dark') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('pim_writer_dark', dark ? '1' : '0') } catch { /* ignore */ } }, [dark])
+  const [keymap, setKeymap] = useState(() => {
+    try { return { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem('pim_writer_keys') || '{}') } } catch { return { ...DEFAULT_KEYS } }
+  })
+  useEffect(() => { try { localStorage.setItem('pim_writer_keys', JSON.stringify(keymap)) } catch { /* ignore */ } }, [keymap])
+  const keymapRef = useRef(keymap); useEffect(() => { keymapRef.current = keymap }, [keymap])
+  const [showKeys, setShowKeys] = useState(false)
+  const [capturing, setCapturing] = useState(null)   // action id currently being rebound
   const [collapsed, setCollapsed] = useState(() => new Set())
   const [expanded, setExpanded] = useState(() => new Set())   // detail drawers (notes + images)
   const [focusId, setFocusId] = useState(null)
@@ -99,22 +144,36 @@ export default function Writer({ projectName }) {
   const toggleCollapse = (id, want) => setCollapsed(s => { const n = new Set(s); if (want === false || (want == null && n.has(id))) n.delete(id); else n.add(id); return n })
   const toggleDetails = (id) => setExpanded(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
+  const runAction = (action, id, el) => {
+    switch (action) {
+      case 'newItem':  addSiblingAfter(id); return true
+      case 'indent':   demote(id); return true
+      case 'outdent':  promote(id); return true
+      case 'moveUp':   move(id, -1); return true
+      case 'moveDown': move(id, 1); return true
+      case 'collapse': toggleCollapse(id, true); return true
+      case 'expand':   toggleCollapse(id, false); return true
+      case 'deleteItem':
+        if (el.value === '' && (childrenOf[id] || []).length === 0) { const idx = rowIndex[id]; deleteNode(id); focusRow(Math.max(0, idx - 1)) }
+        return true
+      default: return false
+    }
+  }
+
   const onKey = (e, id) => {
     const el = e.currentTarget
-    const atStart = el.selectionStart === 0 && el.selectionEnd === 0
-    const empty = el.value === ''
-    if (e.key === 'Enter') { e.preventDefault(); addSiblingAfter(id); return }
-    if (e.key === 'Tab') { e.preventDefault(); e.shiftKey ? promote(id) : demote(id); return }
-    if (e.key === 'Backspace' && empty) {
-      e.preventDefault()
-      const idx = rowIndex[id]
-      if ((childrenOf[id] || []).length === 0) { deleteNode(id); focusRow(Math.max(0, idx - 1)) }
-      return
+    const combo = comboFromEvent(e)
+    // User-editable shortcuts first (read from the live keymap).
+    if (combo) {
+      const km = keymapRef.current
+      const action = SHORTCUT_ACTIONS.map(a => a.id).find(a => km[a] === combo)
+      // 'deleteItem' (default Backspace) must only fire on an empty item, else let the key type normally.
+      if (action && !(action === 'deleteItem' && el.value !== '')) { e.preventDefault(); runAction(action, id, el); return }
     }
-    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); move(id, e.key === 'ArrowUp' ? -1 : 1); return }
-    if ((e.metaKey || e.ctrlKey) && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); toggleCollapse(id, e.key === 'ArrowDown' ? false : true); return }
-    if (e.key === 'ArrowUp' && atStart) { e.preventDefault(); focusRow(rowIndex[id] - 1); return }
-    if (e.key === 'ArrowDown' && el.selectionStart === el.value.length) { e.preventDefault(); focusRow(rowIndex[id] + 1); return }
+    // Fixed caret navigation (not rebindable): plain arrows walk rows at the caret bounds.
+    const atStart = el.selectionStart === 0 && el.selectionEnd === 0
+    if (e.key === 'ArrowUp' && atStart && !e.altKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); focusRow(rowIndex[id] - 1); return }
+    if (e.key === 'ArrowDown' && el.selectionStart === el.value.length && !e.altKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); focusRow(rowIndex[id] + 1); return }
     if (e.key === 'Escape') el.blur()
   }
 
@@ -150,6 +209,7 @@ export default function Writer({ projectName }) {
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontSize: 12, color: faint }}>{words} words · {nodes.length} items</span>
+          <button title="Edit keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={tbtn(false)}>⌨</button>
           <button title="Toggle light / dark" onClick={() => setDark(d => !d)} style={tbtn(false)}>{dark ? '☀️' : '🌙'}</button>
         </div>
       </div>
@@ -211,6 +271,62 @@ export default function Writer({ projectName }) {
           })}
         </div>
       </div>
+
+      {/* Shortcuts editor */}
+      {showKeys && (
+        <div onMouseDown={() => { setShowKeys(false); setCapturing(null) }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, sans-serif' }}>
+          <div onMouseDown={e => e.stopPropagation()}
+            style={{ width: 380, maxWidth: '92vw', background: dark ? '#161a24' : '#ffffff', color: fg, border: `1px solid ${line}`, borderRadius: 14, boxShadow: '0 20px 60px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
+            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${line}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <b style={{ fontSize: 15 }}>Keyboard shortcuts</b>
+              <span onClick={() => { setShowKeys(false); setCapturing(null) }} style={{ cursor: 'pointer', color: faint, fontSize: 18, lineHeight: 1 }}>×</span>
+            </div>
+            <div style={{ padding: '8px 10px' }}>
+              {SHORTCUT_ACTIONS.map(a => {
+                const isCap = capturing === a.id
+                return (
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 8px', borderRadius: 8, background: isCap ? (dark ? '#1f2540' : '#eef0ff') : 'transparent' }}>
+                    <span style={{ fontSize: 13.5 }}>{a.label}</span>
+                    <button
+                      ref={el => { if (el && isCap) el.focus() }}
+                      onClick={e => { const btn = e.currentTarget; setCapturing(a.id); btn.focus() }}
+                      onKeyDown={e => {
+                        if (!isCap) return
+                        e.preventDefault(); e.stopPropagation()
+                        if (e.key === 'Escape') { setCapturing(null); return }
+                        const combo = comboFromEvent(e)
+                        if (!combo) return   // waiting for a non-modifier key
+                        setKeymap(km => {
+                          const next = { ...km }
+                          // if this combo is bound elsewhere, clear the other binding to avoid a clash
+                          for (const k of Object.keys(next)) if (next[k] === combo && k !== a.id) next[k] = ''
+                          next[a.id] = combo
+                          return next
+                        })
+                        setCapturing(null)
+                      }}
+                      style={{
+                        minWidth: 84, textAlign: 'center', cursor: 'pointer',
+                        background: isCap ? '#5b6af0' : (dark ? '#12142c' : '#f4f6fb'),
+                        color: isCap ? '#fff' : fg,
+                        border: `1px solid ${isCap ? '#5b6af0' : line}`, borderRadius: 7,
+                        padding: '5px 10px', fontSize: 13, fontFamily: 'inherit', fontWeight: 600,
+                      }}>
+                      {isCap ? 'Press keys…' : prettyCombo(keymap[a.id])}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{ padding: '10px 14px', borderTop: `1px solid ${line}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11.5, color: faint }}>Click a shortcut, then press the new keys. Esc cancels.</span>
+              <button onClick={() => { setKeymap({ ...DEFAULT_KEYS }); setCapturing(null) }}
+                style={{ background: 'transparent', border: `1px solid ${line}`, color: faint, borderRadius: 7, padding: '4px 10px', cursor: 'pointer', fontSize: 12.5 }}>Reset</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
