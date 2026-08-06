@@ -6,6 +6,7 @@ import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
 import Table from './pages/Table'
+import Writer from './pages/Writer'
 import PackBoard from './pages/PackBoard'
 import PackLab from './pages/PackLab'
 import SharedView from './pages/SharedView'
@@ -186,7 +187,7 @@ export default function App() {
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {[['board', 'canvas'], ['graph', 'graph'], ['table', 'table'], ['lab', 'lab']].map(([v, label]) => (
+          {[['board', 'canvas'], ['graph', 'graph'], ['write', 'write'], ['table', 'table'], ['lab', 'lab']].map(([v, label]) => (
             <button
               key={v}
               style={{ ...navBtnStyle, ...(view === v ? navBtnActiveStyle : {}) }}
@@ -225,6 +226,7 @@ export default function App() {
           />
           </AppErrorBoundary>
         )}
+        {view === 'write' && <AppErrorBoundary><Writer key={project.id} projectName={project.name} /></AppErrorBoundary>}
         {view === 'table' && <Table key={project.id} projectId={project.id} />}
         {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} projectList={projectList} onNavigateProject={navigateToProject} /></AppErrorBoundary>}
         {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}

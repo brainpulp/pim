@@ -192,6 +192,11 @@ const useGraphStore = create((set, get) => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, label } : n),
   })),
 
+  // Per-item rich text styling for the Writer/outline mode (view-independent): { bold, italic, color, metallic }.
+  setNodeWriteStyle: (id, patch) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, writeStyle: { ...(n.writeStyle || {}), ...patch } } : n),
+  })),
+
   setImageUrl: (id, imageUrl) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, imageUrl } : n),
   })),
