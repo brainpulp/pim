@@ -450,6 +450,21 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
+  // ── Drawing layer (per-view decorations: shapes/lines/arrows/emoji/text) ──────
+  // Floating annotations saved on the view (like images) — NOT graph nodes (no outline, no node-data
+  // sync). They render on the canvas and on slides. A drawing: { id, kind, ...geometry, ...style }.
+  addDrawing: (drawing) => {
+    const id = uid()
+    set(s => ({ views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, drawings: [...(v.drawings || []), { id, ...drawing }] }) }))
+    return id
+  },
+  updateDrawing: (id, props) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, drawings: (v.drawings || []).map(d => d.id === id ? { ...d, ...props } : d) }),
+  })),
+  deleteDrawing: (id) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, drawings: (v.drawings || []).filter(d => d.id !== id) }),
+  })),
+
   deleteImage: (imageId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v, images: (v.images || []).filter(img => img.id !== imageId),
