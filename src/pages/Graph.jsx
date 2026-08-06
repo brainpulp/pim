@@ -2850,7 +2850,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onMouseDown={e => {
             if (e.button === 2) return   // right-button handled by d3-zoom start/end (pan vs menu)
             if (!e.target.closest?.('[data-node]')) setIsPanning(true)
-            if (!readOnly && e.target === e.currentTarget) handleCanvasMouseDown(e)
+            // Start the rubber-band marquee on ANY non-interactive surface — bare canvas OR an edge line
+            // OR an organize pack — not only the exact <svg> element. (Nodes/frames/images/drawings/tables
+            // all stopPropagation on their own mousedown, so they never reach here.) The old
+            // `e.target === e.currentTarget` test meant a marquee that began even slightly over an edge
+            // silently did nothing, which read as "multi-select is broken".
+            if (!readOnly && !e.target.closest?.('[data-node],[data-frame],[data-img]')) handleCanvasMouseDown(e)
           }}
           onMouseUp={() => setIsPanning(false)}
           onMouseLeave={() => setIsPanning(false)}
