@@ -193,6 +193,11 @@ const useGraphStore = create((set, get) => ({
   })),
 
   // Per-item rich text styling for the Writer/outline mode (view-independent): { bold, italic, color, metallic }.
+  // Shared cross-surface selection — the sync channel between the canvas (board/graph) and the docked
+  // outliner. Not persisted; ephemeral UI state.
+  selectedNodeId: null,
+  setSelectedNodeId: (id) => set({ selectedNodeId: id }),
+
   setNodeWriteStyle: (id, patch) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, writeStyle: { ...(n.writeStyle || {}), ...patch } } : n),
   })),

@@ -45,6 +45,18 @@ export default function App() {
     try { return localStorage.getItem('pim_last_view') || 'board' } catch { return 'board' }
   })
   useEffect(() => { try { localStorage.setItem('pim_last_view', view) } catch { /* ignore */ } }, [view])
+  // Docked outliner (the Writer as a resizable side panel beside the canvas), with selection synced.
+  const [outlineDock, setOutlineDock] = useState(() => { try { return localStorage.getItem('pim_outline_dock') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('pim_outline_dock', outlineDock ? '1' : '0') } catch { /* ignore */ } }, [outlineDock])
+  const [outlineW, setOutlineW] = useState(() => { try { return Math.max(240, Math.min(720, +localStorage.getItem('pim_outline_w') || 380)) } catch { return 380 } })
+  useEffect(() => { try { localStorage.setItem('pim_outline_w', String(outlineW)) } catch { /* ignore */ } }, [outlineW])
+  const startDockResize = (e) => {
+    e.preventDefault()
+    const startX = e.clientX, startW = outlineW
+    const move = ev => setOutlineW(Math.max(240, Math.min(720, startW - (ev.clientX - startX))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const [shareToken, setShareToken] = useState(() => parseShareToken())
@@ -196,6 +208,11 @@ export default function App() {
               {label}
             </button>
           ))}
+          {(view === 'board' || view === 'graph') && (
+            <button title="Toggle the outliner panel beside the canvas"
+              style={{ ...navBtnStyle, ...(outlineDock ? navBtnActiveStyle : {}) }}
+              onClick={() => setOutlineDock(o => !o)}>⊟ outline</button>
+          )}
         </div>
         <button style={shareBtnStyle} onClick={() => setShowShare(true)} title="Share this project">
           Share
@@ -215,26 +232,37 @@ export default function App() {
       {/* key={project.id} → remount views on project switch so no per-project state leaks (view ids
           like "view-default" are shared across projects, so keying effects on the view id alone was
           not enough — a fresh mount guarantees clusters, pan/zoom, and refs reset). */}
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-        {view === 'graph' && (
-          <AppErrorBoundary>
-          <Graph
-            key={project.id}
-            projectId={project.id}
-            projectName={project.name}
-            onBack={() => setProject(null)}
-          />
-          </AppErrorBoundary>
-        )}
-        {view === 'write' && <AppErrorBoundary><Writer key={project.id} projectName={project.name} /></AppErrorBoundary>}
-        {view === 'table' && <Table key={project.id} projectId={project.id} />}
-        {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} projectList={projectList} onNavigateProject={navigateToProject} /></AppErrorBoundary>}
-        {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
-        {backStack.length > 0 && (
-          <button style={backChipStyle} onClick={goBack}
-            title={`Back to ${backStack[backStack.length - 1].name}`}>
-            ← Back to {backStack[backStack.length - 1].name}
-          </button>
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex' }}>
+        <div style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}>
+          {view === 'graph' && (
+            <AppErrorBoundary>
+            <Graph
+              key={project.id}
+              projectId={project.id}
+              projectName={project.name}
+              onBack={() => setProject(null)}
+            />
+            </AppErrorBoundary>
+          )}
+          {view === 'write' && <AppErrorBoundary><Writer key={project.id} projectName={project.name} /></AppErrorBoundary>}
+          {view === 'table' && <Table key={project.id} projectId={project.id} />}
+          {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} projectList={projectList} onNavigateProject={navigateToProject} /></AppErrorBoundary>}
+          {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
+          {backStack.length > 0 && (
+            <button style={backChipStyle} onClick={goBack}
+              title={`Back to ${backStack[backStack.length - 1].name}`}>
+              ← Back to {backStack[backStack.length - 1].name}
+            </button>
+          )}
+        </div>
+        {outlineDock && (view === 'board' || view === 'graph') && (
+          <>
+            <div onMouseDown={startDockResize} title="Drag to resize"
+              style={{ width: 6, flexShrink: 0, cursor: 'col-resize', background: '#15151f', borderLeft: '1px solid #24243a' }} />
+            <div style={{ width: outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
+              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded /></AppErrorBoundary>
+            </div>
+          </>
         )}
       </div>
     </div>

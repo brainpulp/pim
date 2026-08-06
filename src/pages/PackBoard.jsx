@@ -1,10 +1,11 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
 import * as d3 from 'd3'
-import useGraphStore, { FILL_COLORS } from '../lib/graphStore'
+import useGraphStore, { FILL_COLORS, COLOR_PALETTE } from '../lib/graphStore'
 import { saveProject, uploadImageDataUrl } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
 import { buildNestedTagTree } from '../lib/hierarchy'
 import NodePropsEditor from '../components/NodePropsEditor'
+import { DrawingItem, DrawPalette } from '../components/Drawing'
 import { usePresence } from '../lib/usePresence'
 
 // Multi-pack / multi-tree CANVAS (feature #1). One shared pannable canvas hosts several independent
@@ -125,6 +126,11 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   const addImage = useGraphStore(s => s.addImage)
   const updateImage = useGraphStore(s => s.updateImage)
   const deleteImage = useGraphStore(s => s.deleteImage)
+  const addDrawing = useGraphStore(s => s.addDrawing)
+  const updateDrawing = useGraphStore(s => s.updateDrawing)
+  const deleteDrawing = useGraphStore(s => s.deleteDrawing)
+  const selectedNodeId = useGraphStore(s => s.selectedNodeId)
+  const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
   const setBoardSystems = useGraphStore(s => s.setBoardSystems)
   const setViewBoardHidden = useGraphStore(s => s.setViewBoardHidden)
   const setViewBoardNode = useGraphStore(s => s.setViewBoardNode)
@@ -436,6 +442,45 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   const images = activeView?.images || EMPTY
   const [selImage, setSelImage] = useState(null)
   const fileRef = useRef(null)
+
+  // ── Free drawing layer (shared with the graph): view.drawings[] rendered in world coords. ──
+  const drawings = activeView?.drawings || EMPTY
+  const [showDraw, setShowDraw] = useState(false)
+  const [selectedDrawingId, setSelectedDrawingId] = useState(null)
+  const [dragDraw, setDragDraw] = useState(null)   // { kind, defaults, ghost:{x,y} } while dragging from palette
+  const tfRef = useRef(tf)
+  useEffect(() => { tfRef.current = tf }, [tf])
+  // Drag a palette item; drop on the canvas → create the drawing at that world point.
+  const startDrawDrag = (kind, defaults, e) => {
+    e.preventDefault()
+    setDragDraw({ kind, defaults, ghost: { x: e.clientX, y: e.clientY } })
+    const move = ev => setDragDraw(d => d ? { ...d, ghost: { x: ev.clientX, y: ev.clientY } } : d)
+    const up = ev => {
+      window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up)
+      setDragDraw(null)
+      const svg = svgRef.current; if (!svg) return
+      const r = svg.getBoundingClientRect()
+      if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return
+      const t = tfRef.current
+      const wx = (ev.clientX - r.left - t.x) / t.k, wy = (ev.clientY - r.top - t.y) / t.k
+      const draw = { kind, x: Math.round(wx), y: Math.round(wy), ...defaults }
+      if (kind === 'line' || kind === 'arrow') { draw.x2 = Math.round(wx) + (defaults.dx ?? 120); draw.y2 = Math.round(wy) + (defaults.dy ?? 0) }
+      const id = addDrawing(draw); saveAll(); setSelectedDrawingId(id)
+    }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  // Delete the selected drawing with Delete/Backspace.
+  useEffect(() => {
+    if (!selectedDrawingId) return
+    const onKey = e => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName || '')) {
+        e.preventDefault(); deleteDrawing(selectedDrawingId); setSelectedDrawingId(null); saveAll()
+      }
+      if (e.key === 'Escape') setSelectedDrawingId(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedDrawingId]) // eslint-disable-line
   const onPickPhoto = (e) => {
     const file = e.target.files?.[0]; e.target.value = ''
     if (!file) return
@@ -507,6 +552,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
           {!readOnly && <>
             <button style={styles.addBtn} onClick={addFreeNode} title="Create a free item on the board">+ Node</button>
             <button style={styles.addBtn} onClick={() => fileRef.current?.click()} title="Add a photo to the canvas">+ Photo</button>
+            <button style={{ ...styles.addBtn, ...(showDraw ? { background: '#2d3a6a', color: '#c5d0ff', borderColor: '#5b6af0' } : {}) }} onClick={() => setShowDraw(o => !o)} title="Drawing palette — shapes, lines, text, emoji">✏️ Draw</button>
             <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickPhoto} />
           </>}
           <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
@@ -544,7 +590,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
         </div>
         {!systems.length && !freeNodes.length && !images.length && <div style={styles.empty}>Nothing here yet. Click <b style={{ color: '#8ab4ff' }}>+ Add</b> for a circle pack or tree, <b style={{ color: '#8ab4ff' }}>+ Node</b> for a free item, or <b style={{ color: '#8ab4ff' }}>+ Photo</b>.</div>}
         <svg ref={svgRef} style={styles.svg} onMouseMove={onCanvasMove} onMouseLeave={onCanvasLeave}
-          onClick={e => { if (e.target === svgRef.current || e.target === gRef.current) setSelImage(null) }}>
+          onClick={e => { if (e.target === svgRef.current || e.target === gRef.current) { setSelImage(null); setSelectedDrawingId(null) } }}>
           <g ref={gRef} transform={`translate(${tf.x},${tf.y}) scale(${tf.k})`} style={readOnly ? { pointerEvents: 'none' } : undefined}>
             {/* Photos — a background layer behind clusters and nodes (same view.images[] as the graph). */}
             {images.map(img => (
@@ -614,9 +660,17 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
             {freeNodes.map(n => (
               <FreeNode key={'free:' + n.id} node={n} pos={boardFreeMap[n.id]} decor={decorOf(n.id)}
                 lens={lens} toWorld={toWorld} onDragEnd={moveFreeNode}
-                onEdit={(id) => setEdit({ nodeId: id, free: true })}
+                selected={selectedNodeId === n.id} onSelect={(id) => setSelectedNodeId(id)}
+                onEdit={(id) => { setSelectedNodeId(id); setEdit({ nodeId: id, free: true }) }}
                 onNavigate={() => followLink(n.linkTo)}
                 onConnect={(e) => startConnect(n.id, e)} />
+            ))}
+            {/* Free drawings — shapes / lines / text / emoji placed on the canvas (paint on top). */}
+            {drawings.map(d => (
+              <DrawingItem key={d.id} d={d} selected={selectedDrawingId === d.id} zoomRef={tfRef} palette={COLOR_PALETTE}
+                onSelect={() => { setSelectedDrawingId(d.id); setSelImage(null) }}
+                onUpdate={props => { updateDrawing(d.id, props); saveAll() }}
+                onDelete={() => { deleteDrawing(d.id); setSelectedDrawingId(null); saveAll() }} />
             ))}
             {/* Realtime peer cursors — counter-scaled so they stay a constant size at any zoom. */}
             {Object.values(cursors).map(c => (
@@ -652,6 +706,15 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
           />
         })()}
       </div>
+      {showDraw && !readOnly && (
+        <DrawPalette palette={COLOR_PALETTE} onStartDrag={startDrawDrag} onClose={() => setShowDraw(false)} />
+      )}
+      {dragDraw && (
+        <div style={{ position: 'fixed', left: dragDraw.ghost.x + 8, top: dragDraw.ghost.y + 8, zIndex: 100, pointerEvents: 'none',
+          fontSize: dragDraw.kind === 'emoji' ? 26 : 14, color: '#c5d0ff', background: '#16162a', border: '1px solid #3a4a8a', borderRadius: 6, padding: '2px 7px', boxShadow: '0 4px 14px rgba(0,0,0,0.5)' }}>
+          {dragDraw.kind === 'emoji' ? dragDraw.defaults.emoji : dragDraw.kind === 'text' ? 'Text' : dragDraw.kind === 'shape' ? dragDraw.defaults.shape : dragDraw.kind}
+        </div>
+      )}
     </div>
   )
 }
@@ -1484,7 +1547,7 @@ function BoardImage({ img, selected, toWorld, onSelect, onCommit, onDelete }) {
 // A free node — a real graph node placed directly on the board canvas (not in any cluster). Drag to
 // reposition (persisted per view); right-click / double-click to edit. Renders with the node's own
 // graph-view cosmetics via LeafNode. `pos` is world coords; drag stays local until drop.
-function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNavigate, onConnect }) {
+function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNavigate, onConnect, selected, onSelect }) {
   const [drag, setDrag] = useState(null)
   const x = drag ? drag.x : (pos?.x || 0), y = drag ? drag.y : (pos?.y || 0)
   const dec = decor || {}
@@ -1497,6 +1560,7 @@ function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNaviga
   const startDrag = (e) => {
     if (e.button === 2) return
     e.preventDefault(); e.stopPropagation()
+    onSelect?.(node.id)   // single-click selects → syncs to the docked outliner
     const p0 = toWorld(e); const ox = x - p0.x, oy = y - p0.y; let moved = false
     const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 3) moved = true; setDrag({ x: p.x + ox, y: p.y + oy }) }
     const up = ev => {
@@ -1509,14 +1573,14 @@ function FreeNode({ node, pos, decor, lens, toWorld, onDragEnd, onEdit, onNaviga
   }
   const b = { x, y, label, color, decor: dec, shape, baseR, r: bound }
   const linked = !!node.linkTo?.projectId
-  return <LeafNode b={b} held={!!drag} lens={lens} smooth={false} onDown={startDrag}
+  return <LeafNode b={b} held={!!drag} selected={selected} lens={lens} smooth={false} onDown={startDrag}
     onContext={e => { e.preventDefault(); e.stopPropagation(); onEdit(node.id) }}
     onDbl={e => { e.stopPropagation(); onEdit(node.id) }}
     onBadge={linked ? onNavigate : null} onConnect={onConnect} />
 }
 
 // A tree leaf = a real graph node rendered with its graph-view cosmetics (fill/shape/stroke/dash/emoji).
-function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl, onBadge, onConnect }) {
+function LeafNode({ b, held, selected, lens, ox = 0, oy = 0, smooth, onDown, onContext, onDbl, onBadge, onConnect }) {
   const dec = b.decor || {}
   const shape = b.shape || 'circle'
   const disp = lens ? lens(ox + (b.x || 0), oy + (b.y || 0)) : null
@@ -1524,8 +1588,8 @@ function LeafNode({ b, held, lens, ox = 0, oy = 0, smooth, onDown, onContext, on
   const s = (b.baseR || b.r) * z
   const fill = b.color
   const light = hexLum(fill) > 0.55
-  const stroke = held ? '#fff' : (dec.stroke || 'rgba(232,238,255,0.4)')
-  const sw = held ? 3 : (dec.strokeWidth || 1.2)
+  const stroke = held ? '#fff' : (selected ? '#5b6af0' : (dec.stroke || 'rgba(232,238,255,0.4)'))
+  const sw = held ? 3 : (selected ? 2.6 : (dec.strokeWidth || 1.2))
   const dash = held ? undefined : dashArrayB(dec.strokeDash, sw)
   const tf = dec.textColor || (light ? '#0c0c1a' : '#f2f5ff')
   const emoji = typeof dec.emoji === 'string' ? dec.emoji : null

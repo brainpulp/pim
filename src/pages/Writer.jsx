@@ -96,7 +96,7 @@ function consumeTokenAt(value, caret) {
   return { text, caret: cpos, act }
 }
 
-export default function Writer({ projectName }) {
+export default function Writer({ projectName, embedded = false }) {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
   const views = useGraphStore(s => s.views)
@@ -114,6 +114,8 @@ export default function Writer({ projectName }) {
   const addNodePerson = useGraphStore(s => s.addNodePerson)
   const setNodeField = useGraphStore(s => s.setNodeField)
   const removeNodeField = useGraphStore(s => s.removeNodeField)
+  const selectedNodeId = useGraphStore(s => s.selectedNodeId)
+  const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
 
   const nodeProps = useMemo(() => (views.find(v => v.id === activeViewId)?.nodeProps) || {}, [views, activeViewId])
   const byId = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes])
@@ -171,7 +173,18 @@ export default function Writer({ projectName }) {
   })
 
   const siblings = (id) => { const p = parentOf[id]; return p ? (childrenOf[p] || []) : roots }
-  const focusRow = (idx) => { const r = rows[idx]; if (r) { setFocusId(r.id); inputs.current[r.id]?.focus() } }
+  const focusRow = (idx) => { const r = rows[idx]; if (r) { selectRow(r.id); inputs.current[r.id]?.focus() } }
+  const selectRow = (id) => { setFocusId(id); setSelectedNodeId(id) }   // sync outliner → canvas
+
+  // Sync canvas → outliner: when the shared selection changes elsewhere, reveal that row here
+  // (clear filters, uncollapse its ancestors, scroll it into view; focus it only when docked).
+  useEffect(() => {
+    if (!selectedNodeId || selectedNodeId === focusId || !byId[selectedNodeId]) return
+    setSearch(''); setFocusRoot(null)
+    setCollapsed(s => { const n = new Set(s); ancestorsOf(selectedNodeId).forEach(a => n.delete(a)); return n })
+    setFocusId(selectedNodeId)
+    requestAnimationFrame(() => { const el = inputs.current[selectedNodeId]; if (el) { if (embedded) el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }) } })
+  }, [selectedNodeId]) // eslint-disable-line
 
   const addSiblingAfter = (id) => {
     const p = parentOf[id] || null
@@ -369,7 +382,7 @@ export default function Writer({ projectName }) {
             }
             return (
               <div key={r.id} style={{ marginLeft: (searchLC ? 0 : r.depth * 26) }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '1px 0', borderRadius: 6, background: focusId === r.id ? (dark ? '#161a24' : '#f7f8fb') : 'transparent' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '1px 0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
                   {/* collapse triangle */}
                   <span onClick={() => r.hasChildren && !searchLC && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
                     style={{ width: 13, textAlign: 'center', cursor: r.hasChildren && !searchLC ? 'pointer' : 'default', color: faint, fontSize: 10, userSelect: 'none', paddingTop: 8, visibility: r.hasChildren && !searchLC ? 'visible' : 'hidden' }}>
@@ -382,7 +395,7 @@ export default function Writer({ projectName }) {
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: 15, lineHeight: '26px', flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <input ref={el => { if (el) inputs.current[r.id] = el }} value={n.label || ''}
-                    onChange={e => onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target)} onFocus={() => setFocusId(r.id)}
+                    onChange={e => onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target)} onFocus={() => selectRow(r.id)}
                     onKeyDown={e => onKey(e, r.id)} placeholder="" spellCheck={true} style={textStyle} />
                   {/* chips */}
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', paddingTop: 4 }}>{metaChips(r.id, m)}</span>
