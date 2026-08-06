@@ -197,6 +197,41 @@ const useGraphStore = create((set, get) => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, writeStyle: { ...(n.writeStyle || {}), ...patch } } : n),
   })),
 
+  // ── Node metadata (view-independent, queryable everywhere) — the outliner's markdown/tag system writes
+  // these: itemType ('task'|'note'|'idea'|'question'|'event'…), done, due (ISO), priority, tags[], people[],
+  // fields{key:value}, heading (0|1|2). Stored on the node so a "task" typed in the writer is findable
+  // in the table, graph, and any future database view.
+  setNodeMeta: (id, patch) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, meta: { ...(n.meta || {}), ...patch } } : n),
+  })),
+  addNodeTag: (id, tag) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== id) return n
+      const tags = (n.meta?.tags) || []
+      return tags.includes(tag) ? n : { ...n, meta: { ...(n.meta || {}), tags: [...tags, tag] } }
+    }),
+  })),
+  removeNodeTag: (id, tag) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, meta: { ...(n.meta || {}), tags: ((n.meta?.tags) || []).filter(t => t !== tag) } } : n),
+  })),
+  addNodePerson: (id, person) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== id) return n
+      const people = (n.meta?.people) || []
+      return people.includes(person) ? n : { ...n, meta: { ...(n.meta || {}), people: [...people, person] } }
+    }),
+  })),
+  setNodeField: (id, key, value) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, meta: { ...(n.meta || {}), fields: { ...((n.meta?.fields) || {}), [key]: value } } } : n),
+  })),
+  removeNodeField: (id, key) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== id) return n
+      const fields = { ...((n.meta?.fields) || {}) }; delete fields[key]
+      return { ...n, meta: { ...(n.meta || {}), fields } }
+    }),
+  })),
+
   setImageUrl: (id, imageUrl) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, imageUrl } : n),
   })),
