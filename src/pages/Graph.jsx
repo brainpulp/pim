@@ -16,6 +16,23 @@ import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 const setGestureCursor = (c) => { document.body.style.cursor = c }
 const clearGestureCursor = () => { document.body.style.cursor = '' }
 
+// Gentle gravity toward the cloud's OWN centroid (not a fixed point) — counteracts the charge
+// repulsion so the layout stays compact instead of scattering disconnected nodes/branches outward
+// every time the simulation restarts. Skips pinned nodes. Robust to pan/zoom (uses live positions).
+function centeringForce(strength = 0.07) {
+  let nodes
+  const f = (alpha) => {
+    if (!nodes || !nodes.length) return
+    let sx = 0, sy = 0, c = 0
+    for (const n of nodes) { if (n.x == null) continue; sx += n.x; sy += n.y; c++ }
+    if (!c) return
+    const gx = sx / c, gy = sy / c, k = strength * alpha
+    for (const n of nodes) { if (n.fx == null && n.x != null) { n.vx += (gx - n.x) * k; n.vy += (gy - n.y) * k } }
+  }
+  f.initialize = (n) => { nodes = n }
+  return f
+}
+
 // â"€â"€ Text measurement â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 let _measureCanvas = null
 function measureTextWidth(text, fontSize) {
@@ -1102,6 +1119,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
         .force('charge', d3.forceManyBody().strength(-300))
         .force('collide', d3.forceCollide(NODE_R + 8))
+        .force('center', centeringForce())
         .force('bound', boundingForce())
         .alphaDecay(0.04).velocityDecay(0.5).alphaMin(0.005).on('tick', scheduleRender)
     } else {
@@ -1206,7 +1224,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setOrganizeGroups(groups)
       // No forces — positions are computed. Glide each node to its target, then pin it.
       sim.force('link', null); sim.force('charge', null); sim.force('collide', null)
-      sim.force('cluster-x', null); sim.force('cluster-y', null)
+      sim.force('cluster-x', null); sim.force('cluster-y', null); sim.force('center', null)
       sim.alphaTarget(0).alpha(0)
       cancelAnimationFrame(organizeAnimRef.current)
       const tween = () => {
@@ -1232,6 +1250,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       sim.force('cluster-x', null); sim.force('cluster-y', null)
       sim.force('charge', d3.forceManyBody().strength(-300))
       sim.force('collide', d3.forceCollide(NODE_R + 8))
+      sim.force('center', centeringForce())
       sim.force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
       const vp = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.nodeProps || {}
       simNodesRef.current.forEach(n => { const p = vp[n.id] || {}; n.fx = p.fx ?? null; n.fy = p.fy ?? null })
