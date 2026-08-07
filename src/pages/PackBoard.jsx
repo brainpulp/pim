@@ -1771,11 +1771,11 @@ const vmStyles = {
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
 }
 const styles = {
-  viewBar: { position: 'absolute', top: 48, left: 12, zIndex: 5, display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap', maxWidth: 'calc(100% - 24px)', background: 'rgba(12,12,26,0.6)', padding: '3px 6px', borderRadius: 8 },
-  viewPill: { display: 'flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 100, border: '1px solid #2a2a3e', background: 'transparent', color: '#8090b8', cursor: 'pointer', fontSize: '0.76rem', userSelect: 'none' },
-  viewPillActive: { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' },
-  viewX: { color: '#f87171', fontSize: '0.9rem', lineHeight: 1, marginLeft: 1 },
-  viewAdd: { padding: '3px 8px', borderRadius: 6, border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer', fontSize: '0.82rem' },
+  viewBar: { position: 'absolute', top: 52, left: 12, zIndex: 5, display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap', maxWidth: 'calc(100% - 24px)', background: 'rgba(12,13,20,0.72)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', border: '1px solid #1e1e2a', padding: '4px 5px', borderRadius: 11, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' },
+  viewPill: { display: 'flex', alignItems: 'center', gap: 5, padding: '4px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: '#7d84a4', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 500, userSelect: 'none', fontFamily: '-apple-system, sans-serif' },
+  viewPillActive: { background: '#282c4a', color: '#eef1ff', boxShadow: '0 1px 2px rgba(0,0,0,0.3)' },
+  viewX: { color: '#f0808a', fontSize: '0.9rem', lineHeight: 1, marginLeft: 1 },
+  viewAdd: { padding: '5px 8px', borderRadius: 8, border: 'none', background: 'transparent', color: '#8a92b4', cursor: 'pointer', fontSize: '0.82rem' },
   clusterFilterBar: { position: 'absolute', top: 84, left: 12, zIndex: 6, display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(20,20,40,0.96)', border: '1px solid #2d3a6a', borderRadius: 8, padding: '6px 10px', boxShadow: '0 8px 26px rgba(0,0,0,0.5)' },
   configPanel: { position: 'absolute', top: 84, left: 12, zIndex: 6, display: 'flex', flexDirection: 'column', gap: 8, background: 'rgba(20,20,40,0.97)', border: '1px solid #2d3a6a', borderRadius: 8, padding: '10px 12px', boxShadow: '0 8px 26px rgba(0,0,0,0.5)', minWidth: 240 },
   cfgRow: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' },

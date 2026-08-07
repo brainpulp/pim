@@ -28,6 +28,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* Table node — reveal a row's delete button on hover */
 .tc-row:hover .tc-rowdel { opacity: 1 !important; }
 
+/* ─── Shared design system (Figma/Linear-style clean skin) ─────────────────── */
+/* Ghost button: transparent, subtle hover, quiet by default. */
+.pim-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  background: transparent; border: none; color: #8a92b4;
+  border-radius: 8px; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 6px 9px; line-height: 1; transition: background .12s ease, color .12s ease;
+}
+.pim-btn:hover { background: rgba(120,130,200,0.14); color: #c7cdec; }
+.pim-btn.pim-on { background: #232a45; color: #aeb8ff; }
+.pim-btn.pim-accent { color: #7c8cff; font-weight: 600; }
+/* Segmented control */
+.pim-seg { display: inline-flex; gap: 2px; padding: 3px; background: #14181f; border: 1px solid #21212e; border-radius: 10px; }
+.pim-seg > button { border: none; background: transparent; color: #7d84a4; border-radius: 7px; padding: 5px 11px; cursor: pointer; font-size: 0.78rem; font-weight: 500; font-family: -apple-system, sans-serif; transition: background .12s, color .12s; }
+.pim-seg > button:hover { color: #c7cdec; }
+.pim-seg > button.pim-on { background: #282c4a; color: #eef1ff; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+
 /* Writer toolbar ghost buttons */
 .pim-wtb { transition: background .12s ease, color .12s ease; }
 .pim-wtb:hover { background: rgba(120,130,200,0.14); }
