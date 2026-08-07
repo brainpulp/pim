@@ -176,14 +176,19 @@ export default function Writer({ projectName, embedded = false }) {
   // rows = flattened visible tree (honoring collapse + focusRoot). Search or a query filter → flat list.
   const searchLC = search.trim().toLowerCase()
   const flatMode = searchLC || qActive
+  // Frames (and other board-only container shapes) live on the canvas via the per-view
+  // `containedIn` prop, not via edges. The outline is edge-driven, so a frame has no parent
+  // and would surface as its own root row next to the node it visually wraps — reading as a
+  // duplicate. Keep them out of the outline entirely.
+  const isFrame = (id) => nodeProps[id]?.shape === 'frame'
   const rows = useMemo(() => {
     if (flatMode) {
       const hit = n => !searchLC || (n.label || '').toLowerCase().includes(searchLC) || ((n.meta?.tags) || []).some(t => t.toLowerCase().includes(searchLC)) || ((n.meta?.people) || []).some(t => t.toLowerCase().includes(searchLC))
-      return nodes.filter(n => hit(n) && (!qActive || matchesQuery(n))).map(n => ({ id: n.id, depth: 0, parentId: parentOf[n.id] || null, hasChildren: (childrenOf[n.id] || []).length > 0 }))
+      return nodes.filter(n => hit(n) && !isFrame(n.id) && (!qActive || matchesQuery(n))).map(n => ({ id: n.id, depth: 0, parentId: parentOf[n.id] || null, hasChildren: (childrenOf[n.id] || []).length > 0 }))
     }
     const out = []; const seen = new Set()
     const walk = (id, depth) => {
-      if (seen.has(id) || !byId[id]) return
+      if (seen.has(id) || !byId[id] || isFrame(id)) return
       seen.add(id)
       const kids = childrenOf[id] || []
       out.push({ id, depth, parentId: parentOf[id] || null, hasChildren: kids.length > 0 })
@@ -193,7 +198,7 @@ export default function Writer({ projectName, embedded = false }) {
     startIds.forEach(r => walk(r, 0))
     if (!focusRoot) nodes.forEach(n => { if (!seen.has(n.id)) walk(n.id, 0) })
     return out
-  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q])
+  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q, nodeProps])
 
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
 
