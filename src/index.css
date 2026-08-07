@@ -28,6 +28,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* Table node — reveal a row's delete button on hover */
 .tc-row:hover .tc-rowdel { opacity: 1 !important; }
 
+/* Writer toolbar ghost buttons */
+.pim-wtb { transition: background .12s ease, color .12s ease; }
+.pim-wtb:hover { background: rgba(120,130,200,0.14); }
+
 /* Top-nav (Figma/Linear style) hover polish */
 .pim-nav-tab { transition: background .13s ease, color .13s ease; }
 .pim-nav-tab:hover { color: #c7cdec; }

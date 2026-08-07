@@ -139,6 +139,17 @@ export default function Writer({ projectName, embedded = false }) {
   const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
   const [q, setQ] = useState({ type: null, priority: null, tag: null, done: 'all' })
   const [agenda, setAgenda] = useState(false)                       // due-date agenda view
+  const [dbTable, setDbTable] = useState(false)                     // database table of all chipped items
+  const [showHelp, setShowHelp] = useState(false)                   // markdown cheatsheet
+  const [showColorMenu, setShowColorMenu] = useState(false)
+  const wrapRef = useRef(null)
+  const [isFull, setIsFull] = useState(false)
+  const toggleFull = () => {
+    const el = wrapRef.current; if (!el) return
+    if (!document.fullscreenElement) { el.requestFullscreen?.().then(() => setIsFull(true)).catch(() => {}) }
+    else { document.exitFullscreen?.().then(() => setIsFull(false)).catch(() => {}) }
+  }
+  useEffect(() => { const h = () => setIsFull(!!document.fullscreenElement); document.addEventListener('fullscreenchange', h); return () => document.removeEventListener('fullscreenchange', h) }, [])
   const [templates, setTemplates] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_writer_templates') || '[]') } catch { return [] } })
   useEffect(() => { try { localStorage.setItem('pim_writer_templates', JSON.stringify(templates)) } catch { /* ignore */ } }, [templates])
   const [showTpl, setShowTpl] = useState(false)
@@ -377,6 +388,13 @@ export default function Writer({ projectName, embedded = false }) {
   const taskStats = useMemo(() => { let t = 0, d = 0; nodes.forEach(n => { if (n.meta?.itemType === 'task') { t++; if (n.meta.done) d++ } }); return { t, d } }, [nodes])
 
   const tbtn = (active) => ({ background: active ? (dark ? '#2a3358' : '#e8ebff') : 'transparent', border: `1px solid ${active ? '#5b6af0' : (dark ? '#2a3050' : '#e2e5ee')}`, color: active ? '#5b6af0' : faint, borderRadius: 7, cursor: 'pointer', fontSize: 13, padding: '4px 9px', minWidth: 30 })
+  // Clean ghost toolbar button (revamped skin) — no borders, subtle hover (see .pim-wtb in index.css).
+  const tb = (active) => ({ display: 'inline-flex', alignItems: 'center', gap: 5, background: active ? (dark ? '#232a45' : '#eaeefb') : 'transparent', border: 'none', color: active ? '#5b6af0' : faint, borderRadius: 8, cursor: 'pointer', fontSize: 13, padding: '6px 9px', fontFamily: '-apple-system, sans-serif', lineHeight: 1 })
+  const segWrap = { display: 'flex', gap: 2, padding: 3, background: dark ? '#14181f' : '#f1f3f9', borderRadius: 10 }
+  const segItem = (active) => ({ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 12.5, fontWeight: 500, fontFamily: '-apple-system, sans-serif', background: active ? (dark ? '#282c4a' : '#ffffff') : 'transparent', color: active ? (dark ? '#eef1ff' : '#1f2430') : faint, boxShadow: active ? '0 1px 2px rgba(0,0,0,0.18)' : 'none' })
+  const divider = <div style={{ width: 1, height: 18, background: line, margin: '0 3px', flexShrink: 0 }} />
+  const mode = dbTable ? 'table' : agenda ? 'agenda' : 'outline'
+  const setMode = (m) => { setDbTable(m === 'table'); setAgenda(m === 'agenda') }
 
   // ── one chip
   const Chip = ({ text, color, onRemove, title }) => (
@@ -402,28 +420,42 @@ export default function Writer({ projectName, embedded = false }) {
   }
 
   return (
-    <div style={{ height: '100%', background: bg, color: fg, display: 'flex', flexDirection: 'column', fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif' }}>
-      {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: `1px solid ${line}`, flexShrink: 0, fontFamily: '-apple-system, sans-serif', flexWrap: 'wrap' }}>
-        <button onClick={addRoot} style={{ ...tbtn(false), fontWeight: 700, color: '#5b6af0', borderColor: '#5b6af0' }}>＋ New</button>
-        <div style={{ width: 1, height: 20, background: line, margin: '0 2px' }} />
-        <button title="Bold" onClick={() => styleFocused({ bold: !fs.bold })} style={{ ...tbtn(fs.bold), fontWeight: 800 }}>B</button>
-        <button title="Italic" onClick={() => styleFocused({ italic: !fs.italic })} style={{ ...tbtn(fs.italic), fontStyle: 'italic' }}>I</button>
-        <button title="Metallic" onClick={() => styleFocused({ metallic: !fs.metallic })} style={tbtn(fs.metallic)}>✨</button>
-        <div style={{ display: 'flex', gap: 3, alignItems: 'center', marginLeft: 2 }}>
-          {TEXT_COLORS.map(c => <div key={c} title={c} onClick={() => styleFocused({ color: c })} style={{ width: 15, height: 15, borderRadius: '50%', background: c, cursor: 'pointer', border: `1.5px solid ${fs.color === c ? '#5b6af0' : (dark ? '#2a3050' : '#e2e5ee')}` }} />)}
-          <div title="Default colour" onClick={() => styleFocused({ color: null })} style={{ fontSize: 11, color: faint, cursor: 'pointer', marginLeft: 2 }}>reset</div>
-        </div>
-        <div style={{ width: 1, height: 20, background: line, margin: '0 2px' }} />
-        <button title="Fold all" onClick={foldAll} style={tbtn(false)}>⊟</button>
-        <button title="Expand all" onClick={expandAll} style={tbtn(false)}>⊞</button>
-        <button title="Filter as a database (by type, priority, tag, status)" onClick={() => setShowQuery(v => !v)} style={{ ...tbtn(showQuery || qActive), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>⌗ Filter{qActive ? ' •' : ''}</button>
-        <button title="Agenda — tasks grouped by due date" onClick={() => setAgenda(v => !v)} style={{ ...tbtn(agenda), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>📅 Agenda</button>
+    <div ref={wrapRef} style={{ height: '100%', background: bg, color: fg, display: 'flex', flexDirection: 'column', fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif' }}>
+      {/* Toolbar — clean, grouped, ghost buttons */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '7px 14px', borderBottom: `1px solid ${line}`, flexShrink: 0, fontFamily: '-apple-system, sans-serif' }}>
+        <button className="pim-wtb" onClick={addRoot} title="New item" style={{ ...tb(false), color: '#5b6af0', fontWeight: 600 }}>＋ New</button>
+        {divider}
+        {/* format */}
+        <button className="pim-wtb" title="Bold" onClick={() => styleFocused({ bold: !fs.bold })} style={{ ...tb(fs.bold), fontWeight: 800, width: 30, justifyContent: 'center' }}>B</button>
+        <button className="pim-wtb" title="Italic" onClick={() => styleFocused({ italic: !fs.italic })} style={{ ...tb(fs.italic), fontStyle: 'italic', width: 30, justifyContent: 'center' }}>I</button>
+        <button className="pim-wtb" title="Metallic" onClick={() => styleFocused({ metallic: !fs.metallic })} style={{ ...tb(fs.metallic), width: 30, justifyContent: 'center' }}>✨</button>
         <div style={{ position: 'relative' }}>
-          <button title="Templates — save & insert reusable outlines" onClick={() => setShowTpl(v => !v)} style={{ ...tbtn(showTpl), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>⧉ Tpl</button>
+          <button className="pim-wtb" title="Text colour" onClick={() => setShowColorMenu(v => !v)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>
+            <span style={{ width: 13, height: 13, borderRadius: '50%', background: fs.color || (dark ? '#e8ecf4' : '#1f2430'), border: '1.5px solid rgba(128,128,160,0.4)' }} />
+          </button>
+          {showColorMenu && (<>
+            <div onMouseDown={() => setShowColorMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '115%', left: 0, zIndex: 41, background: dark ? '#161a24' : '#fff', border: `1px solid ${line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.3)', padding: 8, display: 'flex', flexWrap: 'wrap', gap: 6, width: 148 }}>
+              {TEXT_COLORS.map(c => <div key={c} onClick={() => { styleFocused({ color: c }); setShowColorMenu(false) }} style={{ width: 18, height: 18, borderRadius: '50%', background: c, cursor: 'pointer', border: `2px solid ${fs.color === c ? '#5b6af0' : 'transparent'}` }} />)}
+              <div onClick={() => { styleFocused({ color: null }); setShowColorMenu(false) }} title="Default" style={{ width: 18, height: 18, borderRadius: '50%', cursor: 'pointer', border: `1px solid ${line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: faint }}>⦸</div>
+            </div>
+          </>)}
+        </div>
+        {divider}
+        {/* view switcher */}
+        <div style={segWrap}>
+          <button style={segItem(mode === 'outline')} onClick={() => setMode('outline')}>☰ Outline</button>
+          <button style={segItem(mode === 'table')} onClick={() => setMode('table')}>▦ Table</button>
+          <button style={segItem(mode === 'agenda')} onClick={() => setMode('agenda')}>🗓 Agenda</button>
+        </div>
+        <button className="pim-wtb" title="Fold all" onClick={foldAll} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⊟</button>
+        <button className="pim-wtb" title="Expand all" onClick={expandAll} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⊞</button>
+        <button className="pim-wtb" title="Filter" onClick={() => setShowQuery(v => !v)} style={tb(showQuery || qActive)}>⌗ Filter{qActive ? ' •' : ''}</button>
+        <div style={{ position: 'relative' }}>
+          <button className="pim-wtb" title="Templates" onClick={() => setShowTpl(v => !v)} style={tb(showTpl)}>⧉</button>
           {showTpl && (<>
             <div onMouseDown={() => setShowTpl(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-            <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '110%', left: 0, zIndex: 41, minWidth: 200, background: dark ? '#161a24' : '#fff', border: `1px solid ${line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.35)', padding: 6, fontFamily: '-apple-system, sans-serif' }}>
+            <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '110%', left: 0, zIndex: 41, minWidth: 210, background: dark ? '#161a24' : '#fff', border: `1px solid ${line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.35)', padding: 6 }}>
               <div onClick={() => focusId && saveTemplate(focusId)} style={{ padding: '6px 9px', borderRadius: 6, cursor: focusId ? 'pointer' : 'default', color: focusId ? '#5b6af0' : faint, fontSize: 13 }}>＋ Save “{focusId ? (byId[focusId]?.label || 'item') : '—'}” as template</div>
               {templates.length > 0 && <div style={{ borderTop: `1px solid ${line}`, margin: '4px 0' }} />}
               {templates.map(t => (
@@ -437,12 +469,14 @@ export default function Writer({ projectName, embedded = false }) {
           </>)}
         </div>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
-          style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 7, padding: '5px 9px', fontSize: 13, fontFamily: '-apple-system, sans-serif', outline: 'none', width: 150 }} />
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 12, color: faint }}>{taskStats.t > 0 && `${taskStats.d}/${taskStats.t} done · `}{words} words · {nodes.length} items</span>
-          <button title="Export to Markdown" onClick={exportMd} style={tbtn(false)}>⬇︎</button>
-          <button title="Edit keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={tbtn(false)}>⌨</button>
-          <button title="Toggle light / dark" onClick={() => setDark(d => !d)} style={tbtn(false)}>{dark ? '☀️' : '🌙'}</button>
+          style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 8, padding: '6px 10px', fontSize: 13, fontFamily: '-apple-system, sans-serif', outline: 'none', width: 130 }} />
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 3 }}>
+          <span style={{ fontSize: 11.5, color: faint, marginRight: 4 }}>{taskStats.t > 0 && `${taskStats.d}/${taskStats.t} · `}{nodes.length} items</span>
+          <button className="pim-wtb" title="Markdown shortcuts (help)" onClick={() => setShowHelp(true)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>?</button>
+          <button className="pim-wtb" title="Export to Markdown" onClick={exportMd} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⬇︎</button>
+          <button className="pim-wtb" title="Keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⌨</button>
+          <button className="pim-wtb" title={isFull ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFull} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{isFull ? '⛶' : '⛶'}</button>
+          <button className="pim-wtb" title="Light / dark" onClick={() => setDark(d => !d)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{dark ? '☀️' : '🌙'}</button>
         </div>
       </div>
 
@@ -482,8 +516,44 @@ export default function Writer({ projectName, embedded = false }) {
         </div>
       )}
 
-      {/* Agenda — tasks by due date. Toggling ⧉ off returns to the outline. */}
-      {agenda && (
+      {/* Database table — every chipped item as rows × columns. */}
+      {mode === 'table' && (() => {
+        const items = nodes.filter(n => { const m = n.meta || {}; return m.itemType || m.priority || (m.tags || []).length || (m.people || []).length || m.fields?.due || m.heading != null })
+        const cell = { padding: '8px 12px', borderBottom: `1px solid ${line}`, fontSize: 13, textAlign: 'left', verticalAlign: 'top' }
+        const hcell = { ...cell, position: 'sticky', top: 0, background: dark ? '#12151d' : '#f7f8fb', color: faint, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', zIndex: 1 }
+        return (
+          <div style={{ flex: 1, overflow: 'auto', fontFamily: '-apple-system, sans-serif' }}>
+            {items.length === 0
+              ? <div style={{ padding: 28, color: faint, fontSize: 14 }}>No tagged items yet. In the outline, type <code>/task</code>, <code>#tag</code>, <code>!high</code> or <code>due:tomorrow</code> — they'll appear here as a database.</div>
+              : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={hcell}>Item</th><th style={hcell}>Type</th><th style={hcell}>Status</th>
+                    <th style={hcell}>Priority</th><th style={hcell}>Due</th><th style={hcell}>Tags</th><th style={hcell}>Fields</th>
+                  </tr></thead>
+                  <tbody>
+                    {items.map(n => { const m = n.meta || {}
+                      return (
+                        <tr key={n.id} onClick={() => setSelectedNodeId(n.id)} style={{ cursor: 'pointer', background: selectedNodeId === n.id ? (dark ? '#1a2236' : '#eef1fb') : 'transparent' }}>
+                          <td style={{ ...cell, color: fg, fontWeight: 500, maxWidth: 320 }}>{n.label || '(untitled)'}</td>
+                          <td style={cell}>{m.itemType ? <span style={{ color: TYPE_META[m.itemType]?.color }}>{TYPE_META[m.itemType].icon} {TYPE_META[m.itemType].label}</span> : ''}</td>
+                          <td style={cell}>{m.itemType === 'task' ? (m.done ? <span style={{ color: '#16a34a' }}>✓ done</span> : <span style={{ color: '#2563eb' }}>open</span>) : ''}</td>
+                          <td style={cell}>{m.priority ? <span style={{ color: PRIORITY_META[m.priority].color }}>{PRIORITY_META[m.priority].label}</span> : ''}</td>
+                          <td style={{ ...cell, color: m.fields?.due ? '#0891b2' : faint }}>{m.fields?.due || ''}</td>
+                          <td style={cell}><span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>{(m.tags || []).map(t => <span key={t} style={{ fontSize: 11, color: tagColor(t), background: tagColor(t) + '22', border: `1px solid ${tagColor(t)}55`, borderRadius: 8, padding: '0 6px' }}>#{t}</span>)}{(m.people || []).map(p => <span key={p} style={{ fontSize: 11, color: '#db2777', background: '#db277722', border: '1px solid #db277755', borderRadius: 8, padding: '0 6px' }}>@{p}</span>)}</span></td>
+                          <td style={{ ...cell, color: faint, fontSize: 12 }}>{Object.entries(m.fields || {}).filter(([k, v]) => k !== 'due' && v != null).map(([k, v]) => `${k}:${v}`).join('  ')}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+          </div>
+        )
+      })()}
+
+      {/* Agenda — tasks by due date. */}
+      {mode === 'agenda' && (
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0 40vh', fontFamily: '-apple-system, sans-serif' }}>
           <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
             {Object.entries(agendaGroups).every(([, a]) => a.length === 0) && <div style={{ color: faint, fontSize: 14 }}>No tasks yet. Type <code>/task</code> and a <code>due:tomorrow</code> to see them here.</div>}
@@ -507,7 +577,7 @@ export default function Writer({ projectName, embedded = false }) {
       )}
 
       {/* Outline */}
-      {!agenda && (
+      {mode === 'outline' && (
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0 40vh' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
           {rows.length === 0 && (
@@ -578,6 +648,41 @@ export default function Writer({ projectName, embedded = false }) {
         </div>
       </div>
       )}
+
+      {/* Markdown help cheatsheet */}
+      {showHelp && (() => {
+        const groups = [
+          ['Structure', [['Enter', 'new line'], ['Tab / Shift+Tab', 'indent / outdent'], ['# ', 'heading'], ['## ', 'subheading']]],
+          ['Make it a record', [['/task', 'task (checkbox)'], ['[] / [x]', 'task / done'], ['/note /idea /question /event', 'item type']]],
+          ['Tag & schedule', [['#tag', 'tag chip'], ['@person', 'person'], ['!high / !urgent / !med / !low', 'priority'], ['due:tomorrow · due:2026-08-15 · due:fri', 'date']]],
+          ['Fields & links', [['status:doing · cost:50 (key:value)', 'custom field'], ['[[Another item]]', 'link / relation']]],
+        ]
+        const kbd = { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12.5, color: dark ? '#c5d0ff' : '#3a3f66', background: dark ? '#12142a' : '#f0f2fb', border: `1px solid ${line}`, borderRadius: 5, padding: '1px 6px', whiteSpace: 'nowrap' }
+        return (
+          <div onMouseDown={() => setShowHelp(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, sans-serif' }}>
+            <div onMouseDown={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92vw', maxHeight: '82vh', overflow: 'auto', background: dark ? '#161a24' : '#fff', color: fg, border: `1px solid ${line}`, borderRadius: 14, boxShadow: '0 24px 60px rgba(0,0,0,0.45)' }}>
+              <div style={{ padding: '14px 18px', borderBottom: `1px solid ${line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: dark ? '#161a24' : '#fff' }}>
+                <b style={{ fontSize: 15 }}>Markdown shortcuts</b>
+                <span onClick={() => setShowHelp(false)} style={{ cursor: 'pointer', color: faint, fontSize: 18 }}>×</span>
+              </div>
+              <div style={{ padding: '6px 18px 16px' }}>
+                <p style={{ fontSize: 12.5, color: faint, margin: '10px 0 6px' }}>Type the shorthand, then a <b>space</b> — it turns into a chip and becomes queryable in the <b>▦ Table</b>.</p>
+                {groups.map(([title, rows]) => (
+                  <div key={title} style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: faint, marginBottom: 6 }}>{title}</div>
+                    {rows.map(([k, v]) => (
+                      <div key={k} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '4px 0' }}>
+                        <span style={{ ...kbd, flexShrink: 0 }}>{k}</span>
+                        <span style={{ fontSize: 13, color: fg }}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Shortcuts editor */}
       {showKeys && (
