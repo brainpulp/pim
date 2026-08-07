@@ -766,7 +766,7 @@ const useGraphStore = create((set, get) => ({
       rows: [uid(), uid(), uid()].map(rid => ({ id: rid, cells: {} })),
     }
     set(s => ({
-      nodes: [...s.nodes, { id, label: 'Table', notes: '', table }],
+      nodes: [...s.nodes, { id, label: 'Grid', notes: '', table }],
       views: s.views.map(v => v.id !== s.activeViewId ? v : {
         ...v, nodeProps: { ...v.nodeProps, [id]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
       }),

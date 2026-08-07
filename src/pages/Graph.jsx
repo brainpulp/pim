@@ -2808,8 +2808,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           </div>
           <div style={{ maxHeight:260, overflowY:'auto' }}><ViewManager /></div>
         </div>
-        {/* Floating Tool dock (Figma-style) — anchored at the canvas's left edge, drag by its header. */}
-        <div className="pim-tooldock" style={{ position:'absolute', left:12, top:12, zIndex:14, width:152, padding:6, display:'flex', flexDirection:'column', gap:5, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)' }}>
+        {/* Tool dock removed — its actions live in the canvas right-click menu (Fit/Free/Export/Flowchart/Frames/BG/Add). */}
+        {false && <div className="pim-tooldock" style={{ position:'absolute', left:12, top:12, zIndex:14, width:152, padding:6, display:'flex', flexDirection:'column', gap:5, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)' }}>
           <div title="Drag dock" onPointerDown={e => {
               if (e.button !== 0) return
               const panel = e.currentTarget.parentElement
@@ -2870,7 +2870,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : (drillRoot || null))); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
-                      ['Table', () => { addTableToCenter(); setShowAddMenu(false) }],
+                      ['Grid', () => { addTableToCenter(); setShowAddMenu(false) }],
                       ['View', () => { addView(); setShowAddMenu(false) }],
                     ].map(([label, action]) => (
                       <button key={label} onClick={action}
@@ -2885,7 +2885,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               </div>
             )
           })()}
-        </div>
+        </div>}
       </div>
       </>)}
       <div onMouseDown={() => { canvasFocused.current = true }}
@@ -3279,7 +3279,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('▦', 'New table here', () => {
+                    {item('▦', 'New grid here', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addTableNode(sx, sy)
@@ -3296,6 +3296,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
                     {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
                     {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                    {item('⊙', 'Release all anchors', () => { handleReleaseAll(); close() })}
+                    {item(hideFrameOutlines ? '⊞' : '⊟', hideFrameOutlines ? 'Show frame outlines' : 'Hide frame outlines', () => { setHideFrameOutlines(v => !v); close() })}
+                    {item('⤳', showFlowchart ? 'Hide flowchart' : 'Flowchart (Mermaid)', () => { setShowFlowchart(v => !v); close() })}
+                    {item('⤓', 'Export…', () => { setShowExport(true); close() })}
                   </>
                 )}
               </div>
