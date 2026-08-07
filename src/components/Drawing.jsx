@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 
 // Shared free-drawing layer — SVG decorations (shapes, lines/arrows, emoji, icons, text) stored per view
 // in `view.drawings[]`. Used by the Graph and the Board canvases. World-coordinate; `zoomRef.current.k`
@@ -25,6 +25,7 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
   const x = d.x || 0, y = d.y || 0
   const isLine = d.kind === 'line' || d.kind === 'arrow'
   const [editing, setEditing] = useState(false)
+  const rootRef = useRef(null)
 
   const startMove = (e) => {
     if (e.button !== 0) return
@@ -84,8 +85,21 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
   )
   const pickFill = c => onUpdate({ fill: c === 'none' ? 'none' : c })
   const pickStroke = c => onUpdate({ stroke: c === 'none' ? null : c })
+  const rot = d.rotation || 0
+  const canRotate = d.kind === 'shape' || d.kind === 'text' || d.kind === 'emoji'
+  // Rotate by dragging the top handle — angle measured from the item's centre (via the group's screen CTM).
+  const startRotate = (e) => {
+    stop(e); e.preventDefault()
+    const g = rootRef.current; if (!g) return
+    const r0 = rot
+    const centre = () => { const m = g.getScreenCTM(); return new DOMPoint(0, 0).matrixTransform(m) }
+    const c0 = centre(); const a0 = Math.atan2(e.clientY - c0.y, e.clientX - c0.x)
+    const move = ev => { const c = centre(); const a = Math.atan2(ev.clientY - c.y, ev.clientX - c.x); let deg = Math.round(r0 + (a - a0) * 180 / Math.PI); if (ev.shiftKey) deg = Math.round(deg / 15) * 15; onUpdate({ rotation: ((deg % 360) + 360) % 360 }) }
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
   return (
-    <g transform={`translate(${x},${y})`} onClick={e => { stop(e); onSelect() }}
+    <g ref={rootRef} data-drawing="1" transform={`translate(${x},${y}) rotate(${rot})`} onClick={e => { stop(e); onSelect() }}
       onDoubleClick={e => { if (d.kind === 'text') { stop(e); setEditing(true) } }}
       onMouseDown={startMove} style={{ cursor: 'move' }}>
       {isLine && <line x1={0} y1={0} x2={(d.x2 ?? x + 120) - x} y2={(d.y2 ?? y) - y} stroke="transparent" strokeWidth={14} />}
@@ -104,12 +118,10 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
           ? <circle cx={hx} cy={hy} r={6} fill="#fff" stroke="#5b6af0" strokeWidth={1.5} style={{ cursor: 'nwse-resize' }} onMouseDown={startResize} />
           : <rect x={hx - 5} y={hy - 5} width={10} height={10} fill="#fff" stroke="#5b6af0" strokeWidth={1.5} style={{ cursor: 'nwse-resize' }} onMouseDown={startResize} />
       )}
-      {selected && (
-        <g transform={`translate(${hx + 2},${(bbox ? bbox.y : 0) - 12})`} style={{ cursor: 'pointer' }} onMouseDown={e => { stop(e); onDelete() }}>
-          <circle r={8} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.3} />
-          <text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
-        </g>
-      )}
+      {selected && canRotate && bbox && (<>
+        <line x1={0} y1={bbox.y} x2={0} y2={bbox.y - 20} stroke="#5b6af0" strokeWidth={1} pointerEvents="none" />
+        <circle cx={0} cy={bbox.y - 24} r={6} fill="#fff" stroke="#5b6af0" strokeWidth={1.5} style={{ cursor: 'grab' }} onMouseDown={startRotate} />
+      </>)}
       {selected && (d.kind === 'shape' || d.kind === 'text' || isLine) && (
         <foreignObject x={bbox ? bbox.x : 0} y={(bbox ? bbox.y + bbox.h : Math.max(0, hy)) + 8} width={230} height={d.kind === 'shape' ? 58 : 28} style={{ overflow: 'visible' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -123,9 +135,21 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
   )
 }
 
+// A broad emoji set (faces, people/gestures, animals, nature, food, activity, travel, objects, symbols).
+const EMOJI_STR = ('😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😌😍🥰😘😗😙😚😋😛😝😜🤪🤨🧐🤓😎🥸🤩🥳😏😒😞😔😟😕🙁☹️😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🤗🤔🤭🤫🤥😶😐😑😬🙄😯😦😧😮😲🥱😴🤤😪😵🤐🥴🤢🤮🤧😷🤒🤕🤑🤠😈👿👹👺🤡💩👻💀☠️👽👾🤖🎃😺😸😹😻😼😽🙀😿😾'
+  +'👍👎👌🤌🤏✌️🤞🤟🤘🤙👈👉👆👇☝️✋🤚🖐️🖖👋🤝🙏✍️💪🦾👏🙌👐🤲🤜🤛✊👊'
+  +'🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🐔🐧🐦🐤🦆🦅🦉🦇🐺🐗🐴🦄🐝🐛🦋🐌🐞🐜🐢🐍🦎🐙🦑🦐🦀🐡🐠🐟🐬🐳🐋🦈🐊🐅🐆🦓🦍🐘🦏🐪🐫🦒🦔🐾🐉🐲'
+  +'🌵🎄🌲🌳🌴🌱🌿☘️🍀🎍🎋🍃🍂🍁🌾🌺🌻🌹🥀🌷🌼🌸💐🍄🌰🎃🌍🌎🌏🌕🌙⭐🌟✨⚡☄️💥🔥🌈☀️⛅☁️🌧️⛈️🌩️🌨️❄️☃️⛄💧🌊'
+  +'🍏🍎🍐🍊🍋🍌🍉🍇🍓🫐🍈🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🥬🥒🌶️🌽🥕🧄🧅🥔🍠🥐🍞🥖🥨🧀🥚🍳🥞🧇🥓🥩🍗🍖🌭🍔🍟🍕🥪🌮🌯🥗🍜🍲🍣🍱🍛🍚🍙🎂🍰🧁🍦🍩🍪🍫🍬🍭🍮☕🍵🍺🍷🍸🍹🥂'
+  +'⚽🏀🏈⚾🥎🎾🏐🏉🥏🎱🏓🏸🥅🏒🏑🥍🏏⛳🎯🎣🥊🥋🎽🛹🛼🎿⛷️🏂🏋️🤸🤺🤾🏌️🏇🧘🏄🏊🚴🚵🎖️🏆🥇🥈🥉🏅🎗️🎫🎟️🎪🎭🎨🎬🎤🎧🎼🎹🥁🎷🎺🎸🎻🎲♟️🎯🎳🎮🕹️'
+  +'🚗🚕🚙🚌🚎🏎️🚓🚑🚒🚐🚚🚛🚜🛴🚲🛵🏍️✈️🚀🛸🚁⛵🚤🛳️⚓🚦🚥🗺️🗿🗽🗼🏰🏯🎡🎢🎠⛲⛱️🏖️🏝️🏔️⛰️🌋🏕️⛺🏠🏡🏢🏬🏣🏤🏥🏦🏨🏩💒'
+  +'⌚📱💻⌨️🖥️🖨️🖱️💽💾💿📷📸📹🎥📽️📞☎️📟📠📺📻🧭⏱️⏰⏳⌛🔋🔌💡🔦🕯️🧯🛢️💸💵💴💶💷💰💳💎⚖️🧰🔧🔨⚒️🛠️⛏️🔩⚙️🧱⛓️🧲🔫💣🔪🗡️⚔️🛡️🚬⚰️⚱️🏺🔮📿🧿💈🔭🔬💊💉🩹🩺🚽🚿🛁🧴🧷🧹🧺🧻🧼🧽🔑🗝️🚪🛋️🛏️🖼️🛒🎁🎈🎏🎀🎊🎉🎎🏮🎐📮📫📪📬📭📦📯📜📃📄📑📊📈📉🗒️🗓️📆📅📇🗃️🗳️🗄️📋📁📂🗂️🗞️📰📓📔📒📕📗📘📙📚📖🔖🧷📎🖇️📐📏🧮📌📍✂️🖊️🖋️✒️🖌️🖍️📝✏️🔍🔎🔏🔐🔒🔓'
+  +'❤️🧡💛💚💙💜🖤🤍🤎💔❣️💕💞💓💗💖💘💝💟☮️✝️☪️🕉️☸️✡️🔯🕎☯️☦️🛐⛎♈♉♊♋♌♍♎♏♐♑♒♓⚛️🉑☢️☣️✴️🆚💮🉐㊙️㊗️🈴🈵🈹🈲🅰️🅱️🆎🆑🅾️🆘❌⭕🛑⛔📛🚫💯💢♨️🚷🚯🚳🚱🔞📵🚭❗❕❓❔‼️⁉️〽️⚠️🚸🔱⚜️🔰♻️✅🈯💹❇️✳️❎🌐💠Ⓜ️🌀💤🏧🚾♿🅿️🈳🈂️🛂🛃🛄🛅🚹🚺🚼🚻🚮🎦📶🈁🔣ℹ️🔤🔡🔠🆖🆗🆙🆒🆕🆓🔟🔢▶️⏸️⏯️⏹️⏺️⏭️⏮️⏩⏪⏫⏬◀️🔼🔽➡️⬅️⬆️⬇️↗️↘️↙️↖️↕️↔️↪️↩️⤴️⤵️🔀🔁🔂🔄🔃🎵🎶➕➖➗✖️♾️💲💱™️©️®️〰️➰➿🔚🔙🔛🔝🔜✔️☑️🔘⚪⚫🔴🟠🟡🟢🔵🟣🟤🔺🔻🔸🔹🔶🔷🔳🔲▪️▫️◾◽◼️◻️🟥🟧🟨🟩🟦🟪🟫⬛⬜🔈🔇🔉🔊🔔🔕📣📢💬💭🗯️♠️♣️♥️♦️🃏🎴🀄⏰⭐✨')
+const EMOJIS = (typeof Intl !== 'undefined' && Intl.Segmenter)
+  ? [...new Intl.Segmenter().segment(EMOJI_STR)].map(s => s.segment).filter(s => s.trim())
+  : Array.from(EMOJI_STR)
+
 export function DrawPalette({ palette, onStartDrag, onClose }) {
-  const emojis = ['😀','😐','😍','🤔','👍','👎','🔥','⭐','❤️','✅','❌','⚠️','💡','📌','🎯','🚀','🏆','⏰','📈','📉','💰','🔒','🔑','📝','🔗','➡️','⬅️','⬆️','⬇️','🔁','❓','❗','💬','🧠','🌟','✨']
-  const icons = ['★','☆','●','▲','■','◆','➜','✔','✘','➕','♥','⚑','⬡','☀','☁','⇄']
   const shapes = [['rect','▭'],['ellipse','⬭'],['roundrect','▢'],['triangle','△'],['diamond','◇'],['pentagon','⬠'],['hexagon','⬡'],['star','★']]
   const lines = [['line','╱',{}],['arrow','➔',{}],['line','┈',{dash:'7,5'}],['arrow','⇢',{dash:'7,5'}]]
   const swatch = { display:'flex', flexWrap:'wrap', gap:5 }
@@ -146,10 +170,8 @@ export function DrawPalette({ palette, onStartDrag, onClose }) {
         <div style={swatch}>{lines.map(([k,gl,extra],i) => <div key={i} title={k} style={btn} onMouseDown={e => onStartDrag(k,{ stroke:'#c5d0ff', strokeWidth:3, ...extra }, e)}>{gl}</div>)}</div>
         <div style={label}>TEXT</div>
         <div style={swatch}><div style={{ ...btn, width:'auto', padding:'0 14px', fontSize:14, fontWeight:700 }} onMouseDown={e => onStartDrag('text',{ text:'Text', size:26, fill:'#ffffff' }, e)}>Text</div></div>
-        <div style={label}>ICONS</div>
-        <div style={swatch}>{icons.map((g,i) => <div key={i} style={btn} onMouseDown={e => onStartDrag('emoji',{ emoji:g, size:46 }, e)}>{g}</div>)}</div>
-        <div style={label}>EMOJI</div>
-        <div style={swatch}>{emojis.map((g,i) => <div key={i} style={{ ...btn, fontSize:19 }} onMouseDown={e => onStartDrag('emoji',{ emoji:g, size:46 }, e)}>{g}</div>)}</div>
+        <div style={label}>EMOJI · {EMOJIS.length}</div>
+        <div style={swatch}>{EMOJIS.map((g,i) => <div key={i} style={{ ...btn, fontSize:19 }} onMouseDown={e => onStartDrag('emoji',{ emoji:g, size:46 }, e)}>{g}</div>)}</div>
       </div>
     </div>
   )

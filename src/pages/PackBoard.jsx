@@ -268,7 +268,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
     if (!svgRef.current) return
     const sel = d3.select(svgRef.current)
     const zoom = d3.zoom().scaleExtent([0.06, 4])
-      .filter(e => { if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-syshead],[data-image]')) return false; return !e.ctrlKey && !e.button })
+      .filter(e => { if (e.type === 'mousedown' && e.target?.closest?.('[data-bubble],[data-syshead],[data-image],[data-drawing]')) return false; return !e.ctrlKey && !e.button })
       .on('zoom', e => {
         setTf(e.transform)
         if (e.sourceEvent && !readOnly) {   // only persist real user pans/zooms (not our programmatic restore)
