@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS } from '../lib/graphStore'
@@ -487,6 +488,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
   const [showFlowchart, setShowFlowchart] = useState(false)  // flowchart text⇄graph panel
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
+  const [floatDock, setFloatDock] = useState(() => { try { return localStorage.getItem('pim_style_undock') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('pim_style_undock', floatDock ? '1' : '0') } catch { /* ignore */ } }, [floatDock])
+  const [floatRect, setFloatRect] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_style_floatpos') || 'null') || { x: 80, y: 90 } } catch { return { x: 80, y: 90 } } })
+  useEffect(() => { try { localStorage.setItem('pim_style_floatpos', JSON.stringify(floatRect)) } catch { /* ignore */ } }, [floatRect])
+  // While the style panel is undocked, keep it targeted on the currently selected node (so a plain
+  // left-click retargets the floating window, not just a right-click).
+  useEffect(() => {
+    if (!floatDock) return
+    if (selected?.type === 'node') setNodeMenu(m => (m?.nodeId === selected.id ? m : { nodeId: selected.id, px: 0, py: 0 }))
+  }, [floatDock, selected])
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
@@ -3453,18 +3464,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })()}
 
         {/* Node menu â€" opens on right-click, anchored at the cursor */}
+        {/* Node style toolbar — DOCKED popup near the node, or (when undocked) a draggable floating window. */}
         {nodeMenu && (() => {
           const hn = simNodesRef.current.find(n => n.id === nodeMenu.nodeId)
           const hs = hn && storeNodes.find(n => n.id === hn.id)
           if (!hn || !hs || !visibleNodeIds.has(hn.id)) return null
           const vp = getVP(hn.id)
           const close = () => setNodeMenu(null)
-          return (
-            <>
-              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
-                style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+          const toolbar = (
             <NodeToolbar
               key={hn.id}
+              floating={floatDock}
+              onUndock={() => setFloatDock(true)}
+              onRedock={() => { setFloatDock(false); setNodeMenu(null) }}
+              nodeTitle={hs.label || 'Untitled'}
               x={nodeMenu.px}
               y={nodeMenu.py}
               viewProps={vp}
@@ -3547,6 +3560,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetDepthExpand={setDepthExpand}
               maxExpandRadius={maxExpandRadius}
             />
+          )
+          if (floatDock) {
+            return (
+              <Rnd position={{ x: floatRect.x, y: floatRect.y }} size={{ width: 'auto', height: 'auto' }}
+                dragHandleClassName="pim-tb-drag" enableResizing={false} bounds="parent" style={{ zIndex: 30 }}
+                onDragStop={(e, d) => setFloatRect({ x: d.x, y: d.y })}>
+                {toolbar}
+              </Rnd>
+            )
+          }
+          return (
+            <>
+              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
+                style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+              {toolbar}
             </>
           )
         })()}
@@ -6021,7 +6049,8 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
-  propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip }) {
+  propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
+  floating = false, onUndock, onRedock, nodeTitle }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
@@ -6086,7 +6115,10 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
   const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
 
-  const wrap = {
+  const wrap = floating ? {
+    position:'relative', background:'#16162a', border:'1px solid #3a4a8a', borderRadius:10,
+    padding: 4, minWidth: 200, boxShadow:'0 12px 40px rgba(0,0,0,0.7)', pointerEvents:'all',
+  } : {
     position:'absolute', left: x, top: y,
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
     padding: 4, minWidth: 184,
@@ -6139,7 +6171,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
 
   return (
     <div style={wrap}
-      ref={el => clampMenuEl(el, x, y, true)}
+      ref={floating ? undefined : (el => clampMenuEl(el, x, y, true))}
       data-nodetoolbar="1"
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
@@ -6147,6 +6179,17 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       onMouseLeave={onMouseLeave}
       onWheel={onWheel}
     >
+      {/* Header: drag bar + re-dock when floating; a small ⤢ undock affordance when docked. */}
+      {floating ? (
+        <div className="pim-tb-drag" style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 6px 6px', cursor:'move', borderBottom:'1px solid #23234a', marginBottom:2 }}>
+          <span style={{ color:'#8090b8', fontSize:12 }}>⠿</span>
+          <span style={{ flex:1, color:'#c5d0ff', fontSize:'0.78rem', fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{nodeTitle || 'Style'}</span>
+          <button title="Re-dock the panel" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onRedock?.() }} style={{ background:'transparent', border:'none', color:'#8090b8', cursor:'pointer', fontSize:13, lineHeight:1 }}>⤢</button>
+        </div>
+      ) : (
+        <button title="Undock into a floating window" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onUndock?.() }}
+          style={{ position:'absolute', top:3, right:4, background:'transparent', border:'none', color:'#6b7bb0', cursor:'pointer', fontSize:12, lineHeight:1, padding:2, zIndex:1 }}>⤢</button>
+      )}
       {/* â"€â"€ Main text menu (always visible; sub-sections fly out beside it) â"€â"€ */}
       <>
         {textRow('Style', () => openPanelNow('color'), { icon: '🎨', right: '›', opens: 'color' })}
