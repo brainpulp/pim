@@ -3,7 +3,6 @@ import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
-import OutlinePanel from '../components/OutlinePanel'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -437,7 +436,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const selectedRef = useRef(null)
   useEffect(() => { selectedRef.current = selected }, [selected])
   // Publish node selection to the shared channel so the docked outliner can follow along.
-  useEffect(() => { if (selected?.type === 'node') setSelectedNodeId(selected.id) }, [selected, setSelectedNodeId])
+  // NB: `setSelectedNodeId` (a stable zustand action) is intentionally NOT in the deps array — it's
+  // declared later in this component, and referencing it here would be a TDZ crash on mount.
+  useEffect(() => { if (selected?.type === 'node') useGraphStore.getState().setSelectedNodeId(selected.id) }, [selected])
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const [isPanning, setIsPanning] = useState(false)
   const [depthExpand, setDepthExpand] = useState(null) // null = off, { nodeId, radius } = expand from node
@@ -584,7 +585,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const updateLabel     = useGraphStore(s => s.updateLabel)
   const updateNotes     = useGraphStore(s => s.updateNotes)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
-  const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
   const setContainedIn  = useGraphStore(s => s.setContainedIn)
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
@@ -2767,16 +2767,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {!isPresenting && !readOnly && (<>
       <div onMouseDown={() => { canvasFocused.current = false }}
         style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <OutlinePanel
-          selectedNodeId={selected?.type === 'node' ? selected.id : null}
-          onSelectNode={id => setSelected({ id, type: 'node' })}
-          containerNodeIds={new Set(storeNodes.filter(n => (viewNodeProps[n.id]?.shape) === 'frame').map(n => n.id))}
-          searchText={outlineSearch}
-          onSearchText={setOutlineSearch}
-          drillRoot={drillRoot}
-          onExitDrill={exitDrill}
-        />
-        <ViewManager />
+        {/* The old outline tree lived here; it's superseded by the dockable outliner (⊟ outline in the nav). */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><ViewManager /></div>
         {/* Tool strip — consolidated canvas actions */}
         <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'8px 10px', display:'flex', flexDirection:'column', gap:6 }}>
           <div style={{ display:'flex', gap:5, flexWrap:'wrap', alignItems:'center' }}>
