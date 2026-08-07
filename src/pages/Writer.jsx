@@ -136,18 +136,35 @@ export default function Writer({ projectName, embedded = false }) {
   const [focusId, setFocusId] = useState(null)
   const [focusRoot, setFocusRoot] = useState(null)   // zoom-into-item
   const [search, setSearch] = useState('')
+  const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
+  const [q, setQ] = useState({ type: null, priority: null, tag: null, done: 'all' })
   const pendingFocus = useRef(null)
   const inputs = useRef({})
 
+  const allTags = useMemo(() => { const s = new Set(); nodes.forEach(n => (n.meta?.tags || []).forEach(t => s.add(t))); return [...s].sort() }, [nodes])
+  const qActive = !!(q.type || q.priority || q.tag || q.done !== 'all')
+  const matchesQuery = (n) => {
+    const m = n.meta || {}
+    if (q.type && m.itemType !== q.type) return false
+    if (q.priority && m.priority !== q.priority) return false
+    if (q.tag && !(m.tags || []).includes(q.tag)) return false
+    if (q.done === 'open' && !(m.itemType === 'task' && !m.done)) return false
+    if (q.done === 'done' && !(m.itemType === 'task' && m.done)) return false
+    return true
+  }
+
   const descendants = (id) => { const out = []; const walk = x => (childrenOf[x] || []).forEach(c => { out.push(c); walk(c) }); walk(id); return out }
   const ancestorsOf = (id) => { const out = []; let p = parentOf[id]; while (p) { out.push(p); p = parentOf[p] } return out }
+  // Rollup: aggregate task done/total across a node's descendants (for the parent progress badge).
+  const rollupOf = (id) => { let t = 0, d = 0; descendants(id).forEach(c => { const m = byId[c]?.meta; if (m?.itemType === 'task') { t++; if (m.done) d++ } }); return { t, d } }
 
-  // rows = flattened visible tree (honoring collapse + focusRoot). When searching, a flat matches list.
+  // rows = flattened visible tree (honoring collapse + focusRoot). Search or a query filter → flat list.
   const searchLC = search.trim().toLowerCase()
+  const flatMode = searchLC || qActive
   const rows = useMemo(() => {
-    if (searchLC) {
-      const hit = n => (n.label || '').toLowerCase().includes(searchLC) || ((n.meta?.tags) || []).some(t => t.toLowerCase().includes(searchLC)) || ((n.meta?.people) || []).some(t => t.toLowerCase().includes(searchLC))
-      return nodes.filter(hit).map(n => ({ id: n.id, depth: 0, parentId: parentOf[n.id] || null, hasChildren: (childrenOf[n.id] || []).length > 0 }))
+    if (flatMode) {
+      const hit = n => !searchLC || (n.label || '').toLowerCase().includes(searchLC) || ((n.meta?.tags) || []).some(t => t.toLowerCase().includes(searchLC)) || ((n.meta?.people) || []).some(t => t.toLowerCase().includes(searchLC))
+      return nodes.filter(n => hit(n) && (!qActive || matchesQuery(n))).map(n => ({ id: n.id, depth: 0, parentId: parentOf[n.id] || null, hasChildren: (childrenOf[n.id] || []).length > 0 }))
     }
     const out = []; const seen = new Set()
     const walk = (id, depth) => {
@@ -161,7 +178,7 @@ export default function Writer({ projectName, embedded = false }) {
     startIds.forEach(r => walk(r, 0))
     if (!focusRoot) nodes.forEach(n => { if (!seen.has(n.id)) walk(n.id, 0) })
     return out
-  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC])
+  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q])
 
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
 
@@ -217,6 +234,19 @@ export default function Writer({ projectName, embedded = false }) {
   // Apply typed shorthand: strip the just-completed token from the text and write node meta. Restores
   // the caret to where the token used to be so typing continues naturally.
   const onChangeLabel = (id, value, caret, el) => {
+    // [[Label]] → a relation to another node (found by label, or created). Stored in meta.links.
+    const wl = value.match(/\[\[([^[\]]+)\]\]/)
+    if (wl && wl[1].trim()) {
+      const label = wl[1].trim()
+      const found = nodes.find(n => (n.label || '').trim().toLowerCase() === label.toLowerCase())
+      const targetId = found?.id || addNode(label, null)
+      if (targetId && targetId !== id) {
+        const cur = byId[id]?.meta?.links || []
+        if (!cur.includes(targetId)) setNodeMeta(id, { links: [...cur, targetId] })
+      }
+      updateLabel(id, value.slice(0, wl.index) + value.slice(wl.index + wl[0].length))
+      return
+    }
     const c = consumeTokenAt(value, caret)
     if (!c) { updateLabel(id, value); return }
     const a = c.act
@@ -314,6 +344,10 @@ export default function Writer({ projectName, embedded = false }) {
     ;(m.tags || []).forEach(t => out.push(<Chip key={'t' + t} text={`#${t}`} color={tagColor(t)} onRemove={() => removeNodeTag(id, t)} />))
     ;(m.people || []).forEach(p => out.push(<Chip key={'p' + p} text={`@${p}`} color="#db2777" onRemove={() => setNodeMeta(id, { people: (m.people || []).filter(x => x !== p) })} />))
     Object.entries(m.fields || {}).forEach(([k, v]) => { if (k === 'due' || v == null) return; out.push(<Chip key={'f' + k} text={`${k}: ${v}`} color="#6366f1" onRemove={() => removeNodeField(id, k)} />) })
+    ;(m.links || []).forEach(lid => { const t = byId[lid]; if (!t) return; out.push(
+      <span key={'l' + lid} title="Go to linked item" onClick={() => setSelectedNodeId(lid)} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: '-apple-system, sans-serif', fontSize: 11.5, lineHeight: '18px', height: 18, padding: '0 6px', borderRadius: 9, background: '#7c8cff22', color: '#7c8cff', border: '1px solid #7c8cff55', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer' }}>
+        ↗ {t.label || 'Untitled'}<span onClick={e => { e.stopPropagation(); setNodeMeta(id, { links: (m.links || []).filter(x => x !== lid) }) }} style={{ cursor: 'pointer', opacity: 0.6 }}>×</span>
+      </span>) })
     return out
   }
 
@@ -333,6 +367,7 @@ export default function Writer({ projectName, embedded = false }) {
         <div style={{ width: 1, height: 20, background: line, margin: '0 2px' }} />
         <button title="Fold all" onClick={foldAll} style={tbtn(false)}>⊟</button>
         <button title="Expand all" onClick={expandAll} style={tbtn(false)}>⊞</button>
+        <button title="Filter as a database (by type, priority, tag, status)" onClick={() => setShowQuery(v => !v)} style={{ ...tbtn(showQuery || qActive), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>⌗ Filter{qActive ? ' •' : ''}</button>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
           style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 7, padding: '5px 9px', fontSize: 13, fontFamily: '-apple-system, sans-serif', outline: 'none', width: 150 }} />
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -342,6 +377,29 @@ export default function Writer({ projectName, embedded = false }) {
           <button title="Toggle light / dark" onClick={() => setDark(d => !d)} style={tbtn(false)}>{dark ? '☀️' : '🌙'}</button>
         </div>
       </div>
+
+      {/* Database/query bar — filters the outline into a flat result set (a live "view" of the data) */}
+      {showQuery && (() => {
+        const seg = (label, active, onClick, color) => (
+          <button key={label} onClick={onClick} style={{ background: active ? (color || '#5b6af0') : 'transparent', color: active ? '#fff' : faint, border: `1px solid ${active ? (color || '#5b6af0') : line}`, borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>{label}</button>
+        )
+        const grp = (title, kids) => <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}><span style={{ fontSize: 11, color: faint, marginRight: 2 }}>{title}</span>{kids}</div>
+        return (
+          <div style={{ padding: '8px 16px', borderBottom: `1px solid ${line}`, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontFamily: '-apple-system, sans-serif', flexShrink: 0 }}>
+            {grp('Type', [seg('Any', !q.type, () => setQ(s => ({ ...s, type: null })))].concat(Object.entries(TYPE_META).map(([k, v]) => seg(`${v.icon} ${v.label}`, q.type === k, () => setQ(s => ({ ...s, type: q.type === k ? null : k })), v.color))))}
+            {grp('Priority', [seg('Any', !q.priority, () => setQ(s => ({ ...s, priority: null })))].concat(Object.entries(PRIORITY_META).map(([k, v]) => seg(v.label, q.priority === k, () => setQ(s => ({ ...s, priority: q.priority === k ? null : k })), v.color))))}
+            {grp('Status', [seg('All', q.done === 'all', () => setQ(s => ({ ...s, done: 'all' }))), seg('Open', q.done === 'open', () => setQ(s => ({ ...s, done: 'open' })), '#2563eb'), seg('Done', q.done === 'done', () => setQ(s => ({ ...s, done: 'done' })), '#16a34a')])}
+            {allTags.length > 0 && grp('Tag', [
+              <select key="tagsel" value={q.tag || ''} onChange={e => setQ(s => ({ ...s, tag: e.target.value || null }))}
+                style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 7, padding: '4px 8px', fontSize: 12, outline: 'none' }}>
+                <option value="">any</option>
+                {allTags.map(t => <option key={t} value={t}>#{t}</option>)}
+              </select>])}
+            {qActive && <button onClick={() => setQ({ type: null, priority: null, tag: null, done: 'all' })} style={{ background: 'transparent', border: `1px solid ${line}`, color: faint, borderRadius: 7, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Clear</button>}
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: faint }}>{rows.length} result{rows.length === 1 ? '' : 's'}</span>
+          </div>
+        )
+      })()}
 
       {/* Breadcrumb when focused into an item */}
       {focusRoot && byId[focusRoot] && (
@@ -361,7 +419,7 @@ export default function Writer({ projectName, embedded = false }) {
         <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
           {rows.length === 0 && (
             <div style={{ color: faint, fontFamily: '-apple-system, sans-serif', fontSize: 14 }}>
-              {searchLC ? 'No matches.' : <>Nothing here yet. Press <b>＋ New</b> (or type). <b>Enter</b> = new line, <b>Tab</b> = indent. Try shorthand: <code>/task</code>, <code>#tag</code>, <code>@who</code>, <code>!high</code>, <code>due:tomorrow</code>.</>}
+              {flatMode ? 'No matches.' : <>Nothing here yet. Press <b>＋ New</b> (or type). <b>Enter</b> = new line, <b>Tab</b> = indent. Try shorthand: <code>/task</code>, <code>#tag</code>, <code>@who</code>, <code>!high</code>, <code>due:tomorrow</code>.</>}
             </div>
           )}
           {rows.map(r => {
@@ -381,11 +439,11 @@ export default function Writer({ projectName, embedded = false }) {
               ...(ws.metallic && !done ? { background: 'linear-gradient(92deg,#b8b8b8,#f5f5f5 30%,#9a9a9a 55%,#e8e8e8 80%,#8f8f8f)', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' } : {}),
             }
             return (
-              <div key={r.id} style={{ marginLeft: (searchLC ? 0 : r.depth * 26) }}>
+              <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '1px 0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
                   {/* collapse triangle */}
-                  <span onClick={() => r.hasChildren && !searchLC && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
-                    style={{ width: 13, textAlign: 'center', cursor: r.hasChildren && !searchLC ? 'pointer' : 'default', color: faint, fontSize: 10, userSelect: 'none', paddingTop: 8, visibility: r.hasChildren && !searchLC ? 'visible' : 'hidden' }}>
+                  <span onClick={() => r.hasChildren && !flatMode && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
+                    style={{ width: 13, textAlign: 'center', cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: faint, fontSize: 10, userSelect: 'none', paddingTop: 8, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
                     {collapsed.has(r.id) ? '▸' : '▾'}
                   </span>
                   {/* task checkbox OR bullet (bullet = click to zoom-into-item) */}
@@ -399,6 +457,11 @@ export default function Writer({ projectName, embedded = false }) {
                     onKeyDown={e => onKey(e, r.id)} placeholder="" spellCheck={true} style={textStyle} />
                   {/* chips */}
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', paddingTop: 4 }}>{metaChips(r.id, m)}</span>
+                  {/* rollup: task progress across descendants (on parents, not itself a task) */}
+                  {!flatMode && r.hasChildren && !isTask && (() => { const ru = rollupOf(r.id); if (!ru.t) return null
+                    const all = ru.d === ru.t
+                    return <span title={`${ru.d} of ${ru.t} tasks done`} style={{ fontFamily: '-apple-system, sans-serif', fontSize: 11, color: all ? '#16a34a' : faint, background: (all ? '#16a34a' : '#5b6af0') + '18', border: `1px solid ${(all ? '#16a34a' : '#5b6af0')}44`, borderRadius: 9, padding: '0 7px', height: 18, lineHeight: '18px', flexShrink: 0, marginTop: 4 }}>{all ? '✓ ' : ''}{ru.d}/{ru.t}</span>
+                  })()}
                   {/* details toggle */}
                   <span onClick={() => toggleDetails(r.id)} title="Notes & images"
                     style={{ cursor: 'pointer', fontSize: 12, color: (hasNote || imgs.length) ? '#5b6af0' : faint, padding: '6px 4px', userSelect: 'none', flexShrink: 0 }}>
