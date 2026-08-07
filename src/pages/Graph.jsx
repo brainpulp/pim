@@ -2789,11 +2789,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {/* Outline sidebar â€" hidden while presenting or in shared read-only view */}
       {!isPresenting && !readOnly && (<>
       <div onMouseDown={() => { canvasFocused.current = false }}
-        style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'visible', display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {/* The old outline tree lived here; it's superseded by the dockable outliner (⊟ outline in the nav). */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><ViewManager /></div>
-        {/* Tool strip — consolidated canvas actions */}
-        <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'7px 8px', display:'flex', flexDirection:'column', gap:5 }}>
+        {/* Floating Tool dock (Figma-style) — anchored at the canvas's left edge, drag by its header. */}
+        <div className="pim-tooldock" style={{ position:'absolute', left:'calc(100% + 12px)', top:12, zIndex:14, width:136, padding:6, display:'flex', flexDirection:'column', gap:5, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)' }}>
+          <div title="Drag dock" onPointerDown={e => {
+              if (e.button !== 0) return
+              const panel = e.currentTarget.parentElement
+              const r = panel.getBoundingClientRect()
+              panel.style.position = 'fixed'; panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px'; panel.style.right = 'auto'
+              const ox = e.clientX - r.left, oy = e.clientY - r.top
+              const handle = e.currentTarget; handle.setPointerCapture(e.pointerId)
+              const mv = ev => { panel.style.left = Math.max(4, ev.clientX - ox) + 'px'; panel.style.top = Math.max(4, ev.clientY - oy) + 'px' }
+              const up = () => { handle.removeEventListener('pointermove', mv); handle.removeEventListener('pointerup', up) }
+              handle.addEventListener('pointermove', mv); handle.addEventListener('pointerup', up)
+            }}
+            style={{ height:18, marginBottom:1, display:'flex', alignItems:'center', justifyContent:'center', cursor:'grab', color:'#5a6390', letterSpacing:2, fontSize:10, userSelect:'none', borderBottom:'1px solid #1e2236' }}>⋮⋮</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:5 }}>
             <button style={gToolBtn} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
             <button style={gToolBtn} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
@@ -2808,7 +2820,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 BG
               </button>
               {showBgPicker && (
-                <div style={{ position:'absolute', bottom:'100%', left:0, marginBottom:6, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:8, display:'flex', flexDirection:'column', gap:6, zIndex:30, boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}
+                <div style={{ position:'absolute', top:'110%', left:0, marginTop:2, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:8, display:'flex', flexDirection:'column', gap:6, zIndex:30, boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}
                   onClick={e => e.stopPropagation()}>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:136 }}>
                     {BG_COLORS.map(c => (
@@ -2836,7 +2848,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   ＋ Add
                 </button>
                 {showAddMenu && (
-                  <div style={{ position:'absolute', bottom:'110%', left:0, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', zIndex:40, boxShadow:'0 4px 20px rgba(0,0,0,0.7)', minWidth:160 }}
+                  <div style={{ position:'absolute', top:'110%', left:0, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', zIndex:40, boxShadow:'0 4px 20px rgba(0,0,0,0.7)', minWidth:160 }}
                     onClick={e => e.stopPropagation()}>
                     {[
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : (drillRoot || null))); setShowAddMenu(false) }],

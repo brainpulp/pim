@@ -34,6 +34,30 @@ class AppErrorBoundary extends Component {
 }
 
 export default function App() {
+  // DEV-ONLY UI sandbox: ?uidev=1 seeds a fixture project and bypasses auth so the chrome can be
+  // screenshotted without Supabase. Gated on import.meta.env.DEV → dead code in production builds.
+  const DEVUI = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('uidev') === '1'
+  const _loadForDev = useGraphStore(s => s.loadProjectData)
+  useEffect(() => {
+    if (!DEVUI) return
+    if (useGraphStore.getState().loadedProjectId === 'devui') return
+    const nodeProps = {
+      n1: { shape: 'roundrect', fillColor: '#5b6af0', textColor: '#fff' },
+      n2: { shape: 'circle', fillColor: '#0f766e', textColor: '#fff' },
+      n3: { shape: 'circle', fillColor: '#b45309', textColor: '#fff' },
+      n4: { shape: 'diamond', fillColor: '#7c3aed', textColor: '#fff' },
+      n5: { shape: 'roundrect', fillColor: '#be123c', textColor: '#fff' },
+      n6: { shape: 'ellipse', fillColor: '#2563eb', textColor: '#fff' },
+    }
+    _loadForDev({
+      nodes: [ { id:'n1',label:'Projects' },{ id:'n2',label:'PIM' },{ id:'n3',label:'Marketing' },{ id:'n4',label:'Ideas' },{ id:'n5',label:'Ship v2' },{ id:'n6',label:'Research' } ],
+      edges: [ {id:'e1',source:'n1',target:'n2'},{id:'e2',source:'n1',target:'n3'},{id:'e3',source:'n2',target:'n5'},{id:'e4',source:'n2',target:'n6'},{id:'e5',source:'n3',target:'n4'} ],
+      views: [ { id:'v1', name:'Main', nodeProps, bgColor:'#0c0c1a', images:[], slides:[] } ],
+      activeViewId: 'v1', propertyDefs: [], styles: [], loadedProjectId: 'devui',
+    })
+    setSession({ user: { email: 'ui@dev' } })
+    setProject({ id: 'devui', name: 'UI Sandbox' })
+  }, [DEVUI, _loadForDev])
   const [session, setSession] = useState(undefined) // undefined = loading
   // Initialize project synchronously from localStorage — avoids race with onAuthStateChange
   const [project, setProject] = useState(() => {
@@ -54,7 +78,7 @@ export default function App() {
   const startDockResize = (e) => {
     e.preventDefault()
     const startX = e.clientX, startW = outlineW
-    const move = ev => setOutlineW(Math.max(240, Math.min(720, startW - (ev.clientX - startX))))
+    const move = ev => setOutlineW(Math.max(240, Math.min(720, startW + (ev.clientX - startX))))
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
@@ -148,6 +172,7 @@ export default function App() {
   }, [session, shareToken, project?.id])
 
   useEffect(() => {
+    if (DEVUI) return   // dev sandbox seeds its own fake session
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s)
@@ -265,6 +290,16 @@ export default function App() {
           like "view-default" are shared across projects, so keying effects on the view id alone was
           not enough — a fresh mount guarantees clusters, pan/zoom, and refs reset). */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex' }}>
+        {/* Outliner docks on the LEFT, beside the canvas. */}
+        {outlineDock && (view === 'board' || view === 'graph') && (
+          <>
+            <div style={{ width: outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
+              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded /></AppErrorBoundary>
+            </div>
+            <div onMouseDown={startDockResize} title="Drag to resize"
+              style={{ width: 6, flexShrink: 0, cursor: 'col-resize', background: '#15151f', borderRight: '1px solid #24243a' }} />
+          </>
+        )}
         <div style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}>
           {view === 'graph' && (
             <AppErrorBoundary>
@@ -287,15 +322,6 @@ export default function App() {
             </button>
           )}
         </div>
-        {outlineDock && (view === 'board' || view === 'graph') && (
-          <>
-            <div onMouseDown={startDockResize} title="Drag to resize"
-              style={{ width: 6, flexShrink: 0, cursor: 'col-resize', background: '#15151f', borderLeft: '1px solid #24243a' }} />
-            <div style={{ width: outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
-              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded /></AppErrorBoundary>
-            </div>
-          </>
-        )}
       </div>
     </div>
   )
