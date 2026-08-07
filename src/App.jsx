@@ -9,6 +9,7 @@ import Table from './pages/Table'
 import Writer from './pages/Writer'
 import PackBoard from './pages/PackBoard'
 import PackLab from './pages/PackLab'
+import CommandPalette from './components/CommandPalette'
 import SharedView from './pages/SharedView'
 import ShareDialog from './components/ShareDialog'
 
@@ -57,6 +58,16 @@ export default function App() {
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
+  // ⌘K / Ctrl-K command palette.
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const paletteNodes = useGraphStore(s => s.nodes)
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPaletteOpen(o => !o) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const [shareToken, setShareToken] = useState(() => parseShareToken())
@@ -224,6 +235,20 @@ export default function App() {
       {showShare && (
         <ShareDialog projectId={project.id} projectName={project.name} onClose={() => setShowShare(false)} />
       )}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        nodes={paletteNodes}
+        onJump={(id) => { useGraphStore.getState().setSelectedNodeId(id); if (!outlineDock && (view === 'board' || view === 'graph')) setOutlineDock(true) }}
+        actions={[
+          { label: 'Go to Canvas', hint: 'view', run: () => setView('board') },
+          { label: 'Go to Graph', hint: 'view', run: () => setView('graph') },
+          { label: 'Go to Write', hint: 'view', run: () => setView('write') },
+          { label: 'Go to Table', hint: 'view', run: () => setView('table') },
+          { label: outlineDock ? 'Hide outliner panel' : 'Show outliner panel', hint: 'toggle', run: () => setOutlineDock(o => !o) },
+          { label: 'New item (in outliner)', hint: 'create', run: () => { const id = useGraphStore.getState().addNode('', null); useGraphStore.getState().setSelectedNodeId(id); if (view !== 'write' && !outlineDock) setOutlineDock(true) } },
+        ]}
+      />
       {projectLoadErr && (
         <div style={{ background: '#2a1a1a', borderBottom: '1px solid #f87171', color: '#f87171', fontSize: '0.8rem', padding: '6px 14px', flexShrink: 0 }}>
           Couldn’t load this project: {projectLoadErr}

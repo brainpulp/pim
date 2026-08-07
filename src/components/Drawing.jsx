@@ -73,11 +73,17 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
   }
 
   const hx = bbox ? bbox.x + bbox.w : ((d.x2 ?? x + 120) - x), hy = bbox ? bbox.y + bbox.h : ((d.y2 ?? y) - y)
-  const swatchRow = (onPick) => (
-    <div onMouseDown={stop} style={{ display: 'flex', gap: 3, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 6, padding: '3px 5px', width: 'fit-content' }}>
+  const CHECKER = 'repeating-conic-gradient(#555 0% 25%, #222 0% 50%) 50% / 7px 7px'
+  // A labelled palette row: transparent chip first, then the colours. `onPick('none')` = transparent.
+  const swatchRow = (onPick, label) => (
+    <div onMouseDown={stop} style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 6, padding: '3px 5px', width: 'fit-content' }}>
+      {label && <span style={{ fontSize: 8, color: '#8090b8', width: 10, textAlign: 'center', flexShrink: 0 }}>{label}</span>}
+      <div title="Transparent" onClick={ev => { stop(ev); onPick('none') }} style={{ width: 13, height: 13, borderRadius: 3, cursor: 'pointer', border: '1px solid #5b6af0', background: CHECKER }} />
       {palette.slice(0, 12).map(c => <div key={c} onClick={ev => { stop(ev); onPick(c) }} style={{ width: 13, height: 13, borderRadius: 3, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
     </div>
   )
+  const pickFill = c => onUpdate({ fill: c === 'none' ? 'none' : c })
+  const pickStroke = c => onUpdate({ stroke: c === 'none' ? null : c })
   return (
     <g transform={`translate(${x},${y})`} onClick={e => { stop(e); onSelect() }}
       onDoubleClick={e => { if (d.kind === 'text') { stop(e); setEditing(true) } }}
@@ -105,8 +111,12 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
         </g>
       )}
       {selected && (d.kind === 'shape' || d.kind === 'text' || isLine) && (
-        <foreignObject x={bbox ? bbox.x : 0} y={(bbox ? bbox.y + bbox.h : Math.max(0, hy)) + 8} width={200} height={26} style={{ overflow: 'visible' }}>
-          {swatchRow(c => onUpdate(isLine ? { stroke: c } : { fill: c }))}
+        <foreignObject x={bbox ? bbox.x : 0} y={(bbox ? bbox.y + bbox.h : Math.max(0, hy)) + 8} width={230} height={d.kind === 'shape' ? 58 : 28} style={{ overflow: 'visible' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {d.kind === 'shape' && swatchRow(pickFill, 'F')}
+            {(d.kind === 'shape' || isLine) && swatchRow(pickStroke, 'O')}
+            {d.kind === 'text' && swatchRow(pickFill, 'F')}
+          </div>
         </foreignObject>
       )}
     </g>
