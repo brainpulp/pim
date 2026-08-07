@@ -135,23 +135,12 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
   )
 }
 
-// A broad emoji set (faces, people/gestures, animals, nature, food, activity, travel, objects, symbols).
-const EMOJI_STR = ('😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😌😍🥰😘😗😙😚😋😛😝😜🤪🤨🧐🤓😎🥸🤩🥳😏😒😞😔😟😕🙁☹️😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🤗🤔🤭🤫🤥😶😐😑😬🙄😯😦😧😮😲🥱😴🤤😪😵🤐🥴🤢🤮🤧😷🤒🤕🤑🤠😈👿👹👺🤡💩👻💀☠️👽👾🤖🎃😺😸😹😻😼😽🙀😿😾'
-  +'👍👎👌🤌🤏✌️🤞🤟🤘🤙👈👉👆👇☝️✋🤚🖐️🖖👋🤝🙏✍️💪🦾👏🙌👐🤲🤜🤛✊👊'
-  +'🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🐔🐧🐦🐤🦆🦅🦉🦇🐺🐗🐴🦄🐝🐛🦋🐌🐞🐜🐢🐍🦎🐙🦑🦐🦀🐡🐠🐟🐬🐳🐋🦈🐊🐅🐆🦓🦍🐘🦏🐪🐫🦒🦔🐾🐉🐲'
-  +'🌵🎄🌲🌳🌴🌱🌿☘️🍀🎍🎋🍃🍂🍁🌾🌺🌻🌹🥀🌷🌼🌸💐🍄🌰🎃🌍🌎🌏🌕🌙⭐🌟✨⚡☄️💥🔥🌈☀️⛅☁️🌧️⛈️🌩️🌨️❄️☃️⛄💧🌊'
-  +'🍏🍎🍐🍊🍋🍌🍉🍇🍓🫐🍈🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🥬🥒🌶️🌽🥕🧄🧅🥔🍠🥐🍞🥖🥨🧀🥚🍳🥞🧇🥓🥩🍗🍖🌭🍔🍟🍕🥪🌮🌯🥗🍜🍲🍣🍱🍛🍚🍙🎂🍰🧁🍦🍩🍪🍫🍬🍭🍮☕🍵🍺🍷🍸🍹🥂'
-  +'⚽🏀🏈⚾🥎🎾🏐🏉🥏🎱🏓🏸🥅🏒🏑🥍🏏⛳🎯🎣🥊🥋🎽🛹🛼🎿⛷️🏂🏋️🤸🤺🤾🏌️🏇🧘🏄🏊🚴🚵🎖️🏆🥇🥈🥉🏅🎗️🎫🎟️🎪🎭🎨🎬🎤🎧🎼🎹🥁🎷🎺🎸🎻🎲♟️🎯🎳🎮🕹️'
-  +'🚗🚕🚙🚌🚎🏎️🚓🚑🚒🚐🚚🚛🚜🛴🚲🛵🏍️✈️🚀🛸🚁⛵🚤🛳️⚓🚦🚥🗺️🗿🗽🗼🏰🏯🎡🎢🎠⛲⛱️🏖️🏝️🏔️⛰️🌋🏕️⛺🏠🏡🏢🏬🏣🏤🏥🏦🏨🏩💒'
-  +'⌚📱💻⌨️🖥️🖨️🖱️💽💾💿📷📸📹🎥📽️📞☎️📟📠📺📻🧭⏱️⏰⏳⌛🔋🔌💡🔦🕯️🧯🛢️💸💵💴💶💷💰💳💎⚖️🧰🔧🔨⚒️🛠️⛏️🔩⚙️🧱⛓️🧲🔫💣🔪🗡️⚔️🛡️🚬⚰️⚱️🏺🔮📿🧿💈🔭🔬💊💉🩹🩺🚽🚿🛁🧴🧷🧹🧺🧻🧼🧽🔑🗝️🚪🛋️🛏️🖼️🛒🎁🎈🎏🎀🎊🎉🎎🏮🎐📮📫📪📬📭📦📯📜📃📄📑📊📈📉🗒️🗓️📆📅📇🗃️🗳️🗄️📋📁📂🗂️🗞️📰📓📔📒📕📗📘📙📚📖🔖🧷📎🖇️📐📏🧮📌📍✂️🖊️🖋️✒️🖌️🖍️📝✏️🔍🔎🔏🔐🔒🔓'
-  +'❤️🧡💛💚💙💜🖤🤍🤎💔❣️💕💞💓💗💖💘💝💟☮️✝️☪️🕉️☸️✡️🔯🕎☯️☦️🛐⛎♈♉♊♋♌♍♎♏♐♑♒♓⚛️🉑☢️☣️✴️🆚💮🉐㊙️㊗️🈴🈵🈹🈲🅰️🅱️🆎🆑🅾️🆘❌⭕🛑⛔📛🚫💯💢♨️🚷🚯🚳🚱🔞📵🚭❗❕❓❔‼️⁉️〽️⚠️🚸🔱⚜️🔰♻️✅🈯💹❇️✳️❎🌐💠Ⓜ️🌀💤🏧🚾♿🅿️🈳🈂️🛂🛃🛄🛅🚹🚺🚼🚻🚮🎦📶🈁🔣ℹ️🔤🔡🔠🆖🆗🆙🆒🆕🆓🔟🔢▶️⏸️⏯️⏹️⏺️⏭️⏮️⏩⏪⏫⏬◀️🔼🔽➡️⬅️⬆️⬇️↗️↘️↙️↖️↕️↔️↪️↩️⤴️⤵️🔀🔁🔂🔄🔃🎵🎶➕➖➗✖️♾️💲💱™️©️®️〰️➰➿🔚🔙🔛🔝🔜✔️☑️🔘⚪⚫🔴🟠🟡🟢🔵🟣🟤🔺🔻🔸🔹🔶🔷🔳🔲▪️▫️◾◽◼️◻️🟥🟧🟨🟩🟦🟪🟫⬛⬜🔈🔇🔉🔊🔔🔕📣📢💬💭🗯️♠️♣️♥️♦️🃏🎴🀄⏰⭐✨')
-const EMOJIS = (typeof Intl !== 'undefined' && Intl.Segmenter)
-  ? [...new Intl.Segmenter().segment(EMOJI_STR)].map(s => s.segment).filter(s => s.trim())
-  : Array.from(EMOJI_STR)
+// Complete emoji set — generated from the main Unicode emoji blocks (not a curated subset).
+const EMOJI_RANGES = [[0x1F300, 0x1F5FF], [0x1F600, 0x1F64F], [0x1F680, 0x1F6FC], [0x1F900, 0x1F9FF], [0x1FA70, 0x1FAF8], [0x2600, 0x26FF], [0x2700, 0x27BF]]
+const EMOJIS = []
+for (const [a, b] of EMOJI_RANGES) { for (let c = a; c <= b; c++) EMOJIS.push(String.fromCodePoint(c)) }
 
 export function DrawPalette({ palette, onStartDrag, onClose }) {
-  const shapes = [['rect','▭'],['ellipse','⬭'],['roundrect','▢'],['triangle','△'],['diamond','◇'],['pentagon','⬠'],['hexagon','⬡'],['star','★']]
-  const lines = [['line','╱',{}],['arrow','➔',{}],['line','┈',{dash:'7,5'}],['arrow','⇢',{dash:'7,5'}]]
   const swatch = { display:'flex', flexWrap:'wrap', gap:5 }
   const btn = { width:33, height:33, display:'flex', alignItems:'center', justifyContent:'center', background:'#14142a', border:'1px solid #2a3358', borderRadius:6, cursor:'grab', color:'#c5d0ff', fontSize:17, userSelect:'none' }
   const label = { fontSize:'0.62rem', color:'#7080a0', letterSpacing:'0.08em', margin:'11px 0 5px' }
@@ -164,10 +153,6 @@ export function DrawPalette({ palette, onStartDrag, onClose }) {
       </div>
       <div style={{ flex:1, overflowY:'auto', padding:'4px 10px 24px' }}>
         <div style={{ fontSize:'0.62rem', color:'#8090b8', lineHeight:1.4, margin:'4px 0' }}>Drag an item onto the canvas.</div>
-        <div style={label}>SHAPES</div>
-        <div style={swatch}>{shapes.map(([s,gl]) => <div key={s} title={s} style={btn} onMouseDown={e => onStartDrag('shape',{ shape:s, w:96, h:66, fill:'#5b6af0' }, e)}>{gl}</div>)}</div>
-        <div style={label}>LINES · ARROWS</div>
-        <div style={swatch}>{lines.map(([k,gl,extra],i) => <div key={i} title={k} style={btn} onMouseDown={e => onStartDrag(k,{ stroke:'#c5d0ff', strokeWidth:3, ...extra }, e)}>{gl}</div>)}</div>
         <div style={label}>TEXT</div>
         <div style={swatch}><div style={{ ...btn, width:'auto', padding:'0 14px', fontSize:14, fontWeight:700 }} onMouseDown={e => onStartDrag('text',{ text:'Text', size:26, fill:'#ffffff' }, e)}>Text</div></div>
         <div style={label}>EMOJI · {EMOJIS.length}</div>
