@@ -138,6 +138,10 @@ export default function Writer({ projectName, embedded = false }) {
   const [search, setSearch] = useState('')
   const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
   const [q, setQ] = useState({ type: null, priority: null, tag: null, done: 'all' })
+  const [agenda, setAgenda] = useState(false)                       // due-date agenda view
+  const [templates, setTemplates] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_writer_templates') || '[]') } catch { return [] } })
+  useEffect(() => { try { localStorage.setItem('pim_writer_templates', JSON.stringify(templates)) } catch { /* ignore */ } }, [templates])
+  const [showTpl, setShowTpl] = useState(false)
   const pendingFocus = useRef(null)
   const inputs = useRef({})
 
@@ -292,6 +296,52 @@ export default function Writer({ projectName, embedded = false }) {
   const addRoot = () => { const id = addNode('', null); pendingFocus.current = id; setFocusId(id) }
 
   // Export the (focused) outline to Markdown, tasks + tags included.
+  // ── Templates: save a node's subtree as a reusable outline; insert it under the focused item. ──
+  const cleanMeta = (m) => { if (!m) return null; const { links, ...rest } = m; return Object.keys(rest).length ? rest : null }
+  const saveTemplate = (id) => {
+    const items = []
+    const walk = (nid, d) => { const n = byId[nid]; if (!n) return; items.push({ d, label: n.label || '', meta: cleanMeta(n.meta) }); (childrenOf[nid] || []).forEach(c => walk(c, d + 1)) }
+    walk(id, 0)
+    const name = (window.prompt('Template name:', byId[id]?.label || 'Template') || '').trim()
+    if (!name) return
+    setTemplates(ts => [...ts.filter(t => t.name !== name), { name, items }])
+    setShowTpl(false)
+  }
+  const insertTemplate = (tpl) => {
+    const base = focusId || null
+    const stack = []
+    let firstId = null
+    tpl.items.forEach(it => {
+      const parent = it.d === 0 ? base : (stack[it.d - 1] ?? base)
+      const newId = addNode(it.label, parent)
+      if (it.meta) setNodeMeta(newId, it.meta)
+      stack[it.d] = newId; stack.length = it.d + 1
+      if (firstId == null) firstId = newId
+    })
+    setShowTpl(false)
+    if (firstId) { pendingFocus.current = firstId; selectRow(firstId) }
+  }
+
+  // ── Agenda: group tasks by due date into Overdue / Today / Tomorrow / This week / Later / No date. ──
+  const agendaGroups = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const iso = d => d.toISOString().slice(0, 10)
+    const todayS = iso(today), tomorrowS = iso(new Date(today.getTime() + 864e5)), weekS = iso(new Date(today.getTime() + 7 * 864e5))
+    const G = { Overdue: [], Today: [], Tomorrow: [], 'This week': [], Later: [], 'No date': [] }
+    nodes.forEach(n => {
+      if (n.meta?.itemType !== 'task') return
+      const due = n.meta?.fields?.due
+      if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(due)) G['No date'].push(n)
+      else if (due < todayS) G.Overdue.push(n)
+      else if (due === todayS) G.Today.push(n)
+      else if (due === tomorrowS) G.Tomorrow.push(n)
+      else if (due <= weekS) G['This week'].push(n)
+      else G.Later.push(n)
+    })
+    Object.values(G).forEach(a => a.sort((x, y) => (x.meta?.fields?.due || '9999').localeCompare(y.meta?.fields?.due || '9999')))
+    return G
+  }, [nodes])
+
   const exportMd = () => {
     const lines = []
     const walk = (id, depth) => {
@@ -368,6 +418,24 @@ export default function Writer({ projectName, embedded = false }) {
         <button title="Fold all" onClick={foldAll} style={tbtn(false)}>⊟</button>
         <button title="Expand all" onClick={expandAll} style={tbtn(false)}>⊞</button>
         <button title="Filter as a database (by type, priority, tag, status)" onClick={() => setShowQuery(v => !v)} style={{ ...tbtn(showQuery || qActive), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>⌗ Filter{qActive ? ' •' : ''}</button>
+        <button title="Agenda — tasks grouped by due date" onClick={() => setAgenda(v => !v)} style={{ ...tbtn(agenda), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>📅 Agenda</button>
+        <div style={{ position: 'relative' }}>
+          <button title="Templates — save & insert reusable outlines" onClick={() => setShowTpl(v => !v)} style={{ ...tbtn(showTpl), fontFamily: '-apple-system, sans-serif', fontSize: 12 }}>⧉ Tpl</button>
+          {showTpl && (<>
+            <div onMouseDown={() => setShowTpl(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '110%', left: 0, zIndex: 41, minWidth: 200, background: dark ? '#161a24' : '#fff', border: `1px solid ${line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.35)', padding: 6, fontFamily: '-apple-system, sans-serif' }}>
+              <div onClick={() => focusId && saveTemplate(focusId)} style={{ padding: '6px 9px', borderRadius: 6, cursor: focusId ? 'pointer' : 'default', color: focusId ? '#5b6af0' : faint, fontSize: 13 }}>＋ Save “{focusId ? (byId[focusId]?.label || 'item') : '—'}” as template</div>
+              {templates.length > 0 && <div style={{ borderTop: `1px solid ${line}`, margin: '4px 0' }} />}
+              {templates.map(t => (
+                <div key={t.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 9px', borderRadius: 6 }}>
+                  <span onClick={() => insertTemplate(t)} style={{ cursor: 'pointer', fontSize: 13, color: fg, flex: 1 }}>{t.name} <span style={{ color: faint, fontSize: 11 }}>({t.items.length})</span></span>
+                  <span onClick={() => setTemplates(ts => ts.filter(x => x.name !== t.name))} style={{ cursor: 'pointer', color: '#e11d48', fontSize: 13, paddingLeft: 8 }}>×</span>
+                </div>
+              ))}
+              {templates.length === 0 && <div style={{ padding: '5px 9px', color: faint, fontSize: 12 }}>No templates yet. Focus an item and save it.</div>}
+            </div>
+          </>)}
+        </div>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
           style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 7, padding: '5px 9px', fontSize: 13, fontFamily: '-apple-system, sans-serif', outline: 'none', width: 150 }} />
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -414,7 +482,32 @@ export default function Writer({ projectName, embedded = false }) {
         </div>
       )}
 
+      {/* Agenda — tasks by due date. Toggling ⧉ off returns to the outline. */}
+      {agenda && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0 40vh', fontFamily: '-apple-system, sans-serif' }}>
+          <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
+            {Object.entries(agendaGroups).every(([, a]) => a.length === 0) && <div style={{ color: faint, fontSize: 14 }}>No tasks yet. Type <code>/task</code> and a <code>due:tomorrow</code> to see them here.</div>}
+            {Object.entries(agendaGroups).map(([grp, arr]) => arr.length === 0 ? null : (
+              <div key={grp} style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: grp === 'Overdue' ? '#e11d48' : grp === 'Today' ? '#5b6af0' : faint, marginBottom: 6 }}>{grp} · {arr.length}</div>
+                {arr.map(n => { const m = n.meta || {}
+                  return (
+                    <div key={n.id} onClick={() => setSelectedNodeId(n.id)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 8, cursor: 'pointer', background: selectedNodeId === n.id ? (dark ? '#1b2236' : '#eef1fb') : 'transparent' }}>
+                      <input type="checkbox" checked={!!m.done} onClick={e => e.stopPropagation()} onChange={() => setNodeMeta(n.id, { done: !m.done })} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} />
+                      <span style={{ flex: 1, fontSize: 15, color: m.done ? faint : fg, textDecoration: m.done ? 'line-through' : 'none' }}>{n.label || '(untitled)'}</span>
+                      {m.priority && <span style={{ fontSize: 11, color: PRIORITY_META[m.priority].color }}>{PRIORITY_META[m.priority].label}</span>}
+                      {m.fields?.due && <span style={{ fontSize: 12, color: '#0891b2' }}>📅 {m.fields.due}</span>}
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Outline */}
+      {!agenda && (
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0 40vh' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px' }}>
           {rows.length === 0 && (
@@ -484,6 +577,7 @@ export default function Writer({ projectName, embedded = false }) {
           })}
         </div>
       </div>
+      )}
 
       {/* Shortcuts editor */}
       {showKeys && (
