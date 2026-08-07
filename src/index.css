@@ -28,6 +28,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* Table node — reveal a row's delete button on hover */
 .tc-row:hover .tc-rowdel { opacity: 1 !important; }
 
+/* Top-nav (Figma/Linear style) hover polish */
+.pim-nav-tab { transition: background .13s ease, color .13s ease; }
+.pim-nav-tab:hover { color: #c7cdec; }
+.pim-nav-btn { transition: background .13s ease, color .13s ease, border-color .13s ease; }
+.pim-nav-btn:hover { background: #191924; color: #c7cdec; }
+
 /* Node border-treatment spin (continuous rotation of the shape body) */
 @keyframes pim-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 

@@ -176,7 +176,9 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
       <nav style={navStyle}>
-        <button style={backBtnStyle} onClick={closeProject} title="All projects">← Projects</button>
+        <button className="pim-nav-btn" style={backBtnStyle} onClick={closeProject} title="All projects">
+          <span style={{ fontSize: '1em', opacity: 0.7 }}>‹</span> Projects
+        </button>
         <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', pointerEvents: 'none', maxWidth: '40%' }}>
           {renamingProject ? (
             <input
@@ -209,28 +211,33 @@ export default function App() {
             >{project.name}<span style={{ marginLeft: 6, opacity: 0.6, fontSize: '0.8em' }}>✎</span></span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {[['board', 'canvas'], ['graph', 'graph'], ['write', 'write'], ['table', 'table'], ['lab', 'lab']].map(([v, label]) => (
+        {/* Segmented tab control — Figma/Linear style */}
+        <div style={segStyle}>
+          {[['board', 'Canvas'], ['graph', 'Graph'], ['write', 'Write'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
             <button
               key={v}
-              style={{ ...navBtnStyle, ...(view === v ? navBtnActiveStyle : {}) }}
+              className="pim-nav-tab"
+              style={{ ...segTabStyle, ...(view === v ? segTabActiveStyle : {}) }}
               onClick={() => setView(v)}
             >
               {label}
             </button>
           ))}
-          {(view === 'board' || view === 'graph') && (
-            <button title="Toggle the outliner panel beside the canvas"
-              style={{ ...navBtnStyle, ...(outlineDock ? navBtnActiveStyle : {}) }}
-              onClick={() => setOutlineDock(o => !o)}>⊟ outline</button>
-          )}
         </div>
-        <button style={shareBtnStyle} onClick={() => setShowShare(true)} title="Share this project">
+        {(view === 'board' || view === 'graph') && (
+          <button title="Toggle the outliner panel beside the canvas"
+            className="pim-nav-btn"
+            style={{ ...iconBtnStyle, ...(outlineDock ? iconBtnActiveStyle : {}) }}
+            onClick={() => setOutlineDock(o => !o)}>◨ Outline</button>
+        )}
+        <button className="pim-nav-btn" style={kbarStyle} onClick={() => setPaletteOpen(true)} title="Quick jump / commands">
+          <span style={{ opacity: 0.7 }}>Search</span>
+          <span style={kbdStyle}>⌘K</span>
+        </button>
+        <button className="pim-nav-btn" style={shareBtnStyle} onClick={() => setShowShare(true)} title="Share this project">
           Share
         </button>
-        <button style={signOutStyle} onClick={() => supabase.auth.signOut()}>
-          Sign out
-        </button>
+        <button className="pim-nav-btn" style={signOutStyle} onClick={() => supabase.auth.signOut()} title="Sign out">⏻</button>
       </nav>
       {showShare && (
         <ShareDialog projectId={project.id} projectName={project.name} onClose={() => setShowShare(false)} />
@@ -294,40 +301,64 @@ export default function App() {
   )
 }
 
+const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
 const navStyle = {
-  display: 'flex', alignItems: 'center', gap: '0.75rem',
-  padding: '0 1rem', height: 44, background: '#111118',
-  borderBottom: '1px solid #1e1e2e', flexShrink: 0, zIndex: 100,
-  position: 'relative',   // anchor for the centered project title
+  display: 'flex', alignItems: 'center', gap: '0.6rem',
+  padding: '0 14px', height: 48, background: 'linear-gradient(#111119, #0d0d14)',
+  borderBottom: '1px solid #1b1b26', flexShrink: 0, zIndex: 100,
+  position: 'relative', fontFamily: FONT,
 }
 const backBtnStyle = {
-  padding: '0.25rem 0.7rem', borderRadius: 6, border: '1px solid #2a2a3e',
-  background: 'transparent', color: '#5b6af0', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+  display: 'flex', alignItems: 'center', gap: 4,
+  padding: '5px 11px', borderRadius: 8, border: '1px solid transparent',
+  background: 'transparent', color: '#9aa2c2', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 500,
 }
 const projectNameStyle = {
-  fontSize: '0.92rem', color: '#c5d0ff', fontWeight: 600,
+  fontSize: '0.9rem', color: '#e6e9f5', fontWeight: 600, letterSpacing: '0.01em',
   maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  cursor: 'pointer',
+  cursor: 'pointer', fontFamily: FONT,
 }
 const projectRenameInputStyle = {
-  fontSize: '0.85rem', color: '#fff', fontWeight: 500,
-  background: '#1a1a2e', border: '1px solid #5b6af0', borderRadius: 4,
-  padding: '1px 6px', outline: 'none', width: 160,
+  fontSize: '0.88rem', color: '#fff', fontWeight: 500, fontFamily: FONT,
+  background: '#14141f', border: '1px solid #5b6af0', borderRadius: 6,
+  padding: '2px 8px', outline: 'none', width: 180,
 }
-const navBtnStyle = {
-  padding: '0.25rem 0.75rem', borderRadius: 6, border: '1px solid #2a2a3e',
-  background: 'transparent', color: '#8a94b8', cursor: 'pointer', fontSize: '0.82rem', textTransform: 'capitalize',
+// Segmented tab control
+const segStyle = {
+  display: 'flex', alignItems: 'center', gap: 2, padding: 3,
+  background: '#14141d', border: '1px solid #21212e', borderRadius: 11,
 }
-const navBtnActiveStyle = { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' }
+const segTabStyle = {
+  padding: '5px 13px', borderRadius: 8, border: 'none', background: 'transparent',
+  color: '#7d84a4', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 500, fontFamily: FONT,
+  letterSpacing: '0.01em',
+}
+const segTabActiveStyle = {
+  background: '#282c4a', color: '#f0f2ff', boxShadow: '0 1px 2px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(120,130,220,0.25)',
+}
+const iconBtnStyle = {
+  padding: '5px 11px', borderRadius: 8, border: '1px solid #21212e',
+  background: 'transparent', color: '#8a92b4', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500, fontFamily: FONT,
+}
+const iconBtnActiveStyle = { background: '#20233c', color: '#cbd3ff', borderColor: '#3a4270' }
+const kbarStyle = {
+  marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8,
+  padding: '5px 10px 5px 12px', borderRadius: 8, border: '1px solid #21212e',
+  background: '#12121b', color: '#8a92b4', cursor: 'pointer', fontSize: '0.8rem', fontFamily: FONT,
+}
+const kbdStyle = {
+  fontSize: '0.68rem', color: '#9aa2c2', background: '#1c1c2a', border: '1px solid #2a2a3c',
+  borderRadius: 5, padding: '1px 5px', fontWeight: 600, letterSpacing: '0.03em',
+}
 const shareBtnStyle = {
-  marginLeft: 'auto', padding: '0.25rem 0.85rem', borderRadius: 6,
-  border: '1px solid #3a4a8a', background: '#1a1f4a', color: '#c5d0ff',
-  cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+  padding: '5px 13px', borderRadius: 8, border: '1px solid #33407e',
+  background: 'linear-gradient(#232a5c, #1b2048)', color: '#d3daff',
+  cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, fontFamily: FONT,
 }
 const signOutStyle = {
-  padding: '0.25rem 0.75rem', borderRadius: 6,
-  border: '1px solid #2a2a3e', background: 'transparent', color: '#8090b8',
-  cursor: 'pointer', fontSize: '0.78rem',
+  width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8,
+  border: '1px solid #21212e', background: 'transparent', color: '#8a92b4',
+  cursor: 'pointer', fontSize: '0.95rem',
 }
 const loadingStyle = {
   height: '100vh', display: 'flex', alignItems: 'center',
