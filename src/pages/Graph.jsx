@@ -2789,11 +2789,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {/* Outline sidebar â€" hidden while presenting or in shared read-only view */}
       {!isPresenting && !readOnly && (<>
       <div onMouseDown={() => { canvasFocused.current = false }}
-        style={{ width: sidebarWidth, flexShrink: 0, background: '#0d0d1a', overflow: 'visible', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        {/* The old outline tree lived here; it's superseded by the dockable outliner (⊟ outline in the nav). */}
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><ViewManager /></div>
+        style={{ width: 0, flexShrink: 0, overflow: 'visible', position: 'relative', zIndex: 15 }}>
+        {/* No fixed sidebar — Views and the tool dock are floating palettes over the canvas. */}
+        <div className="pim-palette" style={{ position:'absolute', left:12, top:150, width:174, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)', overflow:'hidden' }}>
+          <div title="Drag palette" onPointerDown={e => {
+              if (e.button !== 0) return
+              const panel = e.currentTarget.parentElement
+              const r = panel.getBoundingClientRect()
+              panel.style.position = 'fixed'; panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px'
+              const ox = e.clientX - r.left, oy = e.clientY - r.top
+              const h = e.currentTarget; h.setPointerCapture(e.pointerId)
+              const mv = ev => { panel.style.left = Math.max(4, ev.clientX - ox) + 'px'; panel.style.top = Math.max(4, ev.clientY - oy) + 'px' }
+              const up = () => { h.removeEventListener('pointermove', mv); h.removeEventListener('pointerup', up) }
+              h.addEventListener('pointermove', mv); h.addEventListener('pointerup', up)
+            }}
+            style={{ display:'flex', alignItems:'center', gap:6, height:24, padding:'0 9px', cursor:'grab', userSelect:'none', borderBottom:'1px solid #1e2236', color:'#9aa4cc', fontSize:'0.66rem', fontWeight:700, letterSpacing:'.09em', textTransform:'uppercase' }}>
+            <span style={{ color:'#5a6390', letterSpacing:2, fontSize:9 }}>⋮⋮</span> Views
+          </div>
+          <div style={{ maxHeight:260, overflowY:'auto' }}><ViewManager /></div>
+        </div>
         {/* Floating Tool dock (Figma-style) — anchored at the canvas's left edge, drag by its header. */}
-        <div className="pim-tooldock" style={{ position:'absolute', left:'calc(100% + 12px)', top:12, zIndex:14, width:136, padding:6, display:'flex', flexDirection:'column', gap:5, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)' }}>
+        <div className="pim-tooldock" style={{ position:'absolute', left:12, top:12, zIndex:14, width:152, padding:6, display:'flex', flexDirection:'column', gap:5, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)' }}>
           <div title="Drag dock" onPointerDown={e => {
               if (e.button !== 0) return
               const panel = e.currentTarget.parentElement
@@ -2806,7 +2822,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               handle.addEventListener('pointermove', mv); handle.addEventListener('pointerup', up)
             }}
             style={{ height:18, marginBottom:1, display:'flex', alignItems:'center', justifyContent:'center', cursor:'grab', color:'#5a6390', letterSpacing:2, fontSize:10, userSelect:'none', borderBottom:'1px solid #1e2236' }}>⋮⋮</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:5 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:5 }}>
             <button style={gToolBtn} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
             <button style={gToolBtn} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
             <button style={gToolBtn} onClick={() => setShowExport(true)} title="Export outline / graph to PDF or Word">⤓ Export</button>
@@ -2871,18 +2887,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           })()}
         </div>
       </div>
-      {/* Sidebar resize handle */}
-      <div style={{ width: 4, flexShrink: 0, cursor: 'col-resize', background: '#1e1e2e', transition: 'background 0.1s' }}
-        onMouseEnter={e => e.currentTarget.style.background = '#2d3a6a'}
-        onMouseLeave={e => e.currentTarget.style.background = '#1e1e2e'}
-        onMouseDown={e => {
-          e.preventDefault()
-          const startX = e.clientX, startW = sidebarWidth
-          const onMove = me => setSidebarWidth(Math.max(150, Math.min(420, startW + me.clientX - startX)))
-          const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
-          document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
-        }}
-      />
       </>)}
       <div onMouseDown={() => { canvasFocused.current = true }}
         onContextMenu={e => { const t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return; e.preventDefault() }}
