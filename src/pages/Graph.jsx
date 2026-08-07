@@ -2793,8 +2793,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         {/* The old outline tree lived here; it's superseded by the dockable outliner (⊟ outline in the nav). */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><ViewManager /></div>
         {/* Tool strip — consolidated canvas actions */}
-        <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'8px 10px', display:'flex', flexDirection:'column', gap:6 }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
+        <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'7px 8px', display:'flex', flexDirection:'column', gap:5 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:5 }}>
             <button style={gToolBtn} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
             <button style={gToolBtn} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
             <button style={gToolBtn} onClick={() => setShowExport(true)} title="Export outline / graph to PDF or Word">⤓ Export</button>
@@ -2830,7 +2830,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             return (
               <div style={{ position:'relative' }}>
                 <button
-                  style={{ ...gToolBtn, height:34, width:'100%', fontSize:'1rem', fontWeight:700, color:'#c3ccff', border:'1px solid #3a4a8a', background:'#191d3a' }}
+                  style={{ ...gToolBtn, height:30, width:'100%', fontSize:'0.9rem', fontWeight:700, color:'#c3ccff', border:'1px solid #3a4a8a', background:'#191d3a' }}
                   onClick={e => { e.stopPropagation(); setShowAddMenu(v => !v) }}
                   title="Add…">
                   ＋ Add
@@ -6935,5 +6935,5 @@ const confirmOkBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px sol
 const canvasBtnStyle = { padding:'0.45rem 0.85rem', borderRadius:7, border:'1px solid #2d3a6a', background:'#12122a', color:'#5b6af0', cursor:'pointer', fontSize:'0.82rem', fontWeight:600, boxShadow:'0 2px 12px rgba(0,0,0,0.4)' }
 const sideToolBtnStyle = { padding:'0.3rem 0.6rem', borderRadius:7, border:'1px solid #2a3358', background:'transparent', color:'#8a97cc', cursor:'pointer', fontSize:'0.76rem', fontWeight:600, whiteSpace:'nowrap' }
 // Uniform tool-strip button: fixed height, centered icon+label, consistent skin (grid cells share width).
-const gToolBtn = { display:'flex', alignItems:'center', justifyContent:'center', gap:4, height:30, padding:'0 6px', borderRadius:8, border:'1px solid #262b47', background:'#141428', color:'#9aa6d8', cursor:'pointer', fontSize:'0.72rem', fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }
+const gToolBtn = { display:'flex', alignItems:'center', justifyContent:'center', gap:4, height:28, padding:'0 6px', borderRadius:6, border:'1px solid #262b47', background:'#141428', color:'#9aa6d8', cursor:'pointer', fontSize:'0.72rem', fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }
 const topBtnStyle = { padding:'0.3rem 0.8rem', borderRadius:6, border:'1px solid #2d3a6a', background:'rgba(18,18,42,0.92)', color:'#7b8fcc', cursor:'pointer', fontSize:'0.78rem', fontWeight:600, backdropFilter:'blur(4px)' }
