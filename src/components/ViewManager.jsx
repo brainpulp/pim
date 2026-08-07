@@ -99,11 +99,11 @@ const styles = {
   },
   headerLabel: { fontSize: '0.65rem', fontWeight: 700, color: '#8090b8', letterSpacing: '0.08em' },
   addBtn: {
-    fontSize: '0.85rem', padding: '1px 6px', borderRadius: 4,
+    fontSize: '0.85rem', padding: '2px 7px', borderRadius: 7,
     border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', cursor: 'pointer',
   },
   drillBadge: {
-    fontSize: '0.6rem', padding: '1px 5px', borderRadius: 4,
+    fontSize: '0.6rem', padding: '1px 5px', borderRadius: 7,
     border: '1px solid #5b6af0', background: 'transparent', color: '#5b6af0', cursor: 'pointer',
   },
   list: { padding: '0.25rem 0', maxHeight: 180, overflowY: 'auto' },
@@ -118,7 +118,7 @@ const styles = {
   }),
   input: {
     flex: 1, background: '#1a1a2e', border: '1px solid #5b6af0',
-    color: '#fff', borderRadius: 3, padding: '1px 5px', fontSize: '0.8rem', outline: 'none', minWidth: 0,
+    color: '#fff', borderRadius: 7, padding: '2px 6px', fontSize: '0.8rem', outline: 'none', minWidth: 0,
   },
   iconBtn: {
     background: 'transparent', border: 'none', color: '#5b6af0',

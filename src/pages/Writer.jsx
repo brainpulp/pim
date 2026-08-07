@@ -487,7 +487,7 @@ export default function Writer({ projectName, embedded = false }) {
           <button className="pim-wtb" title="Markdown shortcuts (help)" onClick={() => setShowHelp(true)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>?</button>
           <button className="pim-wtb" title="Export to Markdown" onClick={exportMd} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⬇︎</button>
           <button className="pim-wtb" title="Keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⌨</button>
-          <button className="pim-wtb" title={isFull ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFull} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{isFull ? '⛶' : '⛶'}</button>
+          <button className="pim-wtb" title={isFull ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFull} style={{ ...tb(isFull), width: 30, justifyContent: 'center' }}>{isFull ? '⤢' : '⛶'}</button>
           <button className="pim-wtb" title="Light / dark" onClick={() => setDark(d => !d)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{dark ? '☀️' : '🌙'}</button>
         </div>
       </div>
