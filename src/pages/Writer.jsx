@@ -135,6 +135,7 @@ export default function Writer({ projectName, embedded = false }) {
   const [expanded, setExpanded] = useState(() => new Set())
   const [focusId, setFocusId] = useState(null)
   const [focusRoot, setFocusRoot] = useState(null)   // zoom-into-item
+  const [framesOpen, setFramesOpen] = useState(false)   // collapsible "Frames" section
   const [search, setSearch] = useState('')
   const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
   const [q, setQ] = useState({ type: null, priority: null, tag: null, done: 'all' })
@@ -201,6 +202,8 @@ export default function Writer({ projectName, embedded = false }) {
   }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q, nodeProps])
 
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
+  // Frames are kept out of the edge-driven tree above; they get their own grouped section.
+  const frameNodes = useMemo(() => nodes.filter(n => isFrame(n.id)), [nodes, nodeProps])
 
   useEffect(() => {
     if (pendingFocus.current && inputs.current[pendingFocus.current]) {
@@ -385,7 +388,11 @@ export default function Writer({ projectName, embedded = false }) {
   const fg = dark ? '#e8ecf4' : '#1f2430'
   const faint = dark ? '#7c869c' : '#9aa3b2'
   const line = dark ? '#232838' : '#eceef3'
-  const bulletC = dark ? '#5b6af0' : '#c3c9d6'
+  // Chevron + bullet are important nav affordances → prominent: high contrast + bold.
+  // "In black" applies on the light (white) paper; on the dark theme black would be
+  // invisible, so use a bright near-white there (never dark-on-dark).
+  const bulletC = dark ? '#e8eeff' : '#000000'
+  const chevC = dark ? '#e8eeff' : '#000000'
   const focusNode = focusId ? byId[focusId] : null
   const fs = focusNode?.writeStyle || {}
   const styleFocused = (patch) => { if (focusId) setNodeWriteStyle(focusId, patch); inputs.current[focusId]?.focus() }
@@ -601,23 +608,23 @@ export default function Writer({ projectName, embedded = false }) {
             const hSize = m.heading === 1 ? 24 : m.heading === 2 ? 19 : 17
             const hWeight = m.heading ? 700 : (ws.bold ? 700 : 400)
             const textStyle = {
-              flex: 1, minWidth: 120, border: 'none', outline: 'none', background: 'transparent', fontSize: hSize, lineHeight: 1.5,
+              flex: 1, minWidth: 120, border: 'none', outline: 'none', background: 'transparent', fontSize: hSize, lineHeight: 1.35,
               fontFamily: 'inherit', color: done ? faint : (ws.metallic ? 'transparent' : (ws.color || fg)),
               fontWeight: hWeight, fontStyle: ws.italic ? 'italic' : 'normal', textDecoration: done ? 'line-through' : 'none',
               ...(ws.metallic && !done ? { background: 'linear-gradient(92deg,#b8b8b8,#f5f5f5 30%,#9a9a9a 55%,#e8e8e8 80%,#8f8f8f)', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' } : {}),
             }
             return (
               <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '1px 0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
-                  {/* collapse triangle */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
+                  {/* collapse triangle — prominent (2× size, bold, high contrast) */}
                   <span onClick={() => r.hasChildren && !flatMode && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
-                    style={{ width: 13, textAlign: 'center', cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: faint, fontSize: 10, userSelect: 'none', paddingTop: 8, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
+                    style={{ width: 18, textAlign: 'center', cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1, userSelect: 'none', paddingTop: 3, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
                     {collapsed.has(r.id) ? '▸' : '▾'}
                   </span>
-                  {/* task checkbox OR bullet (bullet = click to zoom-into-item) */}
+                  {/* task checkbox OR bullet (bullet = click to zoom-into-item) — prominent */}
                   {isTask
                     ? <input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ marginTop: 6, width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer', flexShrink: 0 }} />
-                    : <span title="Zoom in" onClick={() => setFocusRoot(r.id)} style={{ width: 13, textAlign: 'center', color: bulletC, fontSize: 14, paddingTop: 4, userSelect: 'none', cursor: 'pointer', flexShrink: 0 }}>•</span>}
+                    : <span title="Zoom in" onClick={() => setFocusRoot(r.id)} style={{ width: 18, textAlign: 'center', color: bulletC, fontSize: 26, fontWeight: 700, lineHeight: 1, paddingTop: 1, userSelect: 'none', cursor: 'pointer', flexShrink: 0 }}>•</span>}
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: 15, lineHeight: '26px', flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <input ref={el => { if (el) inputs.current[r.id] = el }} value={n.label || ''}
@@ -650,6 +657,26 @@ export default function Writer({ projectName, embedded = false }) {
               </div>
             )
           })}
+          {/* Frames — canvas containers, grouped in their own collapsible section, visually
+              differentiated (italic serif). Kept out of the tree so they don't read as
+              duplicate root items. Click a frame to select it (syncs to the canvas). */}
+          {!flatMode && !focusRoot && frameNodes.length > 0 && (
+            <div style={{ marginTop: 22, borderTop: `1px solid ${line}`, paddingTop: 10 }}>
+              <div onClick={() => setFramesOpen(o => !o)}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <span style={{ width: 18, textAlign: 'center', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1 }}>{framesOpen ? '▾' : '▸'}</span>
+                <span style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontStyle: 'italic', fontWeight: 600, fontSize: 14, letterSpacing: '0.02em', color: faint, textTransform: 'uppercase' }}>Frames</span>
+                <span style={{ fontSize: 12, color: faint }}>{frameNodes.length}</span>
+              </div>
+              {framesOpen && frameNodes.map(n => (
+                <div key={n.id} onClick={() => setSelectedNodeId(n.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 24, padding: '3px 8px', borderRadius: 6, cursor: 'pointer', background: selectedNodeId === n.id ? (dark ? '#1b2236' : '#eef1fb') : 'transparent' }}>
+                  <span style={{ fontSize: 12, color: faint }}>▢</span>
+                  <span style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: 15, color: fg }}>{n.label || 'Untitled frame'}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       )}
