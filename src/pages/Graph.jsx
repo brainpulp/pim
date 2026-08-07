@@ -2794,17 +2794,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><ViewManager /></div>
         {/* Tool strip — consolidated canvas actions */}
         <div style={{ flexShrink:0, borderTop:'1px solid #1e1e2e', padding:'8px 10px', display:'flex', flexDirection:'column', gap:6 }}>
-          <div style={{ display:'flex', gap:5, flexWrap:'wrap', alignItems:'center' }}>
-            <button style={sideToolBtnStyle} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
-            <button style={sideToolBtnStyle} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
-            <button style={sideToolBtnStyle} onClick={() => setShowExport(true)} title="Export outline / graph to PDF or Word">⤓ Export</button>
-            <button style={{ ...sideToolBtnStyle, color: showFlowchart ? '#8ecbff' : undefined }} onClick={() => setShowFlowchart(v => !v)} title="Flowchart: edit as text (Mermaid) ⇄ graphics, two-way synced">⤳ Flow</button>
-            <button style={{ ...sideToolBtnStyle, color: hideFrameOutlines ? '#f6ad55' : undefined }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">{hideFrameOutlines ? '⊞' : '⊟'}</button>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
+            <button style={gToolBtn} onClick={zoomExtents} title="Fit all nodes in view">⊡ Fit</button>
+            <button style={gToolBtn} onClick={handleReleaseAll} title="Release all anchors">⊙ Free</button>
+            <button style={gToolBtn} onClick={() => setShowExport(true)} title="Export outline / graph to PDF or Word">⤓ Export</button>
+            <button style={{ ...gToolBtn, ...(showFlowchart ? { color:'#8ecbff', borderColor:'#3a5a8a', background:'#152036' } : {}) }} onClick={() => setShowFlowchart(v => !v)} title="Flowchart: edit as text (Mermaid) ⇄ graphics, two-way synced">⤳ Flow</button>
+            <button style={{ ...gToolBtn, ...(hideFrameOutlines ? { color:'#f6ad55', borderColor:'#7a5a2a', background:'#241d10' } : {}) }} onClick={() => setHideFrameOutlines(v => !v)} title="Toggle frame outlines">▢ Frames</button>
             {/* BG color */}
             <div style={{ position:'relative' }}>
-              <button style={{ ...sideToolBtnStyle, display:'flex', alignItems:'center', gap:4 }}
+              <button style={{ ...gToolBtn, width:'100%' }}
                 onClick={e => { e.stopPropagation(); setShowBgPicker(v => !v) }} title="Canvas background color">
-                <span style={{ width:10, height:10, borderRadius:2, background:bgColor, border:'1px solid #5b6af0', display:'inline-block', flexShrink:0 }} />
+                <span style={{ width:11, height:11, borderRadius:3, background:bgColor, border:'1px solid #5b6af0', display:'inline-block', flexShrink:0 }} />
                 BG
               </button>
               {showBgPicker && (
@@ -2830,10 +2830,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             return (
               <div style={{ position:'relative' }}>
                 <button
-                  style={{ ...sideToolBtnStyle, fontSize:'1.1rem', fontWeight:700, padding:'0.35rem 1rem', width:'100%', color:'#a0b4f0', border:'1px solid #3a4a8a' }}
+                  style={{ ...gToolBtn, height:34, width:'100%', fontSize:'1rem', fontWeight:700, color:'#c3ccff', border:'1px solid #3a4a8a', background:'#191d3a' }}
                   onClick={e => { e.stopPropagation(); setShowAddMenu(v => !v) }}
                   title="Add…">
-                  +
+                  ＋ Add
                 </button>
                 {showAddMenu && (
                   <div style={{ position:'absolute', bottom:'110%', left:0, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', zIndex:40, boxShadow:'0 4px 20px rgba(0,0,0,0.7)', minWidth:160 }}
@@ -6934,4 +6934,6 @@ const confirmCancelBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px
 const confirmOkBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px solid #f87171', background:'#2a1a1a', color:'#f87171', cursor:'pointer', fontSize:'0.82rem', fontWeight:600 }
 const canvasBtnStyle = { padding:'0.45rem 0.85rem', borderRadius:7, border:'1px solid #2d3a6a', background:'#12122a', color:'#5b6af0', cursor:'pointer', fontSize:'0.82rem', fontWeight:600, boxShadow:'0 2px 12px rgba(0,0,0,0.4)' }
 const sideToolBtnStyle = { padding:'0.3rem 0.6rem', borderRadius:7, border:'1px solid #2a3358', background:'transparent', color:'#8a97cc', cursor:'pointer', fontSize:'0.76rem', fontWeight:600, whiteSpace:'nowrap' }
+// Uniform tool-strip button: fixed height, centered icon+label, consistent skin (grid cells share width).
+const gToolBtn = { display:'flex', alignItems:'center', justifyContent:'center', gap:4, height:30, padding:'0 6px', borderRadius:8, border:'1px solid #262b47', background:'#141428', color:'#9aa6d8', cursor:'pointer', fontSize:'0.72rem', fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }
 const topBtnStyle = { padding:'0.3rem 0.8rem', borderRadius:6, border:'1px solid #2d3a6a', background:'rgba(18,18,42,0.92)', color:'#7b8fcc', cursor:'pointer', fontSize:'0.78rem', fontWeight:600, backdropFilter:'blur(4px)' }
