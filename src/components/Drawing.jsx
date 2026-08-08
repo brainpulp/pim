@@ -135,10 +135,19 @@ export function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate,
   )
 }
 
-// Complete emoji set — generated from the main Unicode emoji blocks (not a curated subset).
-const EMOJI_RANGES = [[0x1F300, 0x1F5FF], [0x1F600, 0x1F64F], [0x1F680, 0x1F6FC], [0x1F900, 0x1F9FF], [0x1FA70, 0x1FAF8], [0x2600, 0x26FF], [0x2700, 0x27BF]]
-const EMOJIS = []
-for (const [a, b] of EMOJI_RANGES) { for (let c = a; c <= b; c++) EMOJIS.push(String.fromCodePoint(c)) }
+// Comprehensive emoji set (every real category, no unassigned "tofu" boxes). Shared with the Graph palette.
+const EMOJI_STR = ('😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😌😍🥰😘😗😙😚😋😛😝😜🤪🤨🧐🤓😎🥸🤩🥳😏😒😞😔😟😕🙁☹️😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🤗🤔🤭🤫🤥😶😐😑😬🙄😯😦😧😮😲🥱😴🤤😪😵🤐🥴🤢🤮🤧😷🤒🤕🤑🤠😈👿👹👺🤡💩👻💀☠️👽👾🤖🎃😺😸😹😻😼😽🙀😿😾'
+  +'👍👎👌🤌🤏✌️🤞🤟🤘🤙👈👉👆👇☝️✋🤚🖐️🖖👋🤝🙏✍️💪🦾👏🙌👐🤲🤜🤛✊👊'
+  +'🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🐔🐧🐦🐤🦆🦅🦉🦇🐺🐗🐴🦄🐝🐛🦋🐌🐞🐜🐢🐍🦎🐙🦑🦐🦀🐡🐠🐟🐬🐳🐋🦈🐊🐅🐆🦓🦍🐘🦏🐪🐫🦒🦔🐾🐉🐲'
+  +'🌵🎄🌲🌳🌴🌱🌿☘️🍀🎍🎋🍃🍂🍁🌾🌺🌻🌹🥀🌷🌼🌸💐🍄🌰🎃🌍🌎🌏🌕🌙⭐🌟✨⚡☄️💥🔥🌈☀️⛅☁️🌧️⛈️🌩️🌨️❄️☃️⛄💧🌊'
+  +'🍏🍎🍐🍊🍋🍌🍉🍇🍓🫐🍈🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🥬🥒🌶️🌽🥕🧄🧅🥔🍠🥐🍞🥖🥨🧀🥚🍳🥞🧇🥓🥩🍗🍖🌭🍔🍟🍕🥪🌮🌯🥗🍜🍲🍣🍱🍛🍚🍙🎂🍰🧁🍦🍩🍪🍫🍬🍭🍮☕🍵🍺🍷🍸🍹🥂'
+  +'⚽🏀🏈⚾🥎🎾🏐🏉🥏🎱🏓🏸🥅🏒🏑🥍🏏⛳🎯🎣🥊🥋🎽🛹🛼🎿⛷️🏂🏋️🤸🤺🤾🏌️🏇🧘🏄🏊🚴🚵🎖️🏆🥇🥈🥉🏅🎗️🎫🎟️🎪🎭🎨🎬🎤🎧🎼🎹🥁🎷🎺🎸🎻🎲♟️🎯🎳🎮🕹️'
+  +'🚗🚕🚙🚌🚎🏎️🚓🚑🚒🚐🚚🚛🚜🛴🚲🛵🏍️✈️🚀🛸🚁⛵🚤🛳️⚓🚦🚥🗺️🗿🗽🗼🏰🏯🎡🎢🎠⛲⛱️🏖️🏝️🏔️⛰️🌋🏕️⛺🏠🏡🏢🏬🏣🏤🏥🏦🏨🏩💒'
+  +'⌚📱💻⌨️🖥️🖨️🖱️💽💾💿📷📸📹🎥📽️📞☎️📟📠📺📻🧭⏱️⏰⏳⌛🔋🔌💡🔦🕯️🧯🛢️💸💵💴💶💷💰💳💎⚖️🧰🔧🔨⚒️🛠️⛏️🔩⚙️🧱⛓️🧲🔫💣🔪🗡️⚔️🛡️🚬⚰️⚱️🏺🔮📿🧿💈🔭🔬💊💉🩹🩺🚽🚿🛁🧴🧷🧹🧺🧻🧼🧽🔑🗝️🚪🛋️🛏️🖼️🛒🎁🎈🎏🎀🎊🎉🎎🏮🎐📮📫📪📬📭📦📯📜📃📄📑📊📈📉🗒️🗓️📆📅📇🗃️🗳️🗄️📋📁📂🗂️🗞️📰📓📔📒📕📗📘📙📚📖🔖🧷📎🖇️📐📏🧮📌📍✂️🖊️🖋️✒️🖌️🖍️📝✏️🔍🔎🔏🔐🔒🔓'
+  +'❤️🧡💛💚💙💜🖤🤍🤎💔❣️💕💞💓💗💖💘💝💟☮️✝️☪️🕉️☸️✡️🔯🕎☯️☦️🛐⛎♈♉♊♋♌♍♎♏♐♑♒♓⚛️🉑☢️☣️✴️🆚💮🉐㊙️㊗️🈴🈵🈹🈲🅰️🅱️🆎🆑🅾️🆘❌⭕🛑⛔📛🚫💯💢♨️🚷🚯🚳🚱🔞📵🚭❗❕❓❔‼️⁉️〽️⚠️🚸🔱⚜️🔰♻️✅🈯💹❇️✳️❎🌐💠Ⓜ️🌀💤🏧🚾♿🅿️🈳🈂️🛂🛃🛄🛅🚹🚺🚼🚻🚮🎦📶🈁🔣ℹ️🔤🔡🔠🆖🆗🆙🆒🆕🆓🔟🔢▶️⏸️⏯️⏹️⏺️⏭️⏮️⏩⏪⏫⏬◀️🔼🔽➡️⬅️⬆️⬇️↗️↘️↙️↖️↕️↔️↪️↩️⤴️⤵️🔀🔁🔂🔄🔃🎵🎶➕➖➗✖️♾️💲💱™️©️®️〰️➰➿🔚🔙🔛🔝🔜✔️☑️🔘⚪⚫🔴🟠🟡🟢🔵🟣🟤🔺🔻🔸🔹🔶🔷🔳🔲▪️▫️◾◽◼️◻️🟥🟧🟨🟩🟦🟪🟫⬛⬜🔈🔇🔉🔊🔔🔕📣📢💬💭🗯️♠️♣️♥️♦️🃏🎴🀄⏰⭐✨')
+export const EMOJIS = (typeof Intl !== 'undefined' && Intl.Segmenter)
+  ? [...new Intl.Segmenter().segment(EMOJI_STR)].map(s => s.segment).filter(s => s.trim())
+  : Array.from(EMOJI_STR)
 
 export function DrawPalette({ palette, onStartDrag, onClose }) {
   const swatch = { display:'flex', flexWrap:'wrap', gap:5 }

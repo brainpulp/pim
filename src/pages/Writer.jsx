@@ -116,6 +116,7 @@ export default function Writer({ projectName, embedded = false }) {
   const removeNodeField = useGraphStore(s => s.removeNodeField)
   const selectedNodeId = useGraphStore(s => s.selectedNodeId)
   const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
+  const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
 
   const nodeProps = useMemo(() => (views.find(v => v.id === activeViewId)?.nodeProps) || {}, [views, activeViewId])
   // Mirror the graph's drill-in state: when the canvas is drilled into a node, the outline re-roots there too.
@@ -641,15 +642,30 @@ export default function Writer({ projectName, embedded = false }) {
             return (
               <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
-                  {/* collapse triangle — prominent (2× size, bold, high contrast) */}
-                  <span onClick={() => r.hasChildren && !flatMode && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
-                    style={{ width: 18, textAlign: 'center', cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1, userSelect: 'none', paddingTop: 3, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
-                    {collapsed.has(r.id) ? '▸' : '▾'}
-                  </span>
-                  {/* task checkbox OR bullet (bullet = click to zoom-into-item) — prominent */}
-                  {isTask
-                    ? <input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ marginTop: 6, width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer', flexShrink: 0 }} />
-                    : <span title="Zoom in" onClick={() => setFocusRoot(r.id)} style={{ width: 18, textAlign: 'center', color: bulletC, fontSize: 26, fontWeight: 700, lineHeight: 1, paddingTop: 1, userSelect: 'none', cursor: 'pointer', flexShrink: 0 }}>•</span>}
+                  {/* nav controls — chevron, target (zoom-in), eye (show/hide), all boxed to the first
+                      text line so they stay vertically aligned with the label and with each other. */}
+                  {(() => {
+                    const lineH = Math.round(hSize * 1.25)
+                    const ctl = { width: 18, height: lineH, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, userSelect: 'none' }
+                    const hidden = nodeProps[r.id]?.visible === false
+                    return (<>
+                      <span onClick={() => r.hasChildren && !flatMode && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
+                        style={{ ...ctl, cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
+                        {collapsed.has(r.id) ? '▸' : '▾'}
+                      </span>
+                      {isTask
+                        ? <span style={ctl}><input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} /></span>
+                        : <span title="Zoom into item" onClick={() => setFocusRoot(r.id)} style={{ ...ctl, color: bulletC, cursor: 'pointer' }}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></svg>
+                          </span>}
+                      <span title={hidden ? 'Show in this view' : 'Hide in this view'} onClick={() => setNodeViewProp(r.id, 'visible', hidden)}
+                        style={{ ...ctl, color: hidden ? faint : bulletC, cursor: 'pointer' }}>
+                        {hidden
+                          ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
+                          : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>}
+                      </span>
+                    </>)
+                  })()}
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: 15, lineHeight: '26px', flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <input ref={el => { if (el) inputs.current[r.id] = el }} value={n.label || ''}
