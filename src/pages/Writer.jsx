@@ -118,6 +118,8 @@ export default function Writer({ projectName, embedded = false }) {
   const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
 
   const nodeProps = useMemo(() => (views.find(v => v.id === activeViewId)?.nodeProps) || {}, [views, activeViewId])
+  // Mirror the graph's drill-in state: when the canvas is drilled into a node, the outline re-roots there too.
+  const drillRoot = useMemo(() => (views.find(v => v.id === activeViewId)?.drillRoot) || null, [views, activeViewId])
   const byId = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes])
   const childrenOf = useMemo(() => { const m = {}; edges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [edges])
   const parentOf = useMemo(() => { const m = {}; edges.forEach(e => { m[e.target] = e.source }); return m }, [edges])
@@ -202,16 +204,18 @@ export default function Writer({ projectName, embedded = false }) {
       out.push({ id, depth, parentId: parentOf[id] || null, hasChildren: kids.length > 0 })
       if (!collapsed.has(id)) kids.forEach(k => walk(k, depth + 1))
     }
-    const startIds = focusRoot ? (childrenOf[focusRoot] || []) : roots
+    // Scope = the outline's own zoom (focusRoot) OR, failing that, the graph's drill-in node (drillRoot).
+    const scopeRoot = focusRoot || drillRoot
+    const startIds = scopeRoot ? (childrenOf[scopeRoot] || []) : roots
     // Full reachability from the start roots, IGNORING collapse. The orphan fallback below must not
     // re-list a collapsed node's hidden children at root level — only genuinely unreachable nodes.
     const reachable = new Set()
     const mark = (id) => { if (reachable.has(id) || !byId[id] || isFrame(id)) return; reachable.add(id); (childrenOf[id] || []).forEach(mark) }
     startIds.forEach(mark)
     startIds.forEach(r => walk(r, 0))
-    if (!focusRoot) nodes.forEach(n => { if (!seen.has(n.id) && !reachable.has(n.id) && !isFrame(n.id)) walk(n.id, 0) })
+    if (!scopeRoot) nodes.forEach(n => { if (!seen.has(n.id) && !reachable.has(n.id) && !isFrame(n.id)) walk(n.id, 0) })
     return out
-  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q, nodeProps, frameIds])
+  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, drillRoot, searchLC, flatMode, qActive, q, nodeProps, frameIds])
 
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
   // Frames are kept out of the edge-driven tree above; they get their own grouped section.
