@@ -181,7 +181,14 @@ export default function Writer({ projectName, embedded = false }) {
   // `containedIn` prop, not via edges. The outline is edge-driven, so a frame has no parent
   // and would surface as its own root row next to the node it visually wraps — reading as a
   // duplicate. Keep them out of the outline entirely.
-  const isFrame = (id) => nodeProps[id]?.shape === 'frame'
+  // A node is a canvas frame if it's shaped as a frame in ANY view (shape is per-view, so a frame in
+  // view A but undefined in the active view B would otherwise slip back into the outline as a duplicate).
+  const frameIds = useMemo(() => {
+    const s = new Set()
+    for (const v of (views || [])) for (const [id, p] of Object.entries(v?.nodeProps || {})) if (p?.shape === 'frame') s.add(id)
+    return s
+  }, [views])
+  const isFrame = (id) => frameIds.has(id)
   const rows = useMemo(() => {
     if (flatMode) {
       const hit = n => !searchLC || (n.label || '').toLowerCase().includes(searchLC) || ((n.meta?.tags) || []).some(t => t.toLowerCase().includes(searchLC)) || ((n.meta?.people) || []).some(t => t.toLowerCase().includes(searchLC))
@@ -199,11 +206,11 @@ export default function Writer({ projectName, embedded = false }) {
     startIds.forEach(r => walk(r, 0))
     if (!focusRoot) nodes.forEach(n => { if (!seen.has(n.id)) walk(n.id, 0) })
     return out
-  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q, nodeProps])
+  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q, nodeProps, frameIds])
 
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
   // Frames are kept out of the edge-driven tree above; they get their own grouped section.
-  const frameNodes = useMemo(() => nodes.filter(n => isFrame(n.id)), [nodes, nodeProps])
+  const frameNodes = useMemo(() => nodes.filter(n => isFrame(n.id)), [nodes, frameIds])
 
   useEffect(() => {
     if (pendingFocus.current && inputs.current[pendingFocus.current]) {
