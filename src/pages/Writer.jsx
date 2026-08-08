@@ -146,6 +146,9 @@ export default function Writer({ projectName, embedded = false }) {
   const [showHelp, setShowHelp] = useState(false)                   // markdown cheatsheet
   const [showColorMenu, setShowColorMenu] = useState(false)
   const wrapRef = useRef(null)
+  // User-adjustable base font size for the outline (persisted). Headings scale up from it.
+  const [fontPx, setFontPx] = useState(() => { try { return Math.max(11, Math.min(24, +localStorage.getItem('pim_writer_font') || 15)) } catch { return 15 } })
+  useEffect(() => { try { localStorage.setItem('pim_writer_font', String(fontPx)) } catch { /* ignore */ } }, [fontPx])
   const [isFull, setIsFull] = useState(false)
   const toggleFull = () => {
     const el = wrapRef.current; if (!el) return
@@ -500,6 +503,12 @@ export default function Writer({ projectName, embedded = false }) {
           style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 8, padding: '6px 10px', fontSize: 13, fontFamily: '-apple-system, sans-serif', outline: 'none', width: 130 }} />
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 3 }}>
           <span style={{ fontSize: 11.5, color: faint, marginRight: 4 }}>{taskStats.t > 0 && `${taskStats.d}/${taskStats.t} · `}{nodes.length} items</span>
+          {/* Font-size changer */}
+          <div title="Text size" style={{ display: 'inline-flex', alignItems: 'center', gap: 1, marginRight: 4, border: `1px solid ${line}`, borderRadius: 7, padding: '1px 2px' }}>
+            <button className="pim-wtb" onClick={() => setFontPx(p => Math.max(11, p - 1))} style={{ ...tb(false), width: 22, justifyContent: 'center', fontSize: 12 }}>A−</button>
+            <span style={{ fontSize: 11, color: faint, minWidth: 16, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{fontPx}</span>
+            <button className="pim-wtb" onClick={() => setFontPx(p => Math.min(24, p + 1))} style={{ ...tb(false), width: 22, justifyContent: 'center', fontSize: 15 }}>A+</button>
+          </div>
           <button className="pim-wtb" title="Markdown shortcuts (help)" onClick={() => setShowHelp(true)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>?</button>
           <button className="pim-wtb" title="Export to Markdown" onClick={exportMd} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⬇︎</button>
           <button className="pim-wtb" title="Keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⌨</button>
@@ -621,10 +630,10 @@ export default function Writer({ projectName, embedded = false }) {
             const showDetails = expanded.has(r.id)
             const isTask = m.itemType === 'task'
             const done = isTask && m.done
-            const hSize = m.heading === 1 ? 24 : m.heading === 2 ? 19 : 17
+            const hSize = m.heading === 1 ? fontPx + 8 : m.heading === 2 ? fontPx + 3 : fontPx
             const hWeight = m.heading ? 700 : (ws.bold ? 700 : 400)
             const textStyle = {
-              flex: 1, minWidth: 120, border: 'none', outline: 'none', background: 'transparent', fontSize: hSize, lineHeight: 1.35,
+              flex: 1, minWidth: 120, border: 'none', outline: 'none', background: 'transparent', fontSize: hSize, lineHeight: 1.25,
               fontFamily: 'inherit', color: done ? faint : (ws.metallic ? 'transparent' : (ws.color || fg)),
               fontWeight: hWeight, fontStyle: ws.italic ? 'italic' : 'normal', textDecoration: done ? 'line-through' : 'none',
               ...(ws.metallic && !done ? { background: 'linear-gradient(92deg,#b8b8b8,#f5f5f5 30%,#9a9a9a 55%,#e8e8e8 80%,#8f8f8f)', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' } : {}),
