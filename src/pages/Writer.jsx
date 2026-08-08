@@ -203,8 +203,13 @@ export default function Writer({ projectName, embedded = false }) {
       if (!collapsed.has(id)) kids.forEach(k => walk(k, depth + 1))
     }
     const startIds = focusRoot ? (childrenOf[focusRoot] || []) : roots
+    // Full reachability from the start roots, IGNORING collapse. The orphan fallback below must not
+    // re-list a collapsed node's hidden children at root level — only genuinely unreachable nodes.
+    const reachable = new Set()
+    const mark = (id) => { if (reachable.has(id) || !byId[id] || isFrame(id)) return; reachable.add(id); (childrenOf[id] || []).forEach(mark) }
+    startIds.forEach(mark)
     startIds.forEach(r => walk(r, 0))
-    if (!focusRoot) nodes.forEach(n => { if (!seen.has(n.id)) walk(n.id, 0) })
+    if (!focusRoot) nodes.forEach(n => { if (!seen.has(n.id) && !reachable.has(n.id) && !isFrame(n.id)) walk(n.id, 0) })
     return out
   }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, searchLC, flatMode, qActive, q, nodeProps, frameIds])
 
