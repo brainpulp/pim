@@ -147,9 +147,11 @@ export default function Writer({ projectName, embedded = false }) {
   const [showHelp, setShowHelp] = useState(false)                   // markdown cheatsheet
   const [showColorMenu, setShowColorMenu] = useState(false)
   const wrapRef = useRef(null)
-  // User-adjustable base font size for the outline (persisted). Headings scale up from it.
-  const [fontPx, setFontPx] = useState(() => { try { return Math.max(11, Math.min(24, +localStorage.getItem('pim_writer_font') || 15)) } catch { return 15 } })
-  useEffect(() => { try { localStorage.setItem('pim_writer_font', String(fontPx)) } catch { /* ignore */ } }, [fontPx])
+  // User-adjustable base font size for the outline (persisted). Headings scale up from it. The docked
+  // (embedded) panel keeps its own smaller size, remembered separately so it survives toggling.
+  const FONT_KEY = embedded ? 'pim_writer_font_dock' : 'pim_writer_font'
+  const [fontPx, setFontPx] = useState(() => { try { return Math.max(11, Math.min(24, +localStorage.getItem(FONT_KEY) || (embedded ? 13 : 15))) } catch { return embedded ? 13 : 15 } })
+  useEffect(() => { try { localStorage.setItem(FONT_KEY, String(fontPx)) } catch { /* ignore */ } }, [fontPx, FONT_KEY])
   const [isFull, setIsFull] = useState(false)
   const toggleFull = () => {
     const el = wrapRef.current; if (!el) return
@@ -460,7 +462,7 @@ export default function Writer({ projectName, embedded = false }) {
   return (
     <div ref={wrapRef} style={{ height: '100%', background: bg, color: fg, display: 'flex', flexDirection: 'column', fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif' }}>
       {/* Toolbar — clean, grouped, ghost buttons */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '7px 14px', borderBottom: `1px solid ${line}`, flexShrink: 0, fontFamily: '-apple-system, sans-serif' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, rowGap: 4, flexWrap: 'wrap', padding: '7px 14px', borderBottom: `1px solid ${line}`, flexShrink: 0, fontFamily: '-apple-system, sans-serif' }}>
         <button className="pim-wtb" onClick={addRoot} title="New item" style={{ ...tb(false), color: '#5b6af0', fontWeight: 600 }}>＋ New</button>
         {divider}
         {/* format */}
@@ -648,29 +650,32 @@ export default function Writer({ projectName, embedded = false }) {
             }
             return (
               <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
-                  {/* nav controls — chevron, target (zoom-in), eye (show/hide), all boxed to the first
-                      text line so they stay vertically aligned with the label and with each other. */}
+                <div className="wr-row" style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
+                  {/* Normally only the chevron shows. On row hover, eye / target / delete appear to its LEFT.
+                      All boxed to the first text-line height so they align vertically with the label. */}
                   {(() => {
                     const lineH = Math.round(hSize * 1.25)
-                    const ctl = { width: 18, height: lineH, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, userSelect: 'none' }
+                    const ctl = { width: 16, height: lineH, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, userSelect: 'none', cursor: 'pointer' }
                     const hidden = nodeProps[r.id]?.visible === false
                     return (<>
+                      <span className="wr-hov" style={{ alignItems: 'center', gap: 1 }}>
+                        <span title={hidden ? 'Show in this view' : 'Hide in this view'} onClick={() => setNodeViewProp(r.id, 'visible', hidden)} style={{ ...ctl, color: hidden ? faint : bulletC }}>
+                          {hidden
+                            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
+                            : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>}
+                        </span>
+                        <span title="Zoom into item" onClick={() => setFocusRoot(r.id)} style={{ ...ctl, color: bulletC }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></svg>
+                        </span>
+                        <span title="Delete item" onClick={() => deleteNode(r.id)} style={{ ...ctl, color: '#e0687e' }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                        </span>
+                      </span>
                       <span onClick={() => r.hasChildren && !flatMode && toggleCollapse(r.id)} title={r.hasChildren ? 'Collapse / expand' : ''}
-                        style={{ ...ctl, cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
+                        style={{ width: 18, height: lineH, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, userSelect: 'none', cursor: r.hasChildren && !flatMode ? 'pointer' : 'default', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1, visibility: r.hasChildren && !flatMode ? 'visible' : 'hidden' }}>
                         {collapsed.has(r.id) ? '▸' : '▾'}
                       </span>
-                      {isTask
-                        ? <span style={ctl}><input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} /></span>
-                        : <span title="Zoom into item" onClick={() => setFocusRoot(r.id)} style={{ ...ctl, color: bulletC, cursor: 'pointer' }}>
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></svg>
-                          </span>}
-                      <span title={hidden ? 'Show in this view' : 'Hide in this view'} onClick={() => setNodeViewProp(r.id, 'visible', hidden)}
-                        style={{ ...ctl, color: hidden ? faint : bulletC, cursor: 'pointer' }}>
-                        {hidden
-                          ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
-                          : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>}
-                      </span>
+                      {isTask && <span style={{ ...ctl, width: 18 }}><input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} /></span>}
                     </>)
                   })()}
                   {/* inline emojis */}

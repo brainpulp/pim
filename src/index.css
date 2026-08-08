@@ -46,6 +46,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .pim-seg > button:hover { color: #c7cdec; }
 .pim-seg > button.pim-on { background: #282c4a; color: #eef1ff; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 
+/* Writer outline row — hover-revealed controls (eye/target/delete) left of the chevron */
+.wr-hov { display: none; }
+.wr-row:hover .wr-hov { display: inline-flex; }
+
 /* Writer toolbar ghost buttons */
 .pim-wtb { transition: background .12s ease, color .12s ease; }
 .pim-wtb:hover { background: rgba(120,130,200,0.14); }
