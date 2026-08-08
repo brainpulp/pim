@@ -521,6 +521,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [selectedDrawingId, setSelectedDrawingId] = useState(null)
   const [dragDraw, setDragDraw] = useState(null)                // { kind, defaults, ghost:{x,y} } while dragging from palette
   const [hideFrameOutlines, setHideFrameOutlines] = useState(false)
+  const [showViews, setShowViews] = useState(() => { try { return localStorage.getItem('pim_show_views') !== '0' } catch { return true } })
+  useEffect(() => { try { localStorage.setItem('pim_show_views', showViews ? '1' : '0') } catch { /* ignore */ } }, [showViews])
   // Auto-hide frame outlines after zooming to a frame (thumbnail click), until the next real pan/zoom.
   const [autoHideFrames, setAutoHideFrames] = useState(false)
   const prevFrameCountRef = useRef(0)
@@ -2791,8 +2793,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {!isPresenting && !readOnly && (<>
       <div onMouseDown={() => { canvasFocused.current = false }}
         style={{ width: 0, flexShrink: 0, overflow: 'visible', position: 'relative', zIndex: 15 }}>
-        {/* No fixed sidebar — Views and the tool dock are floating palettes over the canvas. */}
-        <div className="pim-palette" style={{ position:'absolute', left:12, top:150, width:174, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)', overflow:'hidden' }}>
+        {/* No fixed sidebar — Views is a floating, hideable palette over the canvas. */}
+        {showViews && <div className="pim-palette" style={{ position:'absolute', left:12, top:150, width:174, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)', overflow:'hidden' }}>
           <div title="Drag palette" onPointerDown={e => {
               if (e.button !== 0) return
               const panel = e.currentTarget.parentElement
@@ -2806,9 +2808,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }}
             style={{ display:'flex', alignItems:'center', gap:6, height:24, padding:'0 9px', cursor:'grab', userSelect:'none', borderBottom:'1px solid #1e2236', color:'#9aa4cc', fontSize:'0.66rem', fontWeight:700, letterSpacing:'.09em', textTransform:'uppercase' }}>
             <span style={{ color:'#5a6390', letterSpacing:2, fontSize:9 }}>⋮⋮</span> Views
+            <span onPointerDown={e => { e.stopPropagation(); setShowViews(false) }} title="Hide Views panel" style={{ marginLeft:'auto', cursor:'pointer', fontSize:13, color:'#8a92b4', padding:'0 2px' }}>×</span>
           </div>
           <div style={{ maxHeight:260, overflowY:'auto' }}><ViewManager /></div>
-        </div>
+        </div>}
         {/* Tool dock removed — its actions live in the canvas right-click menu (Fit/Free/Export/Flowchart/Frames/BG/Add). */}
         {false && <div className="pim-tooldock" style={{ position:'absolute', left:12, top:12, zIndex:14, width:152, padding:6, display:'flex', flexDirection:'column', gap:5, background:'rgba(16,18,29,.92)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', border:'1px solid #2a2f47', borderRadius:8, boxShadow:'0 16px 44px rgba(0,0,0,.55)' }}>
           <div title="Drag dock" onPointerDown={e => {
@@ -3295,6 +3298,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('🗂️', 'New view', () => { pushUndo(); addView(); close() })}
                     {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
                     {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
+                    {item('🗂️', showViews ? 'Hide Views panel' : 'Show Views panel', () => { setShowViews(v => !v); close() })}
                     {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
                     {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
