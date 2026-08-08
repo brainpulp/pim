@@ -24,7 +24,7 @@ const SHORTCUT_ACTIONS = [
   { id: 'expand', label: 'Expand' }, { id: 'deleteItem', label: 'Delete empty item' },
 ]
 const DEFAULT_KEYS = {
-  newItem: 'Enter', indent: 'Tab', outdent: 'Shift+Tab', moveUp: 'Alt+ArrowUp',
+  newItem: 'Mod+Enter', indent: 'Tab', outdent: 'Shift+Tab', moveUp: 'Alt+ArrowUp',
   moveDown: 'Alt+ArrowDown', collapse: 'Mod+ArrowUp', expand: 'Mod+ArrowDown', deleteItem: 'Backspace',
 }
 function comboFromEvent(e) {
@@ -128,7 +128,7 @@ export default function Writer({ projectName, embedded = false }) {
 
   const [dark, setDark] = useState(() => { try { return localStorage.getItem('pim_writer_dark') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('pim_writer_dark', dark ? '1' : '0') } catch { /* ignore */ } }, [dark])
-  const [keymap, setKeymap] = useState(() => { try { return { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem('pim_writer_keys') || '{}') } } catch { return { ...DEFAULT_KEYS } } })
+  const [keymap, setKeymap] = useState(() => { try { const m = { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem('pim_writer_keys') || '{}') }; if (m.newItem === 'Enter') m.newItem = 'Mod+Enter'; return m } catch { return { ...DEFAULT_KEYS } } })
   useEffect(() => { try { localStorage.setItem('pim_writer_keys', JSON.stringify(keymap)) } catch { /* ignore */ } }, [keymap])
   const keymapRef = useRef(keymap); useEffect(() => { keymapRef.current = keymap }, [keymap])
   const [showKeys, setShowKeys] = useState(false)
@@ -320,6 +320,12 @@ export default function Writer({ projectName, embedded = false }) {
   }
   const onKey = (e, id) => {
     const el = e.currentTarget
+    // Enter rules: plain Enter = inert (no new item, no newline); Shift+Enter = line break;
+    // Ctrl/Cmd+Enter = new item (handled by the keymap below, bound to Mod+Enter).
+    if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+      if (e.shiftKey) return          // let the textarea insert a soft line break
+      e.preventDefault(); return      // plain Enter does nothing
+    }
     const combo = comboFromEvent(e)
     if (combo) {
       const km = keymapRef.current
@@ -635,6 +641,7 @@ export default function Writer({ projectName, embedded = false }) {
             const hWeight = m.heading ? 700 : (ws.bold ? 700 : 400)
             const textStyle = {
               flex: 1, minWidth: 120, border: 'none', outline: 'none', background: 'transparent', fontSize: hSize, lineHeight: 1.25,
+              resize: 'none', overflow: 'hidden', padding: 0, margin: 0, display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
               fontFamily: 'inherit', color: done ? faint : (ws.metallic ? 'transparent' : (ws.color || fg)),
               fontWeight: hWeight, fontStyle: ws.italic ? 'italic' : 'normal', textDecoration: done ? 'line-through' : 'none',
               ...(ws.metallic && !done ? { background: 'linear-gradient(92deg,#b8b8b8,#f5f5f5 30%,#9a9a9a 55%,#e8e8e8 80%,#8f8f8f)', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' } : {}),
@@ -668,8 +675,8 @@ export default function Writer({ projectName, embedded = false }) {
                   })()}
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: 15, lineHeight: '26px', flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
-                  <input ref={el => { if (el) inputs.current[r.id] = el }} value={n.label || ''}
-                    onChange={e => onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target)} onFocus={() => selectRow(r.id)}
+                  <textarea ref={el => { if (el) { inputs.current[r.id] = el; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }} value={n.label || ''} rows={1}
+                    onChange={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target) }} onFocus={() => selectRow(r.id)}
                     onKeyDown={e => onKey(e, r.id)} placeholder="" spellCheck={true} style={textStyle} />
                   {/* chips */}
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', paddingTop: 4 }}>{metaChips(r.id, m)}</span>
@@ -725,7 +732,7 @@ export default function Writer({ projectName, embedded = false }) {
       {/* Markdown help cheatsheet */}
       {showHelp && (() => {
         const groups = [
-          ['Structure', [['Enter', 'new line'], ['Tab / Shift+Tab', 'indent / outdent'], ['# ', 'heading'], ['## ', 'subheading']]],
+          ['Structure', [['⌘/Ctrl+Enter', 'new item'], ['Shift+Enter', 'line break'], ['Tab / Shift+Tab', 'indent / outdent'], ['# ', 'heading'], ['## ', 'subheading']]],
           ['Make it a record', [['/task', 'task (checkbox)'], ['[] / [x]', 'task / done'], ['/note /idea /question /event', 'item type']]],
           ['Tag & schedule', [['#tag', 'tag chip'], ['@person', 'person'], ['!high / !urgent / !med / !low', 'priority'], ['due:tomorrow · due:2026-08-15 · due:fri', 'date']]],
           ['Fields & links', [['status:doing · cost:50 (key:value)', 'custom field'], ['[[Another item]]', 'link / relation']]],
