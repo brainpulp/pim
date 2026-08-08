@@ -96,7 +96,7 @@ function consumeTokenAt(value, caret) {
   return { text, caret: cpos, act }
 }
 
-export default function Writer({ projectName, embedded = false }) {
+export default function Writer({ projectName, embedded = false, onExpand }) {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
   const views = useGraphStore(s => s.views)
@@ -482,15 +482,8 @@ export default function Writer({ projectName, embedded = false }) {
           </>)}
         </div>
         {divider}
-        {/* view switcher */}
-        <div style={segWrap}>
-          <button style={segItem(mode === 'outline')} onClick={() => setMode('outline')}>☰ Outline</button>
-          <button style={segItem(mode === 'table')} onClick={() => setMode('table')}>▦ Table</button>
-          <button style={segItem(mode === 'agenda')} onClick={() => setMode('agenda')}>🗓 Agenda</button>
-        </div>
         <button className="pim-wtb" title="Fold all" onClick={foldAll} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⊟</button>
         <button className="pim-wtb" title="Expand all" onClick={expandAll} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⊞</button>
-        <button className="pim-wtb" title="Filter" onClick={() => setShowQuery(v => !v)} style={tb(showQuery || qActive)}>⌗ Filter{qActive ? ' •' : ''}</button>
         <div style={{ position: 'relative' }}>
           <button className="pim-wtb" title="Templates" onClick={() => setShowTpl(v => !v)} style={tb(showTpl)}>⧉</button>
           {showTpl && (<>
@@ -508,8 +501,6 @@ export default function Writer({ projectName, embedded = false }) {
             </div>
           </>)}
         </div>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
-          style={{ background: dark ? '#141821' : '#f4f6fb', border: `1px solid ${line}`, color: fg, borderRadius: 8, padding: '6px 10px', fontSize: 13, fontFamily: '-apple-system, sans-serif', outline: 'none', width: 130 }} />
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 3 }}>
           <span style={{ fontSize: 11.5, color: faint, marginRight: 4 }}>{taskStats.t > 0 && `${taskStats.d}/${taskStats.t} · `}{nodes.length} items</span>
           {/* Font-size changer */}
@@ -519,9 +510,8 @@ export default function Writer({ projectName, embedded = false }) {
             <button className="pim-wtb" onClick={() => setFontPx(p => Math.min(24, p + 1))} style={{ ...tb(false), width: 22, justifyContent: 'center', fontSize: 15 }}>A+</button>
           </div>
           <button className="pim-wtb" title="Markdown shortcuts (help)" onClick={() => setShowHelp(true)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>?</button>
-          <button className="pim-wtb" title="Export to Markdown" onClick={exportMd} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⬇︎</button>
           <button className="pim-wtb" title="Keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⌨</button>
-          <button className="pim-wtb" title={isFull ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFull} style={{ ...tb(isFull), width: 30, justifyContent: 'center' }}>{isFull ? '⤢' : '⛶'}</button>
+          {embedded && <button className="pim-wtb" title="Open full screen (Write tab)" onClick={() => onExpand && onExpand()} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⛶</button>}
           <button className="pim-wtb" title="Light / dark" onClick={() => setDark(d => !d)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{dark ? '☀️' : '🌙'}</button>
         </div>
       </div>
@@ -649,8 +639,8 @@ export default function Writer({ projectName, embedded = false }) {
               ...(ws.metallic && !done ? { background: 'linear-gradient(92deg,#b8b8b8,#f5f5f5 30%,#9a9a9a 55%,#e8e8e8 80%,#8f8f8f)', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' } : {}),
             }
             return (
-              <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) }}>
-                <div className="wr-row" style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
+              <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) + 46 }}>
+                <div className="wr-row" style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
                   {/* Normally only the chevron shows. On row hover, eye / target / delete appear to its LEFT.
                       All boxed to the first text-line height so they align vertically with the label. */}
                   {(() => {
@@ -658,7 +648,7 @@ export default function Writer({ projectName, embedded = false }) {
                     const ctl = { width: 16, height: lineH, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, userSelect: 'none', cursor: 'pointer' }
                     const hidden = nodeProps[r.id]?.visible === false
                     return (<>
-                      <span className="wr-hov" style={{ alignItems: 'center', gap: 1 }}>
+                      <span className="wr-hov" style={{ position: 'absolute', right: '100%', top: 0, marginRight: 2, alignItems: 'center', gap: 1 }}>
                         <span title={hidden ? 'Show in this view' : 'Hide in this view'} onClick={() => setNodeViewProp(r.id, 'visible', hidden)} style={{ ...ctl, color: hidden ? faint : bulletC }}>
                           {hidden
                             ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
@@ -679,7 +669,7 @@ export default function Writer({ projectName, embedded = false }) {
                     </>)
                   })()}
                   {/* inline emojis */}
-                  {emojis.map((em, i) => <span key={i} style={{ fontSize: 15, lineHeight: '26px', flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
+                  {emojis.map((em, i) => <span key={i} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <textarea ref={el => { if (el) { inputs.current[r.id] = el; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }} value={n.label || ''} rows={1}
                     onChange={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target) }} onFocus={() => selectRow(r.id)}
                     onKeyDown={e => onKey(e, r.id)} placeholder="" spellCheck={true} style={textStyle} />

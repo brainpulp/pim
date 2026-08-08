@@ -294,7 +294,7 @@ export default function App() {
         {outlineDock && (view === 'board' || view === 'graph') && (
           <>
             <div style={{ width: outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
-              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded /></AppErrorBoundary>
+              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded onExpand={() => { setOutlineDock(false); setView('write') }} /></AppErrorBoundary>
             </div>
             <div onMouseDown={startDockResize} title="Drag to resize"
               style={{ width: 6, flexShrink: 0, cursor: 'col-resize', background: '#15151f', borderRight: '1px solid #24243a' }} />
