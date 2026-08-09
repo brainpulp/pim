@@ -2292,16 +2292,50 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [scheduleRender])
 
+  // Frame a node together with ONE generation of its children (outliner → graph camera sync).
+  //  • Normal case (children visible on the canvas): fit the node + its direct children to the screen.
+  //  • Node collapsed in the graph (children folded away): no visible children, so we frame the node alone.
+  //  • Node not itself rendered (e.g. it's the drill root, folded into a breadcrumb): frame its visible
+  //    children instead — this is the "outliner item expanded but graph item collapsed" fallback.
+  const focusNodeAndChildren = useCallback((nodeId) => {
+    if (!svgRef.current || !zoomBehaviorRef.current) return
+    const byId = new Map(simNodesRef.current.map(n => [n.id, n]))
+    const childIds = storeEdges.filter(e => e.source === nodeId).map(e => e.target)
+    const selfNode = byId.get(nodeId)
+    const childNodes = childIds.map(id => byId.get(id)).filter(Boolean)   // only children actually on the canvas
+    const targets = [selfNode, ...childNodes].filter(Boolean)
+    if (!targets.length) { focusNode(nodeId); return }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const t of targets) {
+      const vp = { ...DEFAULT_NODE_PROPS, ...(viewNodePropsRef.current[t.id] || {}) }
+      const r = NODE_R * (vp.scale || 1)
+      const { halfW: dHW, halfH: dHH } = shapeDims(vp.shape || 'circle', r)
+      const hw = vp.shape === 'frame' ? (vp.frameHalfW ?? dHW) : dHW
+      const hh = vp.shape === 'frame' ? (vp.frameHalfH ?? dHH) : dHH
+      minX = Math.min(minX, (t.x || 0) - hw); maxX = Math.max(maxX, (t.x || 0) + hw)
+      minY = Math.min(minY, (t.y || 0) - hh); maxY = Math.max(maxY, (t.y || 0) + hh)
+    }
+    const bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1)
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
+    const svgW = svgRef.current.clientWidth, svgH = svgRef.current.clientHeight
+    const pad = 80
+    const k = Math.max(0.1, Math.min((svgW - pad * 2) / bw, (svgH - pad * 2) / bh, 2.4))
+    const tf = d3.zoomIdentity.translate(svgW / 2 - k * cx, svgH / 2 - k * cy).scale(k)
+    d3.select(svgRef.current).transition().duration(500).call(zoomBehaviorRef.current.transform, tf)
+    zoomTransformRef.current = tf
+    scheduleRender()
+  }, [storeEdges, focusNode, scheduleRender])
+
   // Read the shared selection (from the docked outliner / command palette) → select that node here and
-  // zoom to it. Guarded so a selection that ORIGINATED on this canvas doesn't re-zoom. `focusNode` is
-  // declared just above, so referencing it here is safe (no TDZ).
+  // zoom to it (framing one generation of children). Guarded so a selection that ORIGINATED on this
+  // canvas doesn't re-zoom. `focusNodeAndChildren` is declared just above, so referencing it is safe.
   const externalSelId = useGraphStore(s => s.selectedNodeId)
   useEffect(() => {
     if (!externalSelId) return
     if (selectedRef.current?.type === 'node' && selectedRef.current.id === externalSelId) return
     if (!simNodesRef.current.some(x => x.id === externalSelId)) return
     setSelected({ id: externalSelId, type: 'node' })
-    setTimeout(() => focusNode(externalSelId), 20)   // let the sim settle a frame, then center + zoom
+    setTimeout(() => focusNodeAndChildren(externalSelId), 20)   // let the sim settle a frame, then fit
   }, [externalSelId]) // eslint-disable-line
 
   // Drill zoom memory: entering a drill fits the drilled subtree to the screen; exiting restores the
