@@ -117,6 +117,8 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const selectedNodeId = useGraphStore(s => s.selectedNodeId)
   const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
+  const setDrillRoot = useGraphStore(s => s.setDrillRoot)
+  const exitDrill = useGraphStore(s => s.exitDrill)
 
   const nodeProps = useMemo(() => (views.find(v => v.id === activeViewId)?.nodeProps) || {}, [views, activeViewId])
   // Mirror the graph's drill-in state: when the canvas is drilled into a node, the outline re-roots there too.
@@ -405,7 +407,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
       lines.push(`${ind}${bullet} ${text}${tags.length ? ' ' + tags.join(' ') : ''}`.replace(/\s+$/, ''))
       ;(childrenOf[id] || []).forEach(c => walk(c, depth + 1))
     }
-    ;(focusRoot ? (childrenOf[focusRoot] || []) : roots).forEach(r => walk(r, 0))
+    ;(drillRoot ? (childrenOf[drillRoot] || []) : roots).forEach(r => walk(r, 0))
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = `${(projectName || 'outline').replace(/\s+/g, '-')}.md`; a.click()
@@ -539,14 +541,14 @@ export default function Writer({ projectName, embedded = false, maximized = fals
         )
       })()}
 
-      {/* Breadcrumb when focused into an item */}
-      {focusRoot && byId[focusRoot] && (
+      {/* Breadcrumb when drilled into an item (shared with the graph's drill state) */}
+      {drillRoot && byId[drillRoot] && (
         <div style={{ padding: '7px 24px', borderBottom: `1px solid ${line}`, fontFamily: '-apple-system, sans-serif', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <span onClick={() => setFocusRoot(null)} style={{ cursor: 'pointer', color: '#5b6af0' }}>All</span>
-          {[...ancestorsOf(focusRoot).reverse(), focusRoot].map(pid => (
+          <span onClick={() => exitDrill()} style={{ cursor: 'pointer', color: '#5b6af0' }}>All</span>
+          {[...ancestorsOf(drillRoot).reverse(), drillRoot].map(pid => (
             <span key={pid} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <span style={{ color: faint }}>›</span>
-              <span onClick={() => setFocusRoot(pid)} style={{ cursor: 'pointer', color: pid === focusRoot ? fg : '#5b6af0', fontWeight: pid === focusRoot ? 700 : 400 }}>{byId[pid]?.label || 'Untitled'}</span>
+              <span onClick={() => setDrillRoot(pid)} style={{ cursor: 'pointer', color: pid === drillRoot ? fg : '#5b6af0', fontWeight: pid === drillRoot ? 700 : 400 }}>{byId[pid]?.label || 'Untitled'}</span>
             </span>
           ))}
         </div>
@@ -654,7 +656,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                             ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
                             : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>}
                         </span>
-                        <span title="Zoom into item" onClick={() => setFocusRoot(r.id)} style={{ ...ctl, color: bulletC }}>
+                        <span title="Drill into item (also drills the graph)" onClick={() => setDrillRoot(r.id)} style={{ ...ctl, color: bulletC }}>
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></svg>
                         </span>
                         <span title="Delete item" onClick={() => deleteNode(r.id)} style={{ ...ctl, color: '#e0687e' }}>
@@ -703,7 +705,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
           {/* Frames — canvas containers, grouped in their own collapsible section, visually
               differentiated (italic serif). Kept out of the tree so they don't read as
               duplicate root items. Click a frame to select it (syncs to the canvas). */}
-          {!flatMode && !focusRoot && frameNodes.length > 0 && (
+          {!flatMode && !drillRoot && frameNodes.length > 0 && (
             <div style={{ marginTop: 22, borderTop: `1px solid ${line}`, paddingTop: 10 }}>
               <div onClick={() => setFramesOpen(o => !o)}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
