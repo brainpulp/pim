@@ -198,6 +198,20 @@ const useGraphStore = create((set, get) => ({
   selectedNodeId: null,
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
 
+  // Shared canvas-panel toggles (Draw / Slides / Views). Lifted out of Graph.jsx so the nav "View" menu
+  // in App.jsx can drive them too. Setters accept a value OR a React-style updater fn, so existing
+  // Graph call sites (e.g. setShowDraw(v => !v)) keep working unchanged.
+  showDraw: false,
+  showSlideSidebar: false,
+  showViews: (() => { try { return localStorage.getItem('pim_show_views') !== '0' } catch { return true } })(),
+  setShowDraw: (v) => set(s => ({ showDraw: typeof v === 'function' ? v(s.showDraw) : v })),
+  setShowSlideSidebar: (v) => set(s => ({ showSlideSidebar: typeof v === 'function' ? v(s.showSlideSidebar) : v })),
+  setShowViews: (v) => set(s => {
+    const next = typeof v === 'function' ? v(s.showViews) : v
+    try { localStorage.setItem('pim_show_views', next ? '1' : '0') } catch { /* ignore */ }
+    return { showViews: next }
+  }),
+
   setNodeWriteStyle: (id, patch) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, writeStyle: { ...(n.writeStyle || {}), ...patch } } : n),
   })),

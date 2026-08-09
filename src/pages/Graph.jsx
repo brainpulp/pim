@@ -516,13 +516,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [dragHoverNodeId, setDragHoverNodeId] = useState(null)
   const dragHoverNodeIdRef = useRef(null)
   const [movingIds, setMovingIds] = useState(null)   // nodes being dragged as a group (highlighted while moving)
-  const [showSlideSidebar, setShowSlideSidebar] = useState(false)
-  const [showDraw, setShowDraw] = useState(false)               // drawing palette (right panel, tabbed w/ slides)
+  // Draw / Slides / Views toggles live in the store so the nav "View" menu (App.jsx) can drive them too.
+  const showSlideSidebar = useGraphStore(s => s.showSlideSidebar)
+  const setShowSlideSidebar = useGraphStore(s => s.setShowSlideSidebar)
+  const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
+  const setShowDraw = useGraphStore(s => s.setShowDraw)
+  const showViews = useGraphStore(s => s.showViews)
+  const setShowViews = useGraphStore(s => s.setShowViews)
   const [selectedDrawingId, setSelectedDrawingId] = useState(null)
   const [dragDraw, setDragDraw] = useState(null)                // { kind, defaults, ghost:{x,y} } while dragging from palette
   const [hideFrameOutlines, setHideFrameOutlines] = useState(false)
-  const [showViews, setShowViews] = useState(() => { try { return localStorage.getItem('pim_show_views') !== '0' } catch { return true } })
-  useEffect(() => { try { localStorage.setItem('pim_show_views', showViews ? '1' : '0') } catch { /* ignore */ } }, [showViews])
   // Auto-hide frame outlines after zooming to a frame (thumbnail click), until the next real pan/zoom.
   const [autoHideFrames, setAutoHideFrames] = useState(false)
   const prevFrameCountRef = useRef(0)

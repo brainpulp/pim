@@ -76,6 +76,11 @@ export default function App() {
   // Maximize the docked outliner: slide the graph/outliner divider fully right so the outliner is the only visible panel.
   const [outlineMax, setOutlineMax] = useState(false)
   useEffect(() => { if (!outlineDock) setOutlineMax(false) }, [outlineDock])
+  // "View" dropdown (next to the tabs) — one place to toggle the canvas panels: Outline / Draw / Slides / Views.
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
+  const showDrawPanel = useGraphStore(s => s.showDraw)
+  const showSlidesPanel = useGraphStore(s => s.showSlideSidebar)
+  const showViewsPanel = useGraphStore(s => s.showViews)
   const [outlineW, setOutlineW] = useState(() => { try { return Math.max(240, Math.min(720, +localStorage.getItem('pim_outline_w') || 380)) } catch { return 380 } })
   useEffect(() => { try { localStorage.setItem('pim_outline_w', String(outlineW)) } catch { /* ignore */ } }, [outlineW])
   const startDockResize = (e) => {
@@ -253,10 +258,37 @@ export default function App() {
           ))}
         </div>
         {(view === 'board' || view === 'graph') && (
-          <button title="Toggle the outliner panel beside the canvas"
-            className="pim-nav-btn"
-            style={{ ...iconBtnStyle, ...(outlineDock ? iconBtnActiveStyle : {}) }}
-            onClick={() => setOutlineDock(o => !o)}>◨ Outline</button>
+          <div style={{ position: 'relative' }}>
+            <button title="Show / hide the canvas panels"
+              className="pim-nav-btn"
+              style={{ ...iconBtnStyle, ...(viewMenuOpen || outlineDock || (view === 'graph' && (showDrawPanel || showSlidesPanel || showViewsPanel)) ? iconBtnActiveStyle : {}) }}
+              onClick={() => setViewMenuOpen(o => !o)}>View ▾</button>
+            {viewMenuOpen && (
+              <>
+                <div onClick={() => setViewMenuOpen(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 200 }} />
+                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 201, minWidth: 178,
+                  background: '#14141f', border: '1px solid #2a2a3c', borderRadius: 10, padding: 5,
+                  boxShadow: '0 16px 44px rgba(0,0,0,0.55)' }}>
+                  {[
+                    { label: 'Outline', on: outlineDock, run: () => setOutlineDock(o => !o) },
+                    { label: 'Draw', on: view === 'graph' && showDrawPanel, run: () => { if (view !== 'graph') setView('graph'); const st = useGraphStore.getState(); st.setShowDraw(v => !v); st.setShowSlideSidebar(false) } },
+                    { label: 'Slides', on: view === 'graph' && showSlidesPanel, run: () => { if (view !== 'graph') setView('graph'); const st = useGraphStore.getState(); st.setShowSlideSidebar(v => !v); st.setShowDraw(false) } },
+                    { label: 'Views', on: view === 'graph' && showViewsPanel, run: () => { if (view !== 'graph') setView('graph'); useGraphStore.getState().setShowViews(v => !v) } },
+                  ].map(it => (
+                    <button key={it.label} className="pim-nav-tab"
+                      onClick={() => { it.run(); setViewMenuOpen(false) }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                        padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: '0.82rem',
+                        fontFamily: FONT, background: it.on ? '#20233c' : 'transparent', color: it.on ? '#cbd3ff' : '#a9b0d0' }}>
+                      <span style={{ width: 14, display: 'inline-block', color: '#7c8cff' }}>{it.on ? '✓' : ''}</span>
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         )}
         <button className="pim-nav-btn" style={kbarStyle} onClick={() => setPaletteOpen(true)} title="Quick jump / commands">
           <span style={{ opacity: 0.7 }}>Search</span>
