@@ -67,12 +67,15 @@ export default function App() {
     } catch { return null }
   })
   const [view, setView] = useState(() => {   // restore the last-used tab (canvas/graph/table/lab)
-    try { return localStorage.getItem('pim_last_view') || 'board' } catch { return 'board' }
+    try { const v = localStorage.getItem('pim_last_view') || 'board'; return v === 'write' ? 'board' : v } catch { return 'board' }
   })
   useEffect(() => { try { localStorage.setItem('pim_last_view', view) } catch { /* ignore */ } }, [view])
   // Docked outliner (the Writer as a resizable side panel beside the canvas), with selection synced.
   const [outlineDock, setOutlineDock] = useState(() => { try { return localStorage.getItem('pim_outline_dock') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('pim_outline_dock', outlineDock ? '1' : '0') } catch { /* ignore */ } }, [outlineDock])
+  // Maximize the docked outliner: slide the graph/outliner divider fully right so the outliner is the only visible panel.
+  const [outlineMax, setOutlineMax] = useState(false)
+  useEffect(() => { if (!outlineDock) setOutlineMax(false) }, [outlineDock])
   const [outlineW, setOutlineW] = useState(() => { try { return Math.max(240, Math.min(720, +localStorage.getItem('pim_outline_w') || 380)) } catch { return 380 } })
   useEffect(() => { try { localStorage.setItem('pim_outline_w', String(outlineW)) } catch { /* ignore */ } }, [outlineW])
   const startDockResize = (e) => {
@@ -238,7 +241,7 @@ export default function App() {
         </div>
         {/* Segmented tab control — Figma/Linear style */}
         <div style={segStyle}>
-          {[['board', 'Canvas'], ['graph', 'Graph'], ['write', 'Write'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
+          {[['board', 'Canvas'], ['graph', 'Graph'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
             <button
               key={v}
               className="pim-nav-tab"
@@ -275,10 +278,9 @@ export default function App() {
         actions={[
           { label: 'Go to Canvas', hint: 'view', run: () => setView('board') },
           { label: 'Go to Graph', hint: 'view', run: () => setView('graph') },
-          { label: 'Go to Write', hint: 'view', run: () => setView('write') },
           { label: 'Go to Table', hint: 'view', run: () => setView('table') },
-          { label: outlineDock ? 'Hide outliner panel' : 'Show outliner panel', hint: 'toggle', run: () => setOutlineDock(o => !o) },
-          { label: 'New item (in outliner)', hint: 'create', run: () => { const id = useGraphStore.getState().addNode('', null); useGraphStore.getState().setSelectedNodeId(id); if (view !== 'write' && !outlineDock) setOutlineDock(true) } },
+          { label: outlineDock ? 'Hide outliner panel' : 'Show outliner panel', hint: 'toggle', run: () => { if (view !== 'board' && view !== 'graph') setView('board'); setOutlineDock(o => !o) } },
+          { label: 'New item (in outliner)', hint: 'create', run: () => { const id = useGraphStore.getState().addNode('', null); useGraphStore.getState().setSelectedNodeId(id); if (view !== 'board' && view !== 'graph') setView('board'); setOutlineDock(true) } },
         ]}
       />
       {projectLoadErr && (
@@ -290,17 +292,20 @@ export default function App() {
           like "view-default" are shared across projects, so keying effects on the view id alone was
           not enough — a fresh mount guarantees clusters, pan/zoom, and refs reset). */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex' }}>
-        {/* Outliner docks on the LEFT, beside the canvas. */}
+        {/* Outliner docks on the LEFT, beside the canvas. Maximized → it takes the full width and the
+            graph/resize-handle are hidden (the divider is slid all the way to the right). */}
         {outlineDock && (view === 'board' || view === 'graph') && (
           <>
-            <div style={{ width: outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
-              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded onExpand={() => { setOutlineDock(false); setView('write') }} /></AppErrorBoundary>
+            <div style={{ width: outlineMax ? '100%' : outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
+              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded maximized={outlineMax} onExpand={() => setOutlineMax(m => !m)} /></AppErrorBoundary>
             </div>
-            <div onMouseDown={startDockResize} title="Drag to resize"
-              style={{ width: 6, flexShrink: 0, cursor: 'col-resize', background: '#15151f', borderRight: '1px solid #24243a' }} />
+            {!outlineMax && (
+              <div onMouseDown={startDockResize} title="Drag to resize"
+                style={{ width: 6, flexShrink: 0, cursor: 'col-resize', background: '#15151f', borderRight: '1px solid #24243a' }} />
+            )}
           </>
         )}
-        <div style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}>
+        <div style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative', display: outlineMax && (view === 'board' || view === 'graph') ? 'none' : 'block' }}>
           {view === 'graph' && (
             <AppErrorBoundary>
             <Graph
@@ -311,7 +316,6 @@ export default function App() {
             />
             </AppErrorBoundary>
           )}
-          {view === 'write' && <AppErrorBoundary><Writer key={project.id} projectName={project.name} /></AppErrorBoundary>}
           {view === 'table' && <Table key={project.id} projectId={project.id} />}
           {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} projectList={projectList} onNavigateProject={navigateToProject} /></AppErrorBoundary>}
           {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
