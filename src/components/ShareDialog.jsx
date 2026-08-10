@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createShareLink, listShareLinks, revokeShareLink } from '../lib/db'
 
 // Owner-facing dialog: generate / copy / revoke share links for a project.
-export default function ShareDialog({ projectId, projectName, onClose }) {
+export default function ShareDialog({ projectId, projectName, tab, onClose }) {
   const [links, setLinks] = useState(null)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(null)
@@ -10,7 +10,8 @@ export default function ShareDialog({ projectId, projectName, onClose }) {
   const refresh = () => listShareLinks(projectId).then(setLinks).catch(() => setLinks([]))
   useEffect(() => { refresh() }, [projectId]) // eslint-disable-line
 
-  const urlFor = t => `${window.location.origin}${import.meta.env.BASE_URL}#/share/${t}`
+  // Carry the sharer's current tab so the recipient opens on the same surface (canvas/graph).
+  const urlFor = t => `${window.location.origin}${import.meta.env.BASE_URL}#/share/${t}${tab ? `?t=${tab}` : ''}`
   const active = (links || []).filter(l => !l.revoked && (!l.expires_at || new Date(l.expires_at) > new Date()))
 
   const make = async role => {

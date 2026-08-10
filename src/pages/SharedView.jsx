@@ -6,9 +6,18 @@ import PackBoard from './PackBoard'
 // Public landing for a `#/share/<token>` link.
 // - viewer link (or not signed in): render the Graph read-only with data from a public RPC.
 // - editor link + signed in: redeem (become a member) and hand off to the normal editing flow.
-export default function SharedView({ token, session, onOpenOwned }) {
+// Which read-only surface to open, from the `?t=` tab the sharer embedded in the link.
+// Supported read-only surfaces are canvas + graph; anything else falls back to graph.
+const initialSurface = () => {
+  const m = window.location.hash.match(/[?&]t=([a-z]+)/i)
+  const t = (m ? m[1] : '').toLowerCase()
+  if (t === 'canvas' || t === 'board') return 'canvas'
+  return 'graph'
+}
+
+export default function SharedView({ token, session, onOpenOwned, onSignIn }) {
   const [state, setState] = useState({ status: 'loading' })
-  const [surface, setSurface] = useState('canvas')   // 'canvas' (the unified board) | 'graph'
+  const [surface, setSurface] = useState(initialSurface)   // 'canvas' (the unified board) | 'graph'
 
   useEffect(() => {
     let cancelled = false
@@ -43,13 +52,17 @@ export default function SharedView({ token, session, onOpenOwned }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
       <div style={banner}>
         <span style={{ color: '#c5d0ff', fontSize: '0.85rem', fontWeight: 600 }}>{state.data.name}</span>
-        <span style={{ color: '#7080a0', fontSize: '0.72rem' }}>· shared, view only</span>
+        <span style={{ color: '#7080a0', fontSize: '0.72rem' }}>
+          {state.data.role === 'editor' ? '· shared to edit — sign in to make changes' : '· shared, view only'}
+        </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           {['canvas', 'graph'].map(s => (
             <button key={s} onClick={() => setSurface(s)}
               style={{ ...toggleBtn, ...(surface === s ? toggleOn : {}) }}>{s}</button>
           ))}
-          <a href={import.meta.env.BASE_URL} style={openLink}>Open PIM</a>
+          {state.data.role === 'editor' && !session
+            ? <button onClick={() => onSignIn && onSignIn()} style={signInBtn}>🔑 Sign in to edit</button>
+            : <a href={import.meta.env.BASE_URL} style={openLink}>Open PIM</a>}
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -66,3 +79,4 @@ const banner = { display: 'flex', alignItems: 'center', gap: 8, padding: '0 1rem
 const openLink = { padding: '0.25rem 0.7rem', borderRadius: 6, border: '1px solid #2a2a3e', background: 'transparent', color: '#5b6af0', textDecoration: 'none', fontSize: '0.78rem', fontWeight: 600 }
 const toggleBtn = { padding: '0.2rem 0.6rem', borderRadius: 6, border: '1px solid #2a2a3e', background: 'transparent', color: '#8090b8', cursor: 'pointer', fontSize: '0.74rem', textTransform: 'capitalize' }
 const toggleOn = { background: '#1e1e2e', color: '#fff', borderColor: '#5b6af0' }
+const signInBtn = { padding: '0.28rem 0.8rem', borderRadius: 6, border: '1px solid #3a4a8a', background: 'linear-gradient(#232a5c, #1b2048)', color: '#d3daff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }

@@ -103,6 +103,7 @@ export default function App() {
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const [shareToken, setShareToken] = useState(() => parseShareToken())
+  const [authOverShare, setAuthOverShare] = useState(false)   // user chose "sign in to edit" from a share link
   const [showShare, setShowShare] = useState(false)
   const renameInputRef = useRef()
   // Cross-project links: a node can jump to another project; a back-stack lets you return.
@@ -193,8 +194,12 @@ export default function App() {
   // work with no sign-in. Wait for the session to resolve first (editor links redeem).
   if (shareToken) {
     if (session === undefined) return <div style={loadingStyle}>Loading…</div>
+    // "Sign in to edit" from the share landing → show the normal auth screen but KEEP the token, so
+    // once signed in we fall back into SharedView and (for an edit link) redeem into the editing flow.
+    if (authOverShare && !session) return <Auth />
     return <SharedView token={shareToken} session={session}
-      onOpenOwned={(id, name) => { window.location.hash = ''; setShareToken(null); openProject(id, name) }} />
+      onSignIn={() => setAuthOverShare(true)}
+      onOpenOwned={(id, name) => { window.location.hash = ''; setShareToken(null); setAuthOverShare(false); openProject(id, name) }} />
   }
 
   if (session === undefined) return <div style={loadingStyle}>Loading…</div>
@@ -300,7 +305,7 @@ export default function App() {
         <button className="pim-nav-btn" style={signOutStyle} onClick={() => supabase.auth.signOut()} title="Sign out">⏻</button>
       </nav>
       {showShare && (
-        <ShareDialog projectId={project.id} projectName={project.name} onClose={() => setShowShare(false)} />
+        <ShareDialog projectId={project.id} projectName={project.name} tab={view} onClose={() => setShowShare(false)} />
       )}
       <CommandPalette
         open={paletteOpen}
