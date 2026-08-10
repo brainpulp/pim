@@ -17,6 +17,10 @@ import useGraphStore from '../lib/graphStore'
 
 const TEXT_COLORS = ['#111827', '#e11d48', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#6b7280', '#ffffff']
 
+// Outliner typeface — a modern, neutral system sans (SF / Segoe / Roboto). Swap the leading family for
+// "Inter"/"Geist"/etc. here (plus a self-hosted @fontsource import) to use a specific designed face.
+const OUTLINE_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+
 const SHORTCUT_ACTIONS = [
   { id: 'newItem', label: 'New item' }, { id: 'indent', label: 'Indent (demote)' },
   { id: 'outdent', label: 'Outdent (promote)' }, { id: 'moveUp', label: 'Move up' },
@@ -471,7 +475,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   }
 
   return (
-    <div ref={wrapRef} style={{ height: '100%', background: bg, color: fg, display: 'flex', flexDirection: 'column', fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif' }}>
+    <div ref={wrapRef} style={{ height: '100%', background: bg, color: fg, display: 'flex', flexDirection: 'column', fontFamily: OUTLINE_FONT }}>
       {/* Toolbar — clean, grouped, ghost buttons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, rowGap: 4, flexWrap: 'wrap', padding: '7px 14px', borderBottom: `1px solid ${line}`, flexShrink: 0, fontFamily: '-apple-system, sans-serif' }}>
         <button className="pim-wtb" onClick={addRoot} title="New item" style={{ ...tb(false), color: '#5b6af0', fontWeight: 600 }}>＋ New</button>
@@ -728,14 +732,14 @@ export default function Writer({ projectName, embedded = false, maximized = fals
               <div onClick={() => setFramesOpen(o => !o)}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
                 <span style={{ width: 18, textAlign: 'center', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1 }}>{framesOpen ? '▾' : '▸'}</span>
-                <span style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontStyle: 'italic', fontWeight: 600, fontSize: 14, letterSpacing: '0.02em', color: faint, textTransform: 'uppercase' }}>Frames</span>
+                <span style={{ fontFamily: OUTLINE_FONT, fontWeight: 600, fontSize: 12, letterSpacing: '0.08em', color: faint, textTransform: 'uppercase' }}>Frames</span>
                 <span style={{ fontSize: 12, color: faint }}>{frameNodes.length}</span>
               </div>
               {framesOpen && frameNodes.map(n => (
                 <div key={n.id} onClick={() => setSelectedNodeId(n.id)}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 24, padding: '3px 8px', borderRadius: 6, cursor: 'pointer', background: selectedNodeId === n.id ? (dark ? '#1b2236' : '#eef1fb') : 'transparent' }}>
                   <span style={{ fontSize: 12, color: faint }}>▢</span>
-                  <span style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: 15, color: fg }}>{n.label || 'Untitled frame'}</span>
+                  <span style={{ fontFamily: OUTLINE_FONT, fontSize: 14, color: fg }}>{n.label || 'Untitled frame'}</span>
                 </div>
               ))}
             </div>
