@@ -1,6 +1,6 @@
 # Strategy tab — handoff notes
 
-**Status: ~90% done, works in local build, NOT yet usable — one database step missing.**
+**Status: code complete and building; DB migration APPLIED. Remaining: manual test, lint, PR.**
 Branch: `claude/strategy-tab`. Written by a Claude session working from the
 `brainpulp/stratego` repo; this doc lets a session inside pim pick it up.
 
@@ -54,15 +54,13 @@ by the parser on every edit; only drag positions/pins live outside the text.
 
 ## ⚠️ REMAINING WORK (in order)
 
-1. **Supabase migration — REQUIRED, feature breaks without it.** The
-   `strategy` column does not exist yet. Run against project
-   `fnzdkqrkranedtgysqcf` (the shared pim/gastos project):
-   ```sql
-   alter table public.pim_projects add column if not exists strategy jsonb;
-   ```
-   The previous session was interrupted right before applying this.
-   RLS: existing pim_projects policies cover the new column automatically
-   (column-level, same row ownership) — no policy changes needed.
+1. ~~Supabase migration~~ **DONE** — `strategy jsonb` column added to
+   `public.pim_projects` on project `ikztpvxfgmhmrcwolwgx` (migration
+   `add_strategy_column_to_pim_projects`). Note: pim's CLAUDE.md still names
+   the old shared project `fnzdkqrkranedtgysqcf`, but SESSIONS.md records the
+   migration to the dedicated `ikztpvxfgmhmrcwolwgx` project — CLAUDE.md's
+   Stack section is stale and could be updated. RLS: existing pim_projects
+   policies cover the new column automatically; no policy changes needed.
 2. **Manual test**: `npm run dev`, open a project, click the "strategy" tab.
    Type, check flowchart updates, drag a node, switch tabs and back, reload —
    text and dragged positions should persist per project.
