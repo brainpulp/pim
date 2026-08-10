@@ -140,6 +140,9 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const [expanded, setExpanded] = useState(() => new Set())
   const [focusId, setFocusId] = useState(null)
   const [focusRoot, setFocusRoot] = useState(null)   // zoom-into-item
+  // Items freshly created by Enter that were never typed into — discarded on blur so pressing Enter
+  // and then clicking away doesn't leave an empty line item behind.
+  const freshEmptyRef = useRef(new Set())
   const [framesOpen, setFramesOpen] = useState(false)   // collapsible "Frames" section
   const [search, setSearch] = useState('')
   const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
@@ -241,13 +244,15 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const selectRow = (id) => { setFocusId(id); setSelectedNodeId(id) }   // sync outliner → canvas
 
   // Sync canvas → outliner: when the shared selection changes elsewhere, reveal that row here
-  // (clear filters, uncollapse its ancestors, scroll it into view; focus it only when docked).
+  // (clear filters, uncollapse its ancestors, scroll it into view). Do NOT steal keyboard focus into
+  // the docked textarea — that would break Delete/Enter on the canvas (the graph ignores keys while a
+  // textarea is focused). The user focuses a row by clicking it.
   useEffect(() => {
     if (!selectedNodeId || selectedNodeId === focusId || !byId[selectedNodeId]) return
     setSearch(''); setFocusRoot(null)
     setCollapsed(s => { const n = new Set(s); ancestorsOf(selectedNodeId).forEach(a => n.delete(a)); return n })
     setFocusId(selectedNodeId)
-    requestAnimationFrame(() => { const el = inputs.current[selectedNodeId]; if (el) { if (embedded) el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }) } })
+    requestAnimationFrame(() => { const el = inputs.current[selectedNodeId]; if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }) })
   }, [selectedNodeId]) // eslint-disable-line
 
   const addSiblingAfter = (id) => {
@@ -257,6 +262,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
     const newId = addNode('', p)
     if (p && after) moveChild(p, newId, after)
     pendingFocus.current = newId; setFocusId(newId)
+    return newId
   }
   const demote = (id) => { const sibs = siblings(id); const prev = sibs[sibs.indexOf(id) - 1]; if (!prev) return; reparentNode(id, prev); pendingFocus.current = id }
   const promote = (id) => {
@@ -324,11 +330,14 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   }
   const onKey = (e, id) => {
     const el = e.currentTarget
-    // Enter rules: plain Enter = inert (no new item, no newline); Shift+Enter = line break;
-    // Ctrl/Cmd+Enter = new item (handled by the keymap below, bound to Mod+Enter).
+    // Enter rules: plain Enter = new item (empty ones auto-discard on blur); Shift+Enter = line break;
+    // Ctrl/Cmd+Enter = new item too (kept via the keymap below).
     if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
       if (e.shiftKey) return          // let the textarea insert a soft line break
-      e.preventDefault(); return      // plain Enter does nothing
+      e.preventDefault()
+      const nid = addSiblingAfter(id)
+      if (nid) freshEmptyRef.current.add(nid)
+      return
     }
     const combo = comboFromEvent(e)
     if (combo) {
@@ -673,7 +682,16 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <textarea ref={el => { if (el) { inputs.current[r.id] = el; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }} value={n.label || ''} rows={1}
-                    onChange={e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target) }} onFocus={() => selectRow(r.id)}
+                    onChange={e => { if (e.target.value !== '') freshEmptyRef.current.delete(r.id); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target) }} onFocus={() => selectRow(r.id)}
+                    onBlur={e => {
+                      const empty = e.target.value.trim() === '' && !r.hasChildren
+                      if (!empty) { freshEmptyRef.current.delete(r.id); return }
+                      if (!freshEmptyRef.current.has(r.id)) return
+                      // Keep it if focus moved to another outline row (Enter / arrow navigation); discard
+                      // only when focus left the outline entirely (clicked the canvas, a button, empty space).
+                      const toRow = e.relatedTarget && e.relatedTarget.tagName === 'TEXTAREA'
+                      if (!toRow) { freshEmptyRef.current.delete(r.id); deleteNode(r.id) }
+                    }}
                     onKeyDown={e => onKey(e, r.id)} placeholder="" spellCheck={true} style={textStyle} />
                   {/* chips */}
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', paddingTop: 4 }}>{metaChips(r.id, m)}</span>
@@ -729,7 +747,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
       {/* Markdown help cheatsheet */}
       {showHelp && (() => {
         const groups = [
-          ['Structure', [['⌘/Ctrl+Enter', 'new item'], ['Shift+Enter', 'line break'], ['Tab / Shift+Tab', 'indent / outdent'], ['# ', 'heading'], ['## ', 'subheading']]],
+          ['Structure', [['Enter', 'new item'], ['Shift+Enter', 'line break'], ['Tab / Shift+Tab', 'indent / outdent'], ['# ', 'heading'], ['## ', 'subheading']]],
           ['Make it a record', [['/task', 'task (checkbox)'], ['[] / [x]', 'task / done'], ['/note /idea /question /event', 'item type']]],
           ['Tag & schedule', [['#tag', 'tag chip'], ['@person', 'person'], ['!high / !urgent / !med / !low', 'priority'], ['due:tomorrow · due:2026-08-15 · due:fri', 'date']]],
           ['Fields & links', [['status:doing · cost:50 (key:value)', 'custom field'], ['[[Another item]]', 'link / relation']]],
