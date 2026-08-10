@@ -54,6 +54,20 @@ export async function saveProject(id, { nodes, edges, views, activeViewId }) {
   if (error) throw error
 }
 
+// Strategy tab: { text, positions, pinned } stored in the jsonb `strategy` column
+export async function loadStrategy(id) {
+  const { data, error } = await tb().select('strategy').eq('id', id).single()
+  if (error) throw error
+  return data?.strategy ?? null
+}
+
+export async function saveStrategy(id, strategy) {
+  const { error } = await tb()
+    .update({ strategy, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
 export async function renameProject(id, name) {
   const { error } = await tb().update({ name }).eq('id', id)
   if (error) throw error

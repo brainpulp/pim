@@ -5,6 +5,7 @@ import Auth from './components/Auth'
 import Projects from './pages/Projects'
 import Graph from './pages/Graph'
 import Table from './pages/Table'
+import Strategy from './pages/Strategy'
 
 class AppErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { err: null } }
@@ -97,7 +98,7 @@ export default function App() {
           >{project.name}</span>
         )}
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {['graph', 'table'].map(v => (
+          {['graph', 'table', 'strategy'].map(v => (
             <button
               key={v}
               style={{ ...navBtnStyle, ...(view === v ? navBtnActiveStyle : {}) }}
@@ -122,6 +123,11 @@ export default function App() {
           </AppErrorBoundary>
         )}
         {view === 'table' && <Table />}
+        {view === 'strategy' && (
+          <AppErrorBoundary>
+            <Strategy projectId={project.id} />
+          </AppErrorBoundary>
+        )}
       </div>
     </div>
   )
