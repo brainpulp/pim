@@ -71,7 +71,7 @@ const MAX_UNDO = 50
 // Cosmetic props that make up a node's "look". New nodes inherit the last-changed values of these
 // (see lastStyle below), so styling one node carries forward to the next you create — even across
 // sessions (persisted to localStorage). Shape is captured only for basic shapes, never frame/3d/image.
-const LAST_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape', 'shadow', 'borderBlur', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle']
+export const LAST_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape', 'shadow', 'borderBlur', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle']
 const BASIC_SHAPES = new Set(['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none'])
 const LS_KEY = 'pim_last_node_style'
 const loadLastStyle = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {} } catch { return {} } }

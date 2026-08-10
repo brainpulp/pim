@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
-import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS } from '../lib/graphStore'
+import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS } from '../lib/graphStore'
 import ViewManager from '../components/ViewManager'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
@@ -1311,9 +1311,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const handleCreateSister = useCallback((nodeId) => {
     const { parentId } = getSiblings(nodeId)
     const newId = addNode('New node', parentId)
+    // Match the source node's look: copy its style props onto the new sister.
+    const src = viewNodePropsRef.current[nodeId] || {}
+    LAST_STYLE_PROPS.forEach(k => { if (src[k] !== undefined) setNodeViewProp(newId, k, src[k]) })
     setSelected({ id: newId, type: 'node' })
     setPendingEditId(newId)
-  }, [getSiblings, addNode])
+  }, [getSiblings, addNode, setNodeViewProp])
 
   // Zoom â€" pan on background only (not on nodes)
   useEffect(() => {
