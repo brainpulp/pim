@@ -334,7 +334,7 @@ export default function App() {
         {outlineDock && (view === 'board' || view === 'graph') && (
           <>
             <div style={{ width: outlineMax ? '100%' : outlineW, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
-              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded maximized={outlineMax} onExpand={() => setOutlineMax(m => !m)} /></AppErrorBoundary>
+              <AppErrorBoundary><Writer key={'dock-' + project.id} projectName={project.name} embedded maximized={outlineMax} onExpand={() => setOutlineMax(m => !m)} onClose={() => setOutlineDock(false)} /></AppErrorBoundary>
             </div>
             {!outlineMax && (
               <div onMouseDown={startDockResize} title="Drag to resize"

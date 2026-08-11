@@ -1328,6 +1328,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setPendingEditId(newId)
   }, [getSiblings, addNode, setNodeViewProp])
 
+  // Duplicate a node → a sister with the SAME label, style, and notes.
+  const handleDuplicateNode = useCallback((nodeId) => {
+    const srcNode = storeNodes.find(n => n.id === nodeId)
+    const { parentId } = getSiblings(nodeId)
+    const newId = addNode(srcNode?.label || 'New node', parentId)
+    const svp = viewNodePropsRef.current[nodeId] || {}
+    LAST_STYLE_PROPS.forEach(k => { if (svp[k] !== undefined) setNodeViewProp(newId, k, svp[k]) })
+    if (srcNode?.notes) updateNotes(newId, srcNode.notes)
+    setSelected({ id: newId, type: 'node' })
+    setPendingEditId(newId)
+  }, [storeNodes, getSiblings, addNode, setNodeViewProp, updateNotes])
+
   // Zoom â€" pan on background only (not on nodes)
   useEffect(() => {
     if (!svgRef.current) return
@@ -3580,6 +3592,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetBorderFxCount={v => setNodeViewProp(hn.id, 'borderFxCount', v)}
               onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
+              onDuplicate={() => { pushUndo(); handleDuplicateNode(hn.id); close() }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
@@ -6115,7 +6128,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, selCount = 0,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   floating = false, onUndock, onRedock, nodeTitle }) {
   const shape = viewProps.shape || 'circle'
@@ -6275,6 +6288,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           else { onSetDepthExpand?.({ nodeId, radius: 1 }); setPanel('expand') }
         }, { icon: '⊕', right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
+        {onDuplicate && textRow('Duplicate', onDuplicate, { icon: '⧉', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}

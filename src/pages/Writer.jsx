@@ -100,7 +100,7 @@ function consumeTokenAt(value, caret) {
   return { text, caret: cpos, act }
 }
 
-export default function Writer({ projectName, embedded = false, maximized = false, onExpand }) {
+export default function Writer({ projectName, embedded = false, maximized = false, onExpand, onClose }) {
   const nodes = useGraphStore(s => s.nodes)
   const edges = useGraphStore(s => s.edges)
   const views = useGraphStore(s => s.views)
@@ -528,6 +528,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
           <button className="pim-wtb" title="Keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⌨</button>
           {embedded && <button className="pim-wtb" title={maximized ? 'Restore split (show canvas)' : 'Maximize outliner (hide canvas)'} onClick={() => onExpand && onExpand()} style={{ ...tb(maximized), width: 30, justifyContent: 'center' }}>{maximized ? '⤡' : '⤢'}</button>}
           <button className="pim-wtb" title="Light / dark" onClick={() => setDark(d => !d)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{dark ? '☀️' : '🌙'}</button>
+          {embedded && onClose && <button className="pim-wtb" title="Hide the outliner" onClick={() => onClose()} style={{ ...tb(false), width: 30, justifyContent: 'center', fontSize: 16 }}>✕</button>}
         </div>
       </div>
 
