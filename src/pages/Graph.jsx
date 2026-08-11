@@ -131,7 +131,17 @@ function shapeDims(shape, r, label, fontSize, widthOverride) {
     case 'roundrect': return { halfW: r * 1.5,  halfH: r * 0.85 }
     case 'rect':      return { halfW: r * 1.5,  halfH: r * 0.85 }
     case 'diamond':   return { halfW: r * 1.15, halfH: r * 1.15 }
-    case 'none':      return { halfW: r * 1.2,  halfH: r * 0.55 }
+    case 'none': {
+      // No visible body → hug the label text tightly so the hit / drop / selection area sits close to
+      // the words instead of a big invisible box. Falls back to the old box when no label is available.
+      if (label != null) {
+        const fs = fontSize || Math.max(9, Math.round(12 * (r / NODE_R)))
+        const parts = String(label || '').split('\n')
+        const w = Math.max(0, ...parts.map(p => measureTextWidth(p, fs)))
+        return { halfW: Math.max(16, w / 2 + 7), halfH: Math.max(fs * 0.7 + 3, (Math.max(1, parts.length) * fs * 1.3) / 2 + 4) }
+      }
+      return { halfW: r * 1.2, halfH: r * 0.55 }
+    }
     default:          return { halfW: r,         halfH: r }
   }
 }
