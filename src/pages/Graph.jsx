@@ -1423,10 +1423,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setUsptoBusy(true)
     try {
       const map = await checkUSPTO(targets.map(t => t.label))
+      let applied = 0
       targets.forEach(t => {
         const r = map[t.label]
-        if (r) setNodeMeta(t.id, { usptoHits: r.hits, usptoNote: r.note })
+        if (r && r.hits != null) { setNodeMeta(t.id, { usptoHits: r.hits, usptoNote: r.note }); applied++ }
       })
+      if (applied === 0) alert('USPTO returned no usable counts — the trademark endpoint needs fixing (nothing was changed on your nodes).')
     } catch (e) {
       alert('USPTO check failed: ' + (e?.message || 'error'))
     } finally {
