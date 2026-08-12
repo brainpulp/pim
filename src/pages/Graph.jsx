@@ -3,6 +3,7 @@ import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS } from '../lib/graphStore'
+import { generateWords, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
@@ -632,6 +633,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setActiveSlideshowId = useGraphStore(s => s.setActiveSlideshowId)
   const setDrillRoot    = useGraphStore(s => s.setDrillRoot)
   const exitDrill       = useGraphStore(s => s.exitDrill)
+  const setNodeMeta     = useGraphStore(s => s.setNodeMeta)
   const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
   const setViewPan      = useGraphStore(s => s.setViewPan)
@@ -1339,6 +1341,52 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setSelected({ id: newId, type: 'node' })
     setPendingEditId(newId)
   }, [storeNodes, getSiblings, addNode, setNodeViewProp, updateNotes])
+
+  // ── Word generator ──────────────────────────────────────────────────────────
+  // wgDialog = { nodeId, mode:'words'|'variations' } while the generate dialog is open.
+  const [wgDialog, setWgDialog] = useState(null)
+  const [wgBusy, setWgBusy] = useState(false)
+  const [wgErr, setWgErr] = useState(null)
+  const runWordgen = useCallback(async (nodeId, mode, { count, modifier }) => {
+    setWgBusy(true); setWgErr(null)
+    try {
+      const st = useGraphStore.getState()
+      const node = st.nodes.find(n => n.id === nodeId)
+      if (!node) return
+      const theme = node.label || ''
+      let criteria = []
+      if (mode === 'words') {
+        const childIds = st.edges.filter(e => e.source === nodeId).map(e => e.target)
+        criteria = childIds
+          .map(cid => st.nodes.find(n => n.id === cid))
+          .filter(n => n && !['word', 'variation'].includes(n.meta?.wg))
+          .map(n => n.label).filter(Boolean)
+      }
+      const { words } = await generateWords({ mode, theme, criteria, seed: node.label, modifier, count })
+      if (!words.length) { setWgErr('No words came back — try again or adjust the prompt.'); return }
+      pushUndo()
+      const parent = simNodesRef.current.find(n => n.id === nodeId)
+      const cx = parent?.x || 0, cy = parent?.y || 0
+      const ids = words.map((w, i) => {
+        const id = addNode(w, nodeId)
+        setNodeMeta(id, { wg: mode === 'words' ? 'word' : 'variation' })
+        return { id, i }
+      })
+      // Fan the fresh nodes out around the parent so they don't pile up at the origin.
+      setTimeout(() => {
+        ids.forEach(({ id, i }) => {
+          const sn = simNodesRef.current.find(n => n.id === id)
+          if (sn) { const a = (i / ids.length) * Math.PI * 2; const r = 130 + (i % 3) * 28; sn.x = cx + Math.cos(a) * r; sn.y = cy + Math.sin(a) * r }
+        })
+        scheduleRender()
+      }, 0)
+      setWgDialog(null)
+    } catch (e) {
+      setWgErr(e?.message || 'Generation failed.')
+    } finally {
+      setWgBusy(false)
+    }
+  }, [addNode, setNodeMeta, pushUndo, scheduleRender])
 
   // Zoom â€" pan on background only (not on nodes)
   useEffect(() => {
@@ -3593,6 +3641,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDuplicate={() => { pushUndo(); handleDuplicateNode(hn.id); close() }}
+              onGenWords={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'words' }); close() }}
+              onGenVariations={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'variations' }); close() }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
@@ -3962,6 +4012,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           fontSize: dragDraw.kind === 'emoji' ? 26 : 14, color: '#c5d0ff', background: '#16162a', border: '1px solid #3a4a8a', borderRadius: 6, padding: '2px 7px', boxShadow: '0 4px 14px rgba(0,0,0,0.5)' }}>
           {dragDraw.kind === 'emoji' ? dragDraw.defaults.emoji : dragDraw.kind === 'text' ? 'Text' : dragDraw.kind === 'shape' ? (dragDraw.defaults.shape) : dragDraw.kind}
         </div>
+      )}
+
+      {wgDialog && (
+        <WordgenDialog
+          nodeLabel={storeNodes.find(n => n.id === wgDialog.nodeId)?.label || ''}
+          mode={wgDialog.mode}
+          busy={wgBusy}
+          err={wgErr}
+          onRun={(count, modifier) => runWordgen(wgDialog.nodeId, wgDialog.mode, { count, modifier })}
+          onClose={() => { if (!wgBusy) { setWgDialog(null); setWgErr(null) } }}
+        />
       )}
     </div>
   )
@@ -6125,10 +6186,64 @@ function ColorSubPopup({ colors, current, onPick, label }) {
   )
 }
 
+// ─── Word-generator dialog ───────────────────────────────────────────────────
+function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
+  const [count, setCount] = useState(8)
+  const [modifier, setModifier] = useState('')
+  const [keyInput, setKeyInput] = useState(() => getWordgenKey())
+  const [live, setLive] = useState(() => hasWordgenKey())
+  const inp = { width: '100%', boxSizing: 'border-box', background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 7, padding: '7px 9px', fontSize: 13, outline: 'none' }
+  const lbl = { fontSize: 11.5, color: '#8fa0d8', margin: '0 0 4px', display: 'block', fontWeight: 600 }
+  return (
+    <div onMouseDown={() => { if (!busy) onClose() }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, sans-serif' }}>
+      <div onMouseDown={e => e.stopPropagation()}
+        style={{ width: 380, maxWidth: '92vw', background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 12, padding: '1.1rem 1.15rem', boxShadow: '0 16px 48px rgba(0,0,0,0.7)' }}>
+        <div style={{ color: '#c5d0ff', fontSize: '0.95rem', fontWeight: 700, marginBottom: 3 }}>
+          {mode === 'words' ? '⚡ Generate words' : '🎲 Generate variations'}
+        </div>
+        <div style={{ color: '#8090b8', fontSize: '0.76rem', marginBottom: 12, lineHeight: 1.4 }}>
+          {mode === 'words'
+            ? <>Uses <b style={{ color: '#a9b6ee' }}>“{nodeLabel || 'this node'}”</b> as the theme and its non-generated children as criteria. New words are added as children.</>
+            : <>Creates variations of <b style={{ color: '#a9b6ee' }}>“{nodeLabel || 'this word'}”</b> as its children.</>}
+        </div>
+
+        <label style={lbl}>How many</label>
+        <input type="number" min={1} max={30} value={count} onChange={e => setCount(Math.max(1, Math.min(30, +e.target.value || 1)))} style={{ ...inp, marginBottom: 10 }} />
+
+        <label style={lbl}>Modifier prompt (optional)</label>
+        <input value={modifier} onChange={e => setModifier(e.target.value)} placeholder="e.g. more sci-fi, shorter, Latin roots" style={{ ...inp, marginBottom: 12 }} />
+
+        {!live && (
+          <div style={{ background: '#0e0e1c', border: '1px solid #2a2f47', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
+            <div style={{ color: '#f6ad55', fontSize: '0.72rem', marginBottom: 6 }}>No API key set — using the built-in stub generator (fake words). Paste an Anthropic key for real generation (stored only in this browser).</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={keyInput} onChange={e => setKeyInput(e.target.value)} placeholder="sk-ant-…" type="password" style={{ ...inp, flex: 1 }} />
+              <button onClick={() => { setWordgenKey(keyInput.trim()); setLive(hasWordgenKey()) }}
+                style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 7, padding: '0 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Save</button>
+            </div>
+          </div>
+        )}
+        {live && <div style={{ color: '#7bd88f', fontSize: '0.72rem', marginBottom: 12 }}>✓ Live generation (Anthropic key set). <span onClick={() => { setWordgenKey(''); setLive(false) }} style={{ color: '#8090b8', cursor: 'pointer', textDecoration: 'underline' }}>clear key</span></div>}
+
+        {err && <div style={{ color: '#f87171', fontSize: '0.76rem', marginBottom: 10 }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button disabled={busy} onClick={onClose} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#9aa8d8', borderRadius: 7, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          <button disabled={busy} onClick={() => onRun(count, modifier.trim())}
+            style={{ background: busy ? '#2a3260' : 'linear-gradient(#2a327a, #1e2358)', border: '1px solid #3a4a8a', color: '#e6ebff', borderRadius: 7, padding: '7px 16px', cursor: busy ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+            {busy ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, selCount = 0,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   floating = false, onUndock, onRedock, nodeTitle }) {
   const shape = viewProps.shape || 'circle'
@@ -6289,6 +6404,8 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         }, { icon: '⊕', right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
         {onDuplicate && textRow('Duplicate', onDuplicate, { icon: '⧉', opens: null })}
+        {onGenWords && textRow('Generate words', onGenWords, { icon: '⚡', opens: null })}
+        {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
