@@ -171,6 +171,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const [templates, setTemplates] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_writer_templates') || '[]') } catch { return [] } })
   useEffect(() => { try { localStorage.setItem('pim_writer_templates', JSON.stringify(templates)) } catch { /* ignore */ } }, [templates])
   const [showTpl, setShowTpl] = useState(false)
+  const [showExport, setShowExport] = useState(false)
   const pendingFocus = useRef(null)
   const inputs = useRef({})
 
@@ -404,7 +405,18 @@ export default function Writer({ projectName, embedded = false, maximized = fals
     return G
   }, [nodes])
 
-  const exportMd = () => {
+  // ── Export the (focused) outline to several formats. Roots = the drilled subtree if drilled, else all roots. ──
+  const exportRoots = () => (drillRoot ? (childrenOf[drillRoot] || []) : roots)
+  const download = (name, text, mime) => {
+    const blob = new Blob([text], { type: mime })
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    a.download = name; a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
+  const baseName = () => (projectName || 'outline').replace(/\s+/g, '-')
+
+  // Markdown — nested bullets, tasks as checkboxes, tags/people/priority/fields as inline tokens.
+  const buildMarkdown = () => {
     const lines = []
     const walk = (id, depth) => {
       const n = byId[id]; if (!n) return
@@ -420,11 +432,61 @@ export default function Writer({ projectName, embedded = false, maximized = fals
       lines.push(`${ind}${bullet} ${text}${tags.length ? ' ' + tags.join(' ') : ''}`.replace(/\s+$/, ''))
       ;(childrenOf[id] || []).forEach(c => walk(c, depth + 1))
     }
-    ;(drillRoot ? (childrenOf[drillRoot] || []) : roots).forEach(r => walk(r, 0))
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-    a.download = `${(projectName || 'outline').replace(/\s+/g, '-')}.md`; a.click()
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    exportRoots().forEach(r => walk(r, 0))
+    return lines.join('\n') + '\n'
+  }
+
+  // Plain text — indented tree, no markup (tabs for depth).
+  const buildPlain = () => {
+    const lines = []
+    const walk = (id, depth) => {
+      const n = byId[id]; if (!n) return
+      lines.push('\t'.repeat(depth) + (n.label || ''))
+      ;(childrenOf[id] || []).forEach(c => walk(c, depth + 1))
+    }
+    exportRoots().forEach(r => walk(r, 0))
+    return lines.join('\n') + '\n'
+  }
+
+  // OPML 2.0 — the standard outline interchange format (imports into most outliners/mind-mappers).
+  const buildOPML = () => {
+    const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const walk = (id, depth) => {
+      const n = byId[id]; if (!n) return ''
+      const m = n.meta || {}
+      const attrs = [`text="${esc(n.label || '')}"`]
+      if (m.notes || n.notes) attrs.push(`_note="${esc(m.notes || n.notes)}"`)
+      if ((m.tags || []).length) attrs.push(`_tags="${esc(m.tags.join(', '))}"`)
+      const kids = (childrenOf[id] || [])
+      const pad = '  '.repeat(depth + 2)
+      if (!kids.length) return `${pad}<outline ${attrs.join(' ')}/>`
+      return `${pad}<outline ${attrs.join(' ')}>\n${kids.map(c => walk(c, depth + 1)).join('\n')}\n${pad}</outline>`
+    }
+    const body = exportRoots().map(r => walk(r, 0)).join('\n')
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0">\n  <head>\n    <title>${esc(projectName || 'Outline')}</title>\n  </head>\n  <body>\n${body}\n  </body>\n</opml>\n`
+  }
+
+  // JSON — full fidelity: label, notes, meta, and nested children.
+  const buildJSON = () => {
+    const walk = (id) => {
+      const n = byId[id]; if (!n) return null
+      const kids = (childrenOf[id] || []).map(walk).filter(Boolean)
+      const out = { label: n.label || '' }
+      if (n.notes) out.notes = n.notes
+      if (n.meta && Object.keys(n.meta).length) out.meta = n.meta
+      if (kids.length) out.children = kids
+      return out
+    }
+    return JSON.stringify({ project: projectName || 'Outline', items: exportRoots().map(walk).filter(Boolean) }, null, 2)
+  }
+
+  const doExport = (fmt) => {
+    const name = baseName()
+    if (fmt === 'md') download(name + '.md', buildMarkdown(), 'text/markdown')
+    else if (fmt === 'txt') download(name + '.txt', buildPlain(), 'text/plain')
+    else if (fmt === 'opml') download(name + '.opml', buildOPML(), 'text/x-opml')
+    else if (fmt === 'json') download(name + '.json', buildJSON(), 'application/json')
+    setShowExport(false)
   }
 
   const bg = dark ? '#0f1115' : '#ffffff'
@@ -514,6 +576,22 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                 </div>
               ))}
               {templates.length === 0 && <div style={{ padding: '5px 9px', color: faint, fontSize: 12 }}>No templates yet. Focus an item and save it.</div>}
+            </div>
+          </>)}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <button className="pim-wtb" title="Export outline" onClick={() => setShowExport(v => !v)} style={tb(showExport)}>⤓</button>
+          {showExport && (<>
+            <div onMouseDown={() => setShowExport(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '110%', left: 0, zIndex: 41, minWidth: 200, background: dark ? '#161a24' : '#fff', border: `1px solid ${line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.35)', padding: 6 }}>
+              <div style={{ padding: '4px 9px', fontSize: 11, color: faint }}>{drillRoot ? 'Export drilled subtree as…' : 'Export outline as…'}</div>
+              {[['md', 'Markdown', '.md — bullets, tasks, tags'], ['opml', 'OPML', '.opml — outliner interchange'], ['txt', 'Plain text', '.txt — indented tree'], ['json', 'JSON', '.json — full data']].map(([fmt, label, sub]) => (
+                <div key={fmt} onClick={() => doExport(fmt)} style={{ padding: '6px 9px', borderRadius: 6, cursor: 'pointer', color: fg, fontSize: 13 }}
+                  onMouseEnter={e => e.currentTarget.style.background = dark ? '#1f2536' : '#f0f2f8'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  {label} <span style={{ color: faint, fontSize: 11 }}>{sub}</span>
+                </div>
+              ))}
             </div>
           </>)}
         </div>
