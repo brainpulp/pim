@@ -1396,6 +1396,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const target = ids.find(x => x.label.toLowerCase() === r.name.toLowerCase()) || ids[i]
             if (!target) return
             const color = RC[r.risk] || RC.medium
+            // Colour the TEXT (works for shape:'none', which has no body/border) AND ring shaped nodes.
+            setNodeViewProp(target.id, 'textColor', color)
             setNodeViewProp(target.id, 'strokeColor', color)
             setNodeViewProp(target.id, 'strokeWidth', 2.5)
             setNodeMeta(target.id, { risk: r.risk })
