@@ -9,6 +9,7 @@ import Table from './pages/Table'
 import Writer from './pages/Writer'
 import PackBoard from './pages/PackBoard'
 import PackLab from './pages/PackLab'
+import Strategy from './pages/Strategy'
 import CommandPalette from './components/CommandPalette'
 import SharedView from './pages/SharedView'
 import ShareDialog from './components/ShareDialog'
@@ -251,7 +252,7 @@ export default function App() {
         </div>
         {/* Segmented tab control — Figma/Linear style */}
         <div style={segStyle}>
-          {[['board', 'Canvas'], ['graph', 'Graph'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
+          {[['board', 'Canvas'], ['graph', 'Graph'], ['strategy', 'Strategy'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
             <button
               key={v}
               className="pim-nav-tab"
@@ -354,6 +355,7 @@ export default function App() {
             </AppErrorBoundary>
           )}
           {view === 'table' && <Table key={project.id} projectId={project.id} />}
+          {view === 'strategy' && <AppErrorBoundary><Strategy key={project.id} projectId={project.id} /></AppErrorBoundary>}
           {view === 'board' && <AppErrorBoundary><PackBoard key={project.id} projectId={project.id} projectList={projectList} onNavigateProject={navigateToProject} /></AppErrorBoundary>}
           {view === 'lab' && <AppErrorBoundary><PackLab /></AppErrorBoundary>}
           {backStack.length > 0 && (
