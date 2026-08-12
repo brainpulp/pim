@@ -1492,6 +1492,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // Shift+right-click forces the background menu open even when the cursor is over a node — a reliable
       // escape hatch when the canvas is dense and there's no empty space to click.
       if (forceBg) { setNodeMenu(null); setPhotoMenu(null); setBulkMenu(null); setContextMenu({ px, py, sx, sy }); return }
+      // With a multi-selection active, ANY right-click opens the bulk menu — no need to land precisely on a
+      // (possibly tiny) selected node. Shift+right-click above is the escape hatch to the background menu.
+      const curSel0 = selectedNodeIdsRef.current
+      if (!isCtrl && curSel0.size > 1) { setContextMenu(null); setNodeMenu(null); setPhotoMenu(null); setBulkPanel(null); setBulkMenu({ px, py, ids: [...curSel0] }); return }
       let hitNode = null
       for (const n of simNodesRef.current) {
         if (!visibleNodeIdsRef.current.has(n.id) || n.x == null) continue
