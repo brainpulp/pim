@@ -3463,7 +3463,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
           return (
             <>
-              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
+              <div onMouseDown={close} onContextMenu={e => e.preventDefault()}
                 style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div onMouseDown={e => e.stopPropagation()}
                 ref={el => clampMenuEl(el, contextMenu.px, contextMenu.py, false)}
@@ -3566,7 +3566,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const row = (icon, label, panel) => item(icon, <>{label}<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel(panel))
           return (
             <>
-              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
+              <div onMouseDown={close} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
                 style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto' }}>
                 <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
@@ -3816,7 +3816,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
           return (
             <>
-              <div onMouseDown={close} onContextMenu={e => { e.preventDefault(); close() }}
+              <div onMouseDown={close} onContextMenu={e => e.preventDefault()}
                 style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
               {toolbar}
             </>
