@@ -10,6 +10,8 @@
 // generator so the whole mechanic is usable/demonstrable offline. Swapping the direct call for a Supabase
 // Edge Function later is a drop-in change inside `callClaude`.
 
+import { supabase } from './supabase'
+
 const KEY_LS = 'pim_wordgen_key'
 const MODEL_LS = 'pim_wordgen_model'
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
@@ -95,6 +97,20 @@ function stubWords({ mode, seed, theme, criteria, seeds, count, salt = 0 }) {
     out.push(w.charAt(0).toUpperCase() + w.slice(1))
   }
   return out
+}
+
+// ── USPTO trademark check (via the brand-tools Supabase Edge Function) ────────
+// Returns a map { name -> { hits:number|null, note:string } } of LIVE trademark hit counts.
+// Must go through the Edge Function: USPTO can't be called from the browser (CORS).
+export async function checkUSPTO(names) {
+  const list = [...new Set((names || []).map(n => String(n || '').trim()).filter(Boolean))]
+  if (!list.length) return {}
+  const { data, error } = await supabase.functions.invoke('brand-tools', { body: { action: 'uspto', names: list } })
+  if (error) throw new Error(error.message || 'USPTO check failed')
+  if (data?.error) throw new Error(data.error)
+  const map = {}
+  for (const r of (data?.results || [])) map[r.name] = { hits: r.hits, note: r.note }
+  return map
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

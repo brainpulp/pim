@@ -3,7 +3,7 @@ import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS } from '../lib/graphStore'
-import { generateWords, assessRisk, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
+import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
@@ -634,6 +634,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setDrillRoot    = useGraphStore(s => s.setDrillRoot)
   const exitDrill       = useGraphStore(s => s.exitDrill)
   const setNodeMeta     = useGraphStore(s => s.setNodeMeta)
+  const addNodeTag      = useGraphStore(s => s.addNodeTag)
   const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
   const setViewPan      = useGraphStore(s => s.setViewPan)
@@ -1412,6 +1413,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setWgBusy(false)
     }
   }, [addNode, setNodeMeta, setNodeViewProp, updateNotes, pushUndo, scheduleRender])
+
+  // USPTO live-trademark check for a set of node ids → badge each with its live-hit count.
+  const [usptoBusy, setUsptoBusy] = useState(false)
+  const runUSPTOCheck = useCallback(async (ids) => {
+    const st = useGraphStore.getState()
+    const targets = ids.map(id => ({ id, label: (st.nodes.find(n => n.id === id)?.label || '').trim() })).filter(t => t.label)
+    if (!targets.length) return
+    setUsptoBusy(true)
+    try {
+      const map = await checkUSPTO(targets.map(t => t.label))
+      targets.forEach(t => {
+        const r = map[t.label]
+        if (r) setNodeMeta(t.id, { usptoHits: r.hits, usptoNote: r.note })
+      })
+    } catch (e) {
+      alert('USPTO check failed: ' + (e?.message || 'error'))
+    } finally {
+      setUsptoBusy(false)
+    }
+  }, [setNodeMeta])
 
   // Zoom â€" pan on background only (not on nodes)
   useEffect(() => {
@@ -3555,6 +3576,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {row('◐', 'Opacity', 'opacity')}
                     {row('🌀', 'Motion', 'motion')}
                     {row('🎭', 'Apply style', 'style')}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                    {item('⚖️', usptoBusy ? 'Checking USPTO…' : 'Check USPTO (live hits)', () => { if (!usptoBusy) { runUSPTOCheck(ids); close() } })}
+                    {item('🏷️', 'Tag these…', () => { const t = prompt('Tag to add to the selected nodes'); if (t && t.trim()) { const tag = t.trim().replace(/^#/, ''); ids.forEach(id => addNodeTag(id, tag)) } close() })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('⚓', 'Release anchors', () => { ids.forEach(id => releaseAnchor(id)); ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = null; sn.fy = null } }); simRef.current?.alpha(0.4).restart(); close() })}
                     {item('🙈', 'Hide these', () => { pushUndo(); ids.forEach(id => setNodeViewProp(id, 'visible', false)); setSelectedNodeIds(new Set()); close() })}
@@ -5835,6 +5859,22 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             <text textAnchor="middle" dominantBaseline="central" fill="#5b6af0" fontSize={9} style={{ userSelect:'none', pointerEvents:'none' }}>✎</text>
           </g>
         )}
+
+        {/* USPTO live-trademark hit badge (0 = green/likely clear, higher = amber/red) */}
+        {node.meta?.usptoHits != null && !isSelected && (() => {
+          const h = node.meta.usptoHits
+          const col = h === 0 ? '#16a34a' : h <= 2 ? '#f6ad55' : '#f87171'
+          const label = 'TM ' + h
+          const w = 14 + label.length * 6
+          return (
+            <g transform={`translate(${-w / 2}, ${-(bodyHalfH) - 22})`}
+              onMouseDown={e => e.stopPropagation()}>
+              <title>{`${h} live USPTO trademark hit${h === 1 ? '' : 's'}${node.meta.usptoNote && node.meta.usptoNote !== 'ok' ? ' (' + node.meta.usptoNote + ')' : ''}`}</title>
+              <rect x={0} y={0} width={w} height={16} rx={8} fill="#101024" stroke={col} strokeWidth={1.2} />
+              <text x={w / 2} y={8.5} textAnchor="middle" dominantBaseline="central" fill={col} fontSize={9.5} fontWeight={700} style={{ userSelect: 'none', pointerEvents: 'none' }}>{label}</text>
+            </g>
+          )
+        })()}
 
       {/* Emoji badges — move with AnimatedG so they animate with the node */}
       {(viewProps.nodeEmojis || []).map(em => {
