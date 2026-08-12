@@ -11,7 +11,7 @@ export const PROP_TYPES = [
   { type: 'date', label: 'Date', icon: '📅' },
   { type: 'checkbox', label: 'Checkbox', icon: '☑' },
   { type: 'select', label: 'Select', icon: '◉' },
-  { type: 'multiSelect', label: 'Tags', icon: '⛁' },
+  { type: 'tags', label: 'Tags', icon: '🏷️' },
   { type: 'url', label: 'URL', icon: '🔗' },
 ]
 export const OPTION_COLORS = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#94a3b8']

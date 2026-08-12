@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import useGraphStore from '../lib/graphStore'
 import { saveProject } from '../lib/db'
 import { PropertyField, TextInput, PROP_TYPES } from '../components/PropertyField'
+import { tagColor, nodeTags } from '../lib/tags'
 
 // Notion-style database grid: rows = nodes, columns = property definitions.
 // Property schema is per project (project === one DB). Values live on node.props[propId].
@@ -20,6 +21,8 @@ export default function Table({ projectId }) {
   const deletePropertyDef = useGraphStore(s => s.deletePropertyDef)
   const addSelectOption = useGraphStore(s => s.addSelectOption)
   const setNodeProp = useGraphStore(s => s.setNodeProp)
+  const addNodeTag = useGraphStore(s => s.addNodeTag)
+  const removeNodeTag = useGraphStore(s => s.removeNodeTag)
 
   // Own autosave — Graph (which normally owns autosave) is unmounted in the table view.
   // Skip the first run so mounting never writes back unchanged data.
@@ -37,6 +40,13 @@ export default function Table({ projectId }) {
 
   const [addingCol, setAddingCol] = useState(false)
   const [menuCol, setMenuCol] = useState(null)
+
+  // Surface a Tags column automatically if any node already carries tags (e.g. added earlier from
+  // the graph or outliner) and no Tags column exists yet — so unified tags are always visible here.
+  useEffect(() => {
+    if (propertyDefs.some(p => p.type === 'tags')) return
+    if (nodes.some(n => (n.meta?.tags || []).length > 0)) addPropertyDef('tags', 'Tags')
+  }, [nodes, propertyDefs, addPropertyDef])
 
   return (
     <div style={styles.wrap}>
@@ -79,9 +89,13 @@ export default function Table({ projectId }) {
                 </td>
                 {propertyDefs.map(def => (
                   <td key={def.id} style={styles.td}>
-                    <PropertyField def={def} value={n.props?.[def.id]}
-                      onChange={v => setNodeProp(n.id, def.id, v)}
-                      onAddOption={(name, color) => addSelectOption(def.id, name, color)} />
+                    {def.type === 'tags' ? (
+                      <TagsCell tags={nodeTags(n)} onAdd={t => addNodeTag(n.id, t)} onRemove={t => removeNodeTag(n.id, t)} />
+                    ) : (
+                      <PropertyField def={def} value={n.props?.[def.id]}
+                        onChange={v => setNodeProp(n.id, def.id, v)}
+                        onAddOption={(name, color) => addSelectOption(def.id, name, color)} />
+                    )}
                   </td>
                 ))}
                 <td style={styles.td} />
@@ -100,6 +114,32 @@ export default function Table({ projectId }) {
           <div style={styles.hint}>No properties yet. Click <strong style={{ color: '#a0b4f0' }}>+</strong> in the header to add one (Text, Number, Date, Tags…).</div>
         )}
       </div>
+    </div>
+  )
+}
+
+// Tags cell — bound to the canonical node.meta.tags string list (shared with graph + outliner).
+function TagsCell({ tags, onAdd, onRemove }) {
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+  const commit = () => { const t = draft.trim(); if (t) onAdd(t); setDraft(''); setAdding(false) }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', minHeight: 22 }}>
+      {tags.map(t => (
+        <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, color: '#e6ebff', background: tagColor(t) + '2e', border: `1px solid ${tagColor(t)}`, borderRadius: 8, padding: '1px 6px', whiteSpace: 'nowrap' }}>
+          {t}
+          <span onClick={() => onRemove(t)} title="Remove tag" style={{ cursor: 'pointer', color: '#c5d0ff', opacity: 0.7, fontSize: 12, lineHeight: 1 }}>×</span>
+        </span>
+      ))}
+      {adding ? (
+        <input autoFocus value={draft} placeholder="tag…"
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setDraft(''); setAdding(false) } }}
+          style={{ width: 70, background: '#0e0e1c', border: '1px solid #2d3a6a', borderRadius: 6, color: '#c5d0ff', fontSize: 11, padding: '1px 5px', outline: 'none' }} />
+      ) : (
+        <button onClick={() => setAdding(true)} title="Add tag" style={{ background: 'transparent', border: '1px dashed #3a4a8a', borderRadius: 8, color: '#8090b8', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '2px 6px' }}>+</button>
+      )}
     </div>
   )
 }

@@ -223,13 +223,19 @@ const useGraphStore = create((set, get) => ({
   setNodeMeta: (id, patch) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, meta: { ...(n.meta || {}), ...patch } } : n),
   })),
-  addNodeTag: (id, tag) => set(s => ({
-    nodes: s.nodes.map(n => {
+  addNodeTag: (id, tag) => set(s => {
+    const clean = String(tag || '').trim().replace(/^#+/, '').trim().replace(/\s+/g, '-')
+    if (!clean) return {}
+    const nodes = s.nodes.map(n => {
       if (n.id !== id) return n
       const tags = (n.meta?.tags) || []
-      return tags.includes(tag) ? n : { ...n, meta: { ...(n.meta || {}), tags: [...tags, tag] } }
-    }),
-  })),
+      return tags.includes(clean) ? n : { ...n, meta: { ...(n.meta || {}), tags: [...tags, clean] } }
+    })
+    // Auto-surface a single canonical "Tags" column so tags added anywhere show up in the Table.
+    const hasTagsCol = s.propertyDefs.some(p => p.type === 'tags')
+    const propertyDefs = hasTagsCol ? s.propertyDefs : [...s.propertyDefs, { id: uid(), name: 'Tags', type: 'tags' }]
+    return { nodes, propertyDefs }
+  }),
   removeNodeTag: (id, tag) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, meta: { ...(n.meta || {}), tags: ((n.meta?.tags) || []).filter(t => t !== tag) } } : n),
   })),
@@ -285,7 +291,12 @@ const useGraphStore = create((set, get) => ({
   // â”€â”€ Property (Notion-DB column) ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   addPropertyDef: (type = 'text', name) => {
     const id = uid()
-    const labels = { text:'Text', number:'Number', date:'Date', checkbox:'Checkbox', select:'Select', multiSelect:'Tags', url:'URL' }
+    const labels = { text:'Text', number:'Number', date:'Date', checkbox:'Checkbox', select:'Select', multiSelect:'Multi-select', tags:'Tags', url:'URL' }
+    // "Tags" is a canonical singleton backed by node.meta.tags — never create a second one.
+    if (type === 'tags') {
+      const existing = get().propertyDefs.find(p => p.type === 'tags')
+      if (existing) return existing.id
+    }
     const def = { id, name: name || labels[type] || 'Property', type }
     if (type === 'select' || type === 'multiSelect') def.options = []
     set(s => ({ propertyDefs: [...s.propertyDefs, def] }))

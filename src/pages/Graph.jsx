@@ -7,6 +7,7 @@ import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, se
 import ViewManager from '../components/ViewManager'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
+import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
@@ -635,6 +636,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const exitDrill       = useGraphStore(s => s.exitDrill)
   const setNodeMeta     = useGraphStore(s => s.setNodeMeta)
   const addNodeTag      = useGraphStore(s => s.addNodeTag)
+  const removeNodeTag   = useGraphStore(s => s.removeNodeTag)
   const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
   const setViewPan      = useGraphStore(s => s.setViewPan)
@@ -3770,6 +3772,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
               onDuplicate={() => { pushUndo(); handleDuplicateNode(hn.id); close() }}
+              tags={hs.meta?.tags || []}
+              onAddTag={t => addNodeTag(hn.id, t)}
+              onRemoveTag={t => removeNodeTag(hn.id, t)}
               onGenWords={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'words' }); close() }}
               onGenVariations={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'variations' }); close() }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
@@ -5906,6 +5911,31 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           )
         })()}
 
+        {/* Tag chips — the unified node.meta.tags, shown below the node (hidden while selected to avoid toolbar overlap) */}
+        {(node.meta?.tags?.length > 0) && !isSelected && (() => {
+          const tags = node.meta.tags.slice(0, 6)
+          const gap = 4, h = 15
+          const widths = tags.map(t => 12 + t.length * 5.6)
+          const total = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, tags.length - 1)
+          let x = -total / 2
+          const y = bodyHalfH + 8
+          return (
+            <g onMouseDown={e => e.stopPropagation()}>
+              {tags.map((t, i) => {
+                const w = widths[i]; const gx = x; x += w + gap
+                const c = tagColor(t)
+                return (
+                  <g key={t} transform={`translate(${gx}, ${y})`}>
+                    <title>{'#' + t}</title>
+                    <rect x={0} y={0} width={w} height={h} rx={7} fill="#101024" stroke={c} strokeWidth={1} opacity={0.95} />
+                    <text x={w / 2} y={h / 2 + 0.5} textAnchor="middle" dominantBaseline="central" fill={c} fontSize={9} fontWeight={600} style={{ userSelect: 'none', pointerEvents: 'none' }}>{t}</text>
+                  </g>
+                )
+              })}
+            </g>
+          )
+        })()}
+
       {/* Emoji badges — move with AnimatedG so they animate with the node */}
       {(viewProps.nodeEmojis || []).map(em => {
         const cosA = Math.cos(em.angle), sinA = Math.sin(em.angle)
@@ -6429,6 +6459,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
+  tags = [], onAddTag, onRemoveTag,
   floating = false, onUndock, onRedock, nodeTitle }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
@@ -6449,6 +6480,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const [emojiSearch, setEmojiSearch] = useState('')
   const [emojiCategory, setEmojiCategory] = useState(0)
   const [colorPopup, setColorPopup] = useState(null) // 'fill' | 'text' | null
+  const [tagDraft, setTagDraft] = useState('')
 
   useEffect(() => { setNotesDraft(notes) }, [notes])
 
@@ -6579,6 +6611,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           const set = Object.values(nodeProps).filter(v => v != null && v !== '' && !(Array.isArray(v) && v.length === 0)).length
           return { icon: '🏷️', right: set > 0 ? String(set) : '›', rightColor: set > 0 ? '#88b4e8' : '#8090b8', opens: 'props' }
         })())}
+        {onAddTag && textRow('Tags', () => setPanel('tags'), { icon: '🔖', right: tags.length ? String(tags.length) : '›', rightColor: tags.length ? '#88b4e8' : '#8090b8', opens: 'tags' })}
         {textRow('Emoji', () => setPanel('emoji'), { icon: '😀', right: '›', opens: 'emoji' })}
         {textRow('Image', () => setPanel('image'), { icon: '🖼️', right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
         {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { icon: '✨', right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
@@ -6931,6 +6964,28 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               width:'100%', boxSizing:'border-box',
             }}
           />
+        </div>
+      )}
+
+      {panel === 'tags' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:210 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>TAGS</span>
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+            {tags.length === 0 && <span style={{ fontSize:'0.76rem', color:'#8090b8' }}>No tags yet</span>}
+            {tags.map(t => (
+              <span key={t} style={{ display:'inline-flex', alignItems:'center', gap:3, fontSize:11, color:'#e6ebff', background: tagColor(t) + '2e', border:`1px solid ${tagColor(t)}`, borderRadius:8, padding:'1px 6px', whiteSpace:'nowrap' }}>
+                {t}
+                <span onClick={() => onRemoveTag?.(t)} title="Remove" style={{ cursor:'pointer', color:'#c5d0ff', opacity:0.7, fontSize:12, lineHeight:1 }}>×</span>
+              </span>
+            ))}
+          </div>
+          <input value={tagDraft} autoFocus placeholder="Add tag + Enter…"
+            onChange={e => setTagDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const t = tagDraft.trim(); if (t) onAddTag?.(t); setTagDraft('') } }}
+            style={{ background:'#0e0e1c', border:'1px solid #2d3a6a', color:'#c7d0f8', borderRadius:5, padding:'5px 8px', fontSize:'0.82rem', outline:'none', width:'100%', boxSizing:'border-box' }} />
         </div>
       )}
 
