@@ -4039,6 +4039,31 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         </div>
       )}
 
+      {notePopupId && (() => {
+        const n = simNodesRef.current.find(x => x.id === notePopupId)
+        const sn = storeNodes.find(x => x.id === notePopupId)
+        if (!n || !sn || !svgRef.current) return null
+        const rect = svgRef.current.getBoundingClientRect()
+        const T = zoomTransformRef.current
+        let cx = rect.left + T.x + (n.x || 0) * T.k
+        let cy = rect.top + T.y + (n.y || 0) * T.k + 18
+        cx = Math.max(10, Math.min(window.innerWidth - 290, cx))
+        cy = Math.max(10, Math.min(window.innerHeight - 200, cy))
+        return (
+          <>
+            <div onMouseDown={() => setNotePopupId(null)} style={{ position: 'fixed', inset: 0, zIndex: 44 }} />
+            <div onMouseDown={e => e.stopPropagation()} style={{ position: 'fixed', left: cx, top: cy, zIndex: 45, width: 270, background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 10, padding: 10, boxShadow: '0 12px 34px rgba(0,0,0,0.65)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ color: '#c5d0ff', fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📝 {sn.label || 'Untitled'}</span>
+                <button onClick={() => setNotePopupId(null)} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: 13 }}>✕</button>
+              </div>
+              <textarea autoFocus value={sn.notes || ''} onChange={e => updateNotes(notePopupId, e.target.value)} placeholder="Notes…"
+                style={{ width: '100%', minHeight: 96, resize: 'vertical', background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 7, padding: '7px 9px', fontSize: 12.5, lineHeight: 1.45, outline: 'none', boxSizing: 'border-box', fontFamily: '-apple-system, sans-serif' }} />
+            </div>
+          </>
+        )
+      })()}
+
       {wgDialog && (
         <WordgenDialog
           nodeLabel={storeNodes.find(n => n.id === wgDialog.nodeId)?.label || ''}
