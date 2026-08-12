@@ -5776,8 +5776,11 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {/* Notes indicator badge */}
         {hasNotes && !isSelected && (
           <g transform={`translate(${bodyHalfW * 0.3}, ${shape === '3d' ? bodyHalfH + 22 : bodyHalfH + 3})`}
+            onMouseDown={e => { e.stopPropagation() }}
             onClick={e => { e.stopPropagation(); onShowNotePopup?.(node.id) }}
             style={{ cursor: 'pointer' }}>
+            {/* larger transparent hit target so the small ✎ is easy to click */}
+            <circle r={13} fill="transparent" />
             <circle r={8} fill="#12122a" stroke="#5b6af0" strokeWidth={1.2} />
             <text textAnchor="middle" dominantBaseline="central" fill="#5b6af0" fontSize={9} style={{ userSelect:'none', pointerEvents:'none' }}>✎</text>
           </g>
