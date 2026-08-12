@@ -1482,13 +1482,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const el = svgRef.current
     const OVERLAY_SEL = '[data-nodetoolbar],[data-menu],[data-slide-sidebar],input,textarea,select,a,button'
     // Open the right menu at a screen point. isCtrl = a Ctrl+click (background menu only; nodes keep multi-select).
-    const openMenuAt = (clientX, clientY, target, isCtrl) => {
+    const openMenuAt = (clientX, clientY, target, isCtrl, forceBg) => {
       if (!el || readOnly) return
       if (target?.closest?.(OVERLAY_SEL)) return
       const rect = el.getBoundingClientRect()
       if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
       const px = clientX - rect.left, py = clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
+      // Shift+right-click forces the background menu open even when the cursor is over a node — a reliable
+      // escape hatch when the canvas is dense and there's no empty space to click.
+      if (forceBg) { setNodeMenu(null); setPhotoMenu(null); setBulkMenu(null); setContextMenu({ px, py, sx, sy }); return }
       let hitNode = null
       for (const n of simNodesRef.current) {
         if (!visibleNodeIdsRef.current.has(n.id) || n.x == null) continue
@@ -1497,8 +1500,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const nr = NODE_R * (nvp.scale || 1)
         const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '',
           Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
-        const pad = nvp.shape === 'none' ? 10 : 0   // bodyless names have tight boxes — ease right-click
-        if (Math.abs(sx - n.x) <= halfW + pad && Math.abs(sy - n.y) <= halfH + pad) hitNode = n
+        if (Math.abs(sx - n.x) <= halfW && Math.abs(sy - n.y) <= halfH) hitNode = n
       }
       if (hitNode && !isCtrl) {
         setContextMenu(null); setPhotoMenu(null)
@@ -1531,14 +1533,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     let suppressContext = false // a right-DRAG just ended → swallow the trailing `contextmenu` (Linux/Win fire it AFTER mouseup)
     const onDown = ev => {
       suppressContext = false  // new gesture — clear any stale suppression
-      if (ev.button === 2) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: false }
-      else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: true }
+      if (ev.button === 2) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: false, shift: ev.shiftKey }
+      else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: true, shift: ev.shiftKey }
       else press = null
     }
     const onMove = ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) >= 5) press.moved = true }
     const onUp = ev => {
       if (press && press.moved) suppressContext = true   // dragged → the contextmenu that fires right after must NOT open the menu
-      else if (press && (ev.button === 2 || (ev.button === 0 && press.ctrl))) openMenuAt(press.x, press.y, press.t, press.ctrl)
+      else if (press && (ev.button === 2 || (ev.button === 0 && press.ctrl))) openMenuAt(press.x, press.y, press.t, press.ctrl, press.shift)
       press = null
     }
     const onContext = ev => {
@@ -1547,7 +1549,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       ev.preventDefault()
       if (suppressContext) { suppressContext = false; return }   // trailing event from a drag → ignore
       if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
-      openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey)   // untracked gesture (trackpad tap) → open now
+      openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey, ev.shiftKey)   // untracked gesture (trackpad tap) → open now
     }
     // Slide-scrub focus: arrow keys page through slides ONLY when the slide sidebar was the last thing
     // clicked. Clicking anywhere else (canvas, a node, another panel) disables it, so arrows go back to
