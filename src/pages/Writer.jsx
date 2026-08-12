@@ -478,6 +478,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
     <div ref={wrapRef} style={{ height: '100%', background: bg, color: fg, display: 'flex', flexDirection: 'column', fontFamily: OUTLINE_FONT }}>
       {/* Toolbar — clean, grouped, ghost buttons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, rowGap: 4, flexWrap: 'wrap', padding: '7px 14px', borderBottom: `1px solid ${line}`, flexShrink: 0, fontFamily: '-apple-system, sans-serif' }}>
+        {embedded && onClose && <button className="pim-wtb" title="Hide the outliner" onClick={() => onClose()} style={{ ...tb(false), width: 30, justifyContent: 'center', fontSize: 17, color: '#e0687e', flexShrink: 0 }}>✕</button>}
         <button className="pim-wtb" onClick={addRoot} title="New item" style={{ ...tb(false), color: '#5b6af0', fontWeight: 600 }}>＋ New</button>
         {divider}
         {/* format */}
@@ -528,7 +529,6 @@ export default function Writer({ projectName, embedded = false, maximized = fals
           <button className="pim-wtb" title="Keyboard shortcuts" onClick={() => { setShowKeys(true); setCapturing(null) }} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>⌨</button>
           {embedded && <button className="pim-wtb" title={maximized ? 'Restore split (show canvas)' : 'Maximize outliner (hide canvas)'} onClick={() => onExpand && onExpand()} style={{ ...tb(maximized), width: 30, justifyContent: 'center' }}>{maximized ? '⤡' : '⤢'}</button>}
           <button className="pim-wtb" title="Light / dark" onClick={() => setDark(d => !d)} style={{ ...tb(false), width: 30, justifyContent: 'center' }}>{dark ? '☀️' : '🌙'}</button>
-          {embedded && onClose && <button className="pim-wtb" title="Hide the outliner" onClick={() => onClose()} style={{ ...tb(false), width: 30, justifyContent: 'center', fontSize: 16 }}>✕</button>}
         </div>
       </div>
 
