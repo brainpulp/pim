@@ -1476,7 +1476,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const nr = NODE_R * (nvp.scale || 1)
         const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '',
           Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
-        if (Math.abs(sx - n.x) <= halfW && Math.abs(sy - n.y) <= halfH) hitNode = n
+        const pad = nvp.shape === 'none' ? 10 : 0   // bodyless names have tight boxes — ease right-click
+        if (Math.abs(sx - n.x) <= halfW + pad && Math.abs(sy - n.y) <= halfH + pad) hitNode = n
       }
       if (hitNode && !isCtrl) {
         setContextMenu(null); setPhotoMenu(null)
@@ -1552,6 +1553,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       window.removeEventListener('contextmenu', onContext, true)
     }
   }, [scheduleRender, loading])
+
+  // While a delete-confirm modal is open: Enter confirms, Escape cancels. Capture phase +
+  // stopImmediatePropagation so the canvas keydown handler (Enter = create sister) doesn't also fire.
+  useEffect(() => {
+    if (!confirmDelete && !confirmDeleteNodes) return
+    const onKey = e => {
+      if (e.key === 'Enter') {
+        e.preventDefault(); e.stopImmediatePropagation()
+        if (confirmDelete) { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }
+        else if (confirmDeleteNodes) { pushUndo(); confirmDeleteNodes.forEach(id => deleteNode(id)); setSelectedNodeIds(new Set()); setSelected(null); setConfirmDeleteNodes(null) }
+      } else if (e.key === 'Escape') {
+        e.preventDefault(); e.stopImmediatePropagation()
+        setConfirmDelete(null); setConfirmDeleteNodes(null)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [confirmDelete, confirmDeleteNodes, pushUndo, deleteNode])
 
   // Read a saved viewport: localStorage first (instant, survives quick reloads), then the
   // DB-persisted pan on the view (cross-device backup).
@@ -1854,8 +1873,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const [startSx, startSy] = clientToSim(e.clientX, e.clientY)
     const startPositions = dragGroup.map(n => ({ node: n, ox: n.fx ?? n.x ?? 0, oy: n.fy ?? n.y ?? 0, wasAnchored: n.fx !== null }))
     let didDrag = false
+    let lastClient = { x: e.clientX, y: e.clientY }
+    let panRaf = null
 
     const onMove = me => {
+      lastClient = { x: me.clientX, y: me.clientY }
       const [sx, sy] = clientToSim(me.clientX, me.clientY)
       const ddx = sx - startSx, ddy = sy - startSy
       if (!didDrag && Math.abs(ddx) < 2 && Math.abs(ddy) < 2) return
@@ -1889,7 +1911,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         }
       }
     }
+
+    // Auto-pan: while dragging with the cursor inside a canvas-edge margin, pan the view toward that
+    // edge and keep the dragged node(s) under the cursor — so you can drag into off-screen space.
+    const applyDragPositions = () => {
+      const [sx, sy] = clientToSim(lastClient.x, lastClient.y)
+      const ddx = sx - startSx, ddy = sy - startSy
+      startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
+    }
+    const EDGE_M = 55, EDGE_V = 16
+    const edgePan = () => {
+      panRaf = requestAnimationFrame(edgePan)
+      if (!didDrag || !svgRef.current || !zoomBehaviorRef.current) return
+      const r = svgRef.current.getBoundingClientRect()
+      let vx = 0, vy = 0
+      if (lastClient.x < r.left + EDGE_M) vx = -(EDGE_M - (lastClient.x - r.left)) / EDGE_M
+      else if (lastClient.x > r.right - EDGE_M) vx = (EDGE_M - (r.right - lastClient.x)) / EDGE_M
+      if (lastClient.y < r.top + EDGE_M) vy = -(EDGE_M - (lastClient.y - r.top)) / EDGE_M
+      else if (lastClient.y > r.bottom - EDGE_M) vy = (EDGE_M - (r.bottom - lastClient.y)) / EDGE_M
+      if (!vx && !vy) return
+      vx = Math.max(-1, Math.min(1, vx)); vy = Math.max(-1, Math.min(1, vy))
+      const k = zoomTransformRef.current.k || 1
+      d3.select(svgRef.current).call(zoomBehaviorRef.current.translateBy, -vx * EDGE_V / k, -vy * EDGE_V / k)
+      applyDragPositions()
+      scheduleRender()
+    }
+    panRaf = requestAnimationFrame(edgePan)
+
     const onUp = ue => {
+      if (panRaf) cancelAnimationFrame(panRaf)
       clearGestureCursor()
       simRef.current.alphaTarget(0)
       setMovingIds(null)   // clear the group-move highlight
@@ -2003,7 +2053,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp])
+  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
