@@ -1657,6 +1657,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     didRestoreViewRef.current = true
   }, [loading, views, activeViewId, applyPan, readSavedPan, introToPan])
 
+  // Safety net: any mousedown/right-click outside an open graph menu closes it. The per-menu
+  // backdrops already do this, but this document-level capture guarantees a stuck menu can't
+  // survive an outside interaction (defends against z-index / event-order regressions).
+  useEffect(() => {
+    if (!contextMenu && !bulkMenu) return
+    const onDown = e => {
+      if (e.target?.closest?.('[data-graphmenu]')) return
+      setContextMenu(null); setCtxColors(false)
+      setBulkMenu(null); setBulkPanel(null)
+    }
+    // Defer binding a tick so the same click that opened the menu doesn't immediately close it.
+    const t = setTimeout(() => {
+      document.addEventListener('mousedown', onDown, true)
+      document.addEventListener('contextmenu', onDown, true)
+    }, 0)
+    return () => {
+      clearTimeout(t)
+      document.removeEventListener('mousedown', onDown, true)
+      document.removeEventListener('contextmenu', onDown, true)
+    }
+  }, [contextMenu, bulkMenu])
+
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = e => {
@@ -3467,7 +3489,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <>
               <div onMouseDown={close} onContextMenu={e => e.preventDefault()}
                 style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
-              <div onMouseDown={e => e.stopPropagation()}
+              <div data-graphmenu onMouseDown={e => e.stopPropagation()}
                 ref={el => clampMenuEl(el, contextMenu.px, contextMenu.py, false)}
                 style={{
                   position: 'absolute', left: contextMenu.px, top: contextMenu.py, zIndex: 35,
@@ -3569,7 +3591,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return (
             <>
               <div onMouseDown={close} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
-              <div onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
+              <div data-graphmenu onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
                 style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto' }}>
                 <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
                 {bulkPanel && PANELS[bulkPanel] ? PANELS[bulkPanel]() : (
