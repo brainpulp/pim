@@ -1347,22 +1347,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [wgDialog, setWgDialog] = useState(null)
   const [wgBusy, setWgBusy] = useState(false)
   const [wgErr, setWgErr] = useState(null)
-  const runWordgen = useCallback(async (nodeId, mode, { count, modifier }) => {
+  const runWordgen = useCallback(async (nodeId, mode, { count, modifier, seeds }) => {
     setWgBusy(true); setWgErr(null)
     try {
       const st = useGraphStore.getState()
       const node = st.nodes.find(n => n.id === nodeId)
       if (!node) return
-      const theme = node.label || ''
-      let criteria = []
-      if (mode === 'words') {
-        const childIds = st.edges.filter(e => e.source === nodeId).map(e => e.target)
-        criteria = childIds
-          .map(cid => st.nodes.find(n => n.id === cid))
-          .filter(n => n && !['word', 'variation'].includes(n.meta?.wg))
-          .map(n => n.label).filter(Boolean)
+      const byId = new Map(st.nodes.map(n => [n.id, n]))
+      const parentOf = {}; st.edges.forEach(e => { parentOf[e.target] = e.source })
+      const isGen = n => ['word', 'variation'].includes(n?.meta?.wg)
+      // The "master" holds the brief (its Notes) + criteria (its non-generated children). When firing from
+      // a generated word/variation, walk up to the nearest non-generated ancestor to inherit that context.
+      let master = node
+      if (mode === 'variations') {
+        let cur = parentOf[nodeId], guard = new Set()
+        while (cur && !guard.has(cur)) { guard.add(cur); const m = byId.get(cur); if (m && !isGen(m)) { master = m; break } cur = parentOf[cur] }
       }
-      const { words } = await generateWords({ mode, theme, criteria, seed: node.label, modifier, count })
+      const theme = master.label || ''
+      const brief = master.notes || ''
+      const criteria = st.edges.filter(e => e.source === master.id).map(e => byId.get(e.target))
+        .filter(n => n && !isGen(n)).map(n => n.label).filter(Boolean)
+      const seedList = (seeds || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+      const { words } = await generateWords({ mode, theme, brief, criteria, seeds: seedList, seed: node.label, modifier, count })
       if (!words.length) { setWgErr('No words came back — try again or adjust the prompt.'); return }
       pushUndo()
       const parent = simNodesRef.current.find(n => n.id === nodeId)
@@ -4020,7 +4026,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           mode={wgDialog.mode}
           busy={wgBusy}
           err={wgErr}
-          onRun={(count, modifier) => runWordgen(wgDialog.nodeId, wgDialog.mode, { count, modifier })}
+          onRun={(count, modifier, seeds) => runWordgen(wgDialog.nodeId, wgDialog.mode, { count, modifier, seeds })}
           onClose={() => { if (!wgBusy) { setWgDialog(null); setWgErr(null) } }}
         />
       )}
@@ -6190,6 +6196,7 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
   const [count, setCount] = useState(8)
   const [modifier, setModifier] = useState('')
+  const [seeds, setSeeds] = useState('')
   const [keyInput, setKeyInput] = useState(() => getWordgenKey())
   const [live, setLive] = useState(() => hasWordgenKey())
   const inp = { width: '100%', boxSizing: 'border-box', background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 7, padding: '7px 9px', fontSize: 13, outline: 'none' }
@@ -6212,7 +6219,11 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
         <input type="number" min={1} max={30} value={count} onChange={e => setCount(Math.max(1, Math.min(30, +e.target.value || 1)))} style={{ ...inp, marginBottom: 10 }} />
 
         <label style={lbl}>Modifier prompt (optional)</label>
-        <input value={modifier} onChange={e => setModifier(e.target.value)} placeholder="e.g. more sci-fi, shorter, Latin roots" style={{ ...inp, marginBottom: 12 }} />
+        <input value={modifier} onChange={e => setModifier(e.target.value)} placeholder="e.g. more sci-fi, shorter, Latin roots" style={{ ...inp, marginBottom: 10 }} />
+
+        <label style={lbl}>Seed / example words (optional)</label>
+        <textarea value={seeds} onChange={e => setSeeds(e.target.value)} rows={2} placeholder="Made-up or real, comma / line separated — steer the style" style={{ ...inp, marginBottom: 12, resize: 'vertical', fontFamily: 'inherit' }} />
+        {mode === 'variations' && <div style={{ color: '#8090b8', fontSize: '0.7rem', marginTop: -6, marginBottom: 10 }}>Inherits the master’s brief + criteria automatically.</div>}
 
         {!live && (
           <div style={{ background: '#0e0e1c', border: '1px solid #2a2f47', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
@@ -6230,7 +6241,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button disabled={busy} onClick={onClose} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#9aa8d8', borderRadius: 7, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-          <button disabled={busy} onClick={() => onRun(count, modifier.trim())}
+          <button disabled={busy} onClick={() => onRun(count, modifier.trim(), seeds.trim())}
             style={{ background: busy ? '#2a3260' : 'linear-gradient(#2a327a, #1e2358)', border: '1px solid #3a4a8a', color: '#e6ebff', borderRadius: 7, padding: '7px 16px', cursor: busy ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}>
             {busy ? 'Generating…' : 'Generate'}
           </button>

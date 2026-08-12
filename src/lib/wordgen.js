@@ -21,16 +21,18 @@ export const setWordgenModel = (m) => { try { m ? localStorage.setItem(MODEL_LS,
 export const hasWordgenKey = () => !!getWordgenKey()
 
 // ── Prompt building ─────────────────────────────────────────────────────────
-function buildPrompt({ mode, theme, criteria, seed, modifier, count }) {
+function buildPrompt({ mode, theme, brief, criteria, seeds, seed, modifier, count }) {
   const lines = []
+  lines.push('You are a branding/naming assistant. Names may be invented (non-dictionary) words — that is encouraged.')
   if (mode === 'variations') {
-    lines.push(`Generate ${count} creative variations of the word/name: "${seed}".`)
-    if (theme) lines.push(`It belongs to this theme: ${theme}.`)
+    lines.push(`Generate ${count} creative variations of the name: "${seed}".`)
   } else {
-    lines.push(`Generate ${count} original words/names.`)
-    if (theme) lines.push(`Overall theme: ${theme}.`)
-    if (criteria && criteria.length) lines.push(`They must satisfy ALL of these criteria:\n- ${criteria.join('\n- ')}`)
+    lines.push(`Generate ${count} original brand names/words.`)
   }
+  if (theme) lines.push(`Theme / project: ${theme}.`)
+  if (brief) lines.push(`What the naming is for (brief): ${brief}`)
+  if (criteria && criteria.length) lines.push(`They must satisfy ALL of these criteria:\n- ${criteria.join('\n- ')}`)
+  if (seeds && seeds.length) lines.push(`Take stylistic inspiration from these example words (which may themselves be invented) without copying them:\n- ${seeds.join('\n- ')}`)
   if (modifier) lines.push(`Additional instruction: ${modifier}.`)
   lines.push('Return ONLY a compact JSON array of strings, no prose, no numbering, no code fences.')
   return lines.join('\n')
@@ -80,8 +82,8 @@ function parseWords(text) {
 // Deterministic-ish, plausible-looking made-up words derived from the inputs, so the tool is fully
 // usable to shape the tree before wiring a key. Varied by index so repeats differ.
 const SYL = ['ka', 'lo', 'ven', 'tri', 'sol', 'mar', 'quo', 'bel', 'nyx', 'zeph', 'ora', 'lum', 'fen', 'ryl', 'thes', 'vio', 'cad', 'mun', 'per', 'sil']
-function stubWords({ mode, seed, theme, criteria, count, salt = 0 }) {
-  const base = (mode === 'variations' ? seed : (criteria?.[0] || theme || 'word')) || 'word'
+function stubWords({ mode, seed, theme, criteria, seeds, count, salt = 0 }) {
+  const base = (mode === 'variations' ? seed : (seeds?.[0] || criteria?.[0] || theme || 'word')) || 'word'
   const clean = base.toLowerCase().replace(/[^a-z]/g, '').slice(0, 4) || 'wor'
   const out = []
   for (let i = 0; i < count; i++) {
@@ -96,12 +98,12 @@ function stubWords({ mode, seed, theme, criteria, count, salt = 0 }) {
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
-// opts: { mode:'words'|'variations', theme, criteria:string[], seed, modifier, count }
+// opts: { mode:'words'|'variations', theme, brief, criteria:string[], seeds:string[], seed, modifier, count }
 // returns { words: string[], stub: boolean }
 export async function generateWords(opts) {
   const count = Math.max(1, Math.min(30, opts.count || 8))
   if (!hasWordgenKey()) {
-    return { words: stubWords({ ...opts, count, salt: (opts.seed || '').length + (opts.modifier || '').length }), stub: true }
+    return { words: stubWords({ ...opts, count, salt: (opts.seed || '').length + (opts.modifier || '').length + (opts.seeds || []).length }), stub: true }
   }
   const prompt = buildPrompt({ ...opts, count })
   const text = await callClaude(prompt)
