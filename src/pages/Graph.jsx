@@ -3,7 +3,7 @@ import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS } from '../lib/graphStore'
-import { generateWords, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
+import { generateWords, assessRisk, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
@@ -1347,7 +1347,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [wgDialog, setWgDialog] = useState(null)
   const [wgBusy, setWgBusy] = useState(false)
   const [wgErr, setWgErr] = useState(null)
-  const runWordgen = useCallback(async (nodeId, mode, { count, modifier, seeds }) => {
+  const runWordgen = useCallback(async (nodeId, mode, { count, modifier, seeds, assess }) => {
     setWgBusy(true); setWgErr(null)
     try {
       const st = useGraphStore.getState()
@@ -1376,7 +1376,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const ids = words.map((w, i) => {
         const id = addNode(w, nodeId)
         setNodeMeta(id, { wg: mode === 'words' ? 'word' : 'variation' })
-        return { id, i }
+        return { id, i, label: w }
       })
       // Fan the fresh nodes out around the parent so they don't pile up at the origin.
       setTimeout(() => {
@@ -1386,13 +1386,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })
         scheduleRender()
       }, 0)
-      setWgDialog(null)
+      // Optional trademark / brand-collision screen → ring each name green/amber/red + note the reason.
+      let keepOpen = false
+      if (assess && hasWordgenKey()) {
+        try {
+          const results = await assessRisk(words, { theme, brief })
+          const RC = { low: '#16a34a', medium: '#f6ad55', high: '#f87171' }
+          results.forEach((r, i) => {
+            const target = ids.find(x => x.label.toLowerCase() === r.name.toLowerCase()) || ids[i]
+            if (!target) return
+            const color = RC[r.risk] || RC.medium
+            setNodeViewProp(target.id, 'strokeColor', color)
+            setNodeViewProp(target.id, 'strokeWidth', 2.5)
+            setNodeMeta(target.id, { risk: r.risk })
+            if (r.note) updateNotes(target.id, `⚠ ${r.risk} infringement risk — ${r.note}`)
+          })
+        } catch (e) { setWgErr('Names generated, but risk assessment failed: ' + (e?.message || 'error')); keepOpen = true }
+      }
+      if (!keepOpen) setWgDialog(null)
     } catch (e) {
       setWgErr(e?.message || 'Generation failed.')
     } finally {
       setWgBusy(false)
     }
-  }, [addNode, setNodeMeta, pushUndo, scheduleRender])
+  }, [addNode, setNodeMeta, setNodeViewProp, updateNotes, pushUndo, scheduleRender])
 
   // Zoom â€" pan on background only (not on nodes)
   useEffect(() => {
@@ -4026,7 +4043,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           mode={wgDialog.mode}
           busy={wgBusy}
           err={wgErr}
-          onRun={(count, modifier, seeds) => runWordgen(wgDialog.nodeId, wgDialog.mode, { count, modifier, seeds })}
+          onRun={(count, modifier, seeds, assess) => runWordgen(wgDialog.nodeId, wgDialog.mode, { count, modifier, seeds, assess })}
           onClose={() => { if (!wgBusy) { setWgDialog(null); setWgErr(null) } }}
         />
       )}
@@ -6197,6 +6214,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
   const [count, setCount] = useState(8)
   const [modifier, setModifier] = useState('')
   const [seeds, setSeeds] = useState('')
+  const [assess, setAssess] = useState(false)
   const [keyInput, setKeyInput] = useState(() => getWordgenKey())
   const [live, setLive] = useState(() => hasWordgenKey())
   const inp = { width: '100%', boxSizing: 'border-box', background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 7, padding: '7px 9px', fontSize: 13, outline: 'none' }
@@ -6225,6 +6243,11 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
         <textarea value={seeds} onChange={e => setSeeds(e.target.value)} rows={2} placeholder="Made-up or real, comma / line separated — steer the style" style={{ ...inp, marginBottom: 12, resize: 'vertical', fontFamily: 'inherit' }} />
         {mode === 'variations' && <div style={{ color: '#8090b8', fontSize: '0.7rem', marginTop: -6, marginBottom: 10 }}>Inherits the master’s brief + criteria automatically.</div>}
 
+        <label title={live ? '' : 'Requires an API key'} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, cursor: live ? 'pointer' : 'not-allowed', opacity: live ? 1 : 0.5 }}>
+          <input type="checkbox" checked={assess && live} disabled={!live} onChange={e => setAssess(e.target.checked)} style={{ width: 15, height: 15, accentColor: '#5b6af0' }} />
+          <span style={{ fontSize: 12.5, color: '#c5d0ff' }}>⚠ Assess infringement risk <span style={{ color: '#8090b8' }}>— rings each name green/amber/red{live ? '' : ' (needs API key)'}</span></span>
+        </label>
+
         {!live && (
           <div style={{ background: '#0e0e1c', border: '1px solid #2a2f47', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
             <div style={{ color: '#f6ad55', fontSize: '0.72rem', marginBottom: 6 }}>No API key set — using the built-in stub generator (fake words). Paste an Anthropic key for real generation (stored only in this browser).</div>
@@ -6241,7 +6264,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button disabled={busy} onClick={onClose} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#9aa8d8', borderRadius: 7, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-          <button disabled={busy} onClick={() => onRun(count, modifier.trim(), seeds.trim())}
+          <button disabled={busy} onClick={() => onRun(count, modifier.trim(), seeds.trim(), assess && live)}
             style={{ background: busy ? '#2a3260' : 'linear-gradient(#2a327a, #1e2358)', border: '1px solid #3a4a8a', color: '#e6ebff', borderRadius: 7, padding: '7px 16px', cursor: busy ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}>
             {busy ? 'Generating…' : 'Generate'}
           </button>

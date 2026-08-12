@@ -39,7 +39,7 @@ function buildPrompt({ mode, theme, brief, criteria, seeds, seed, modifier, coun
 }
 
 // ── Real backend (direct browser call to Anthropic) ──────────────────────────
-async function callClaude(prompt) {
+async function callClaude(prompt, maxTokens = 1024) {
   const key = getWordgenKey()
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -51,7 +51,7 @@ async function callClaude(prompt) {
     },
     body: JSON.stringify({
       model: getWordgenModel(),
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),
   })
@@ -109,4 +109,31 @@ export async function generateWords(opts) {
   const text = await callClaude(prompt)
   const words = parseWords(text).slice(0, count)
   return { words, stub: false }
+}
+
+// Screen candidate names for trademark / existing-brand collision risk. Requires a key (real judgement).
+// Returns [{ name, risk:'low'|'medium'|'high', note }] aligned to the input order where possible.
+export async function assessRisk(names, { theme, brief } = {}) {
+  if (!hasWordgenKey() || !names?.length) return []
+  const prompt = [
+    'You are a trademark / brand-collision screener. For each candidate brand name below, estimate the risk that it collides with an existing well-known trademark or brand, or is a common word likely already registered in this space.',
+    theme ? `Context / theme: ${theme}.` : '',
+    brief ? `Brief: ${brief}` : '',
+    'Candidate names:',
+    names.map((n, i) => `${i + 1}. ${n}`).join('\n'),
+    'Return ONLY a compact JSON array, one object per name IN THE SAME ORDER: {"name": string, "risk": "low"|"medium"|"high", "note": string (max ~12 words, why)}. No prose, no code fences.',
+  ].filter(Boolean).join('\n')
+  const text = await callClaude(prompt, 2000)
+  let t = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+  const s = t.indexOf('['), e = t.lastIndexOf(']')
+  if (s !== -1 && e !== -1 && e > s) t = t.slice(s, e + 1)
+  try {
+    const arr = JSON.parse(t)
+    if (Array.isArray(arr)) return arr.map(o => ({
+      name: String(o?.name ?? '').trim(),
+      risk: ['low', 'medium', 'high'].includes(o?.risk) ? o.risk : 'medium',
+      note: String(o?.note ?? '').trim(),
+    }))
+  } catch { /* ignore */ }
+  return []
 }
