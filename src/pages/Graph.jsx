@@ -3423,6 +3423,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               return (
                 <KanbanCard key={'kb' + n.id} node={n} title={board?.label || 'Board'} columns={columns}
                   filter={board?.meta?.boardFilter || ''} statusSync={statusSync}
+                  scale={getVP(n.id).boardScale || 1}
+                  onSetScale={k => setNodeViewProp(n.id, 'boardScale', k)}
                   selectedId={selected?.type === 'node' ? selected.id : null}
                   zoomRef={zoomTransformRef}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
@@ -4878,12 +4880,14 @@ const lc = {
 // <foreignObject> like the list/table cards. Cards drag between columns (mouse-based, using
 // elementFromPoint + data-attrs — the same technique as the outliner; HTML5 DnD is unreliable inside
 // foreignObject). A per-board text filter hides non-matching cards (matches label or #tag).
-function KanbanCard({ node, title, columns, filter, statusSync, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilter, onToggleStatusSync, onAddColumn, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
-  const COLW = 210, GAP = 10, headerH = 38, colHeaderH = 30, PADT = headerH + 8
+function KanbanCard({ node, title, columns, filter, statusSync, scale = 1, onSetScale, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilter, onToggleStatusSync, onAddColumn, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
+  const COLW = 210, GAP = 10, headerH = 38, PADT = headerH + 8
   const bodyH = 420
   const W = Math.max(COLW + 24, columns.length * (COLW + GAP) + GAP + 8)
   const H = PADT + bodyH + 10
-  const [drag, setDrag] = useState(null)    // { cardId, x, y, label }
+  const s = scale || 1
+  const [drag, setDrag] = useState(null)      // { cardId, x, y, label }
+  const [overCol, setOverCol] = useState(null) // column id currently under the dragged card
 
   const q = (filter || '').trim().toLowerCase()
   const matches = (card) => {
@@ -4898,17 +4902,24 @@ function KanbanCard({ node, title, columns, filter, statusSync, selectedId, zoom
   const startDrag = (e, card) => {
     if (e.button !== 0) return
     e.stopPropagation()
+    e.preventDefault()   // don't begin a text selection on the card
     const ox = e.clientX, oy = e.clientY
     let moved = false
+    const noSelect = ev => ev.preventDefault()
     const onMove = ev => {
       if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 5) return   // ignore micro-jitter → keep clicks clean
-      moved = true
+      if (!moved) { moved = true; document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSelect, true) }
       setDrag({ cardId: card.id, label: card.label, x: ev.clientX, y: ev.clientY })
+      const t = document.elementFromPoint(ev.clientX, ev.clientY)
+      const colEl = t && t.closest('[data-kbcol]')
+      setOverCol(colEl ? colEl.getAttribute('data-kbcol') : null)
     }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove, true)
       document.removeEventListener('mouseup', onUp, true)
-      setDrag(null)
+      document.removeEventListener('selectstart', noSelect, true)
+      document.body.style.userSelect = ''
+      setDrag(null); setOverCol(null)
       if (!moved) return   // it was a click, not a drag — don't reorder
       const el = document.elementFromPoint(ev.clientX, ev.clientY)
       if (el) {
@@ -4925,10 +4936,20 @@ function KanbanCard({ node, title, columns, filter, statusSync, selectedId, zoom
     document.addEventListener('mouseup', onUp, true)
   }
 
+  // bottom-right handle → scale the whole board (top-left stays fixed, everything inside rescales)
+  const startScale = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const sx = e.clientX, sy = e.clientY, s0 = s, k = zoomRef?.current?.k || 1
+    const move = ev => onSetScale(Math.max(0.5, Math.min(3, s0 + ((ev.clientX - sx) + (ev.clientY - sy)) / 2 / (k * 420))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+
   const accent = '#3a4a8a'
   return (
-    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
-      <div style={kb.card}>
+    <foreignObject x={(node.x || 0) - (W * s) / 2} y={(node.y || 0) - (H * s) / 2} width={W * s + 18} height={H * s + 18} style={{ overflow: 'visible' }}>
+      <div style={{ width: W, height: H, transform: `scale(${s})`, transformOrigin: '0 0', position: 'relative' }}>
+      <div style={{ ...kb.card, userSelect: 'none' }}>
         {/* board header — drag to move, dbl-click title to rename */}
         <div style={kb.header(accent)} onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }} title="Drag to move · click to select">
           <EditableText value={title} onCommit={onRenameBoard} style={kb.boardTitle} title="Double-click to rename board" />
@@ -4942,11 +4963,15 @@ function KanbanCard({ node, title, columns, filter, statusSync, selectedId, zoom
         <div style={kb.cols} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
           {columns.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 10 }}>No columns yet — click ＋ Col.</div>}
           {columns.map(col => (
-            <KanbanColumn key={col.id} col={col} q={q} matches={matches} drag={drag} startDrag={startDrag} COLW={COLW}
+            <KanbanColumn key={col.id} col={col} q={q} matches={matches} drag={drag} dragOver={drag && overCol === col.id} startDrag={startDrag} COLW={COLW}
               onRenameColumn={onRenameColumn} onDeleteColumn={onDeleteColumn} onSetColumnColor={onSetColumnColor} onSetColumnWip={onSetColumnWip}
               onAddCard={onAddCard} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} onSelect={onSelect} />
           ))}
         </div>
+      </div>
+      {/* resize handle (bottom-right) — scales the whole board */}
+      <div onMouseDown={startScale} title="Drag to resize the board"
+        style={{ position: 'absolute', right: -4, bottom: -4, width: 16, height: 16, cursor: 'nwse-resize', borderRight: '2px solid #5b6af0', borderBottom: '2px solid #5b6af0', borderBottomRightRadius: 6 }} />
       </div>
       {drag && createPortal(
         <div style={{ position: 'fixed', left: drag.x + 8, top: drag.y + 8, zIndex: 9999, pointerEvents: 'none', maxWidth: 200, background: '#1b2140', border: '1px solid #5b6af0', borderRadius: 6, padding: '5px 8px', fontSize: 12, color: '#dbe4ff', boxShadow: '0 6px 18px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
@@ -4971,7 +4996,7 @@ function AddCardRow({ onAdd }) {
 }
 
 // One kanban column: header (name, count/WIP, ⋯ menu for color + WIP limit + delete) and its cards.
-function KanbanColumn({ col, q, matches, drag, startDrag, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
+function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
   const [menu, setMenu] = useState(false)
   const shown = col.cards.filter(matches)
   const accent = col.color || null
@@ -4979,7 +5004,7 @@ function KanbanColumn({ col, q, matches, drag, startDrag, COLW, onRenameColumn, 
   const countText = q ? `${shown.length}/${col.cards.length}` : (col.wip != null ? `${col.cards.length}/${col.wip}` : String(col.cards.length))
   const swatches = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899']
   return (
-    <div data-kbcol={col.id} style={{ ...kb.col, width: COLW, borderTop: accent ? `3px solid ${accent}` : '3px solid transparent' }}>
+    <div data-kbcol={col.id} style={{ ...kb.col, width: COLW, borderTop: accent ? `3px solid ${accent}` : '3px solid transparent', outline: dragOver ? '2px solid #5b6af0' : 'none', outlineOffset: -1, background: dragOver ? '#141a38' : '#0e0e1c' }}>
       <div style={{ ...kb.colHeader, background: accent ? accent + '22' : 'transparent' }}>
         <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />
         <span style={{ ...kb.colCount, color: over ? '#f87171' : '#8090b8' }} title={over ? 'Over WIP limit' : undefined}>{countText}</span>
@@ -5082,8 +5107,8 @@ const kb = {
   menuItem: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
   menuBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 4, cursor: 'pointer', fontSize: '0.72rem', padding: '2px 8px' },
   colBody: { flex: 1, overflowY: 'auto', padding: 7, display: 'flex', flexDirection: 'column', gap: 6, minHeight: 40, borderRadius: 8 },
-  cardItem: { position: 'relative', background: '#191934', border: '1px solid #2d3a6a', borderRadius: 7, padding: '7px 34px 7px 9px', cursor: 'grab', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' },
-  cardLabel: { display: 'block', fontSize: 12.5, color: '#dbe4ff', lineHeight: 1.35, wordBreak: 'break-word', cursor: 'text' },
+  cardItem: { position: 'relative', background: '#262d55', border: '1px solid #3d477e', borderRadius: 7, padding: '7px 34px 7px 9px', cursor: 'grab', boxShadow: '0 2px 5px rgba(0,0,0,0.35)', userSelect: 'none' },
+  cardLabel: { display: 'block', fontSize: 12.5, color: '#eaf0ff', lineHeight: 1.35, wordBreak: 'break-word', cursor: 'text', userSelect: 'none' },
   cardTags: { display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 },
   cardTag: { fontSize: 10, borderRadius: 7, padding: '0 5px', whiteSpace: 'nowrap' },
   notePreview: { marginTop: 5, fontSize: 11, color: '#9aa6c8', lineHeight: 1.35, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 46, overflow: 'hidden', cursor: 'text', borderLeft: '2px solid #2d3a6a', paddingLeft: 6 },
