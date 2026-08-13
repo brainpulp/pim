@@ -901,6 +901,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const toggleKanbanNode = useGraphStore(s => s.toggleKanbanNode)
   const addKanbanNode  = useGraphStore(s => s.addKanbanNode)
   const moveCardToColumn = useGraphStore(s => s.moveCardToColumn)
+  const setNodeStatusByColumn = useGraphStore(s => s.setNodeStatusByColumn)
   const moveChild      = useGraphStore(s => s.moveChild)
   const addTableNode      = useGraphStore(s => s.addTableNode)
   const setTableCell      = useGraphStore(s => s.setTableCell)
@@ -3406,27 +3407,44 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {/* Kanban boards — a node whose children are columns and grandchildren are cards. */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && kanbanNodeSet.has(n.id)).map(n => {
               const board = storeNodeById[n.id]
-              const columns = (childrenOrdered[n.id] || []).map(cid => ({
-                id: cid,
-                label: nodeLabelById[cid] || '',
-                cards: (childrenOrdered[cid] || []).map(kid => ({ id: kid, label: nodeLabelById[kid] || '', meta: storeNodeById[kid]?.meta || {} })),
-              }))
+              const statusSync = !!board?.meta?.statusSync
+              const colLabelById = {}
+              const columns = (childrenOrdered[n.id] || []).map(cid => {
+                colLabelById[cid] = nodeLabelById[cid] || ''
+                return {
+                  id: cid,
+                  label: nodeLabelById[cid] || '',
+                  color: storeNodeById[cid]?.meta?.color || null,
+                  wip: storeNodeById[cid]?.meta?.wip || null,
+                  cards: (childrenOrdered[cid] || []).map(kid => ({ id: kid, label: nodeLabelById[kid] || '', meta: storeNodeById[kid]?.meta || {}, notes: storeNodeById[kid]?.notes || '' })),
+                }
+              })
+              const syncStatus = (cardId, colId) => { if (statusSync && colLabelById[colId]) setNodeStatusByColumn(cardId, colLabelById[colId]) }
               return (
                 <KanbanCard key={'kb' + n.id} node={n} title={board?.label || 'Board'} columns={columns}
-                  filter={board?.meta?.boardFilter || ''}
+                  filter={board?.meta?.boardFilter || ''} statusSync={statusSync}
                   selectedId={selected?.type === 'node' ? selected.id : null}
                   zoomRef={zoomTransformRef}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={id => setSelected({ id, type: 'node' })}
                   onRenameBoard={label => updateLabel(n.id, label)}
                   onSetFilter={f => setNodeMeta(n.id, { boardFilter: f })}
+                  onToggleStatusSync={() => {
+                    pushUndo()
+                    const next = !statusSync
+                    setNodeMeta(n.id, { statusSync: next })
+                    if (next) columns.forEach(col => col.cards.forEach(c => setNodeStatusByColumn(c.id, col.label)))
+                  }}
                   onAddColumn={() => { pushUndo(); addNode('New column', n.id) }}
                   onRenameColumn={(id, label) => updateLabel(id, label)}
                   onDeleteColumn={id => { pushUndo(); deleteNode(id) }}
-                  onAddCard={(colId, label) => { pushUndo(); addNode(label || 'New card', colId) }}
+                  onSetColumnColor={(id, color) => setNodeMeta(id, { color })}
+                  onSetColumnWip={(id, wip) => setNodeMeta(id, { wip })}
+                  onAddCard={(colId, label) => { pushUndo(); const id = addNode(label || 'New card', colId); syncStatus(id, colId) }}
                   onRenameCard={(id, label) => updateLabel(id, label)}
+                  onSetCardNotes={(id, notes) => updateNotes(id, notes)}
                   onDeleteCard={id => { pushUndo(); deleteNode(id) }}
-                  onMoveCard={(cardId, colId, beforeId) => { pushUndo(); moveCardToColumn(cardId, colId, beforeId) }}
+                  onMoveCard={(cardId, colId, beforeId) => { pushUndo(); moveCardToColumn(cardId, colId, beforeId); syncStatus(cardId, colId) }}
                   onMoveColumn={(colId, beforeId) => { pushUndo(); moveChild(n.id, colId, beforeId) }}
                   onExit={() => toggleKanbanNode(n.id)} />
               )
@@ -4860,7 +4878,7 @@ const lc = {
 // <foreignObject> like the list/table cards. Cards drag between columns (mouse-based, using
 // elementFromPoint + data-attrs — the same technique as the outliner; HTML5 DnD is unreliable inside
 // foreignObject). A per-board text filter hides non-matching cards (matches label or #tag).
-function KanbanCard({ node, title, columns, filter, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilter, onAddColumn, onRenameColumn, onDeleteColumn, onAddCard, onRenameCard, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
+function KanbanCard({ node, title, columns, filter, statusSync, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilter, onToggleStatusSync, onAddColumn, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
   const COLW = 210, GAP = 10, headerH = 38, colHeaderH = 30, PADT = headerH + 8
   const bodyH = 420
   const W = Math.max(COLW + 24, columns.length * (COLW + GAP) + GAP + 8)
@@ -4916,39 +4934,18 @@ function KanbanCard({ node, title, columns, filter, selectedId, zoomRef, onHeade
           <EditableText value={title} onCommit={onRenameBoard} style={kb.boardTitle} title="Double-click to rename board" />
           <input value={filter} placeholder="Filter…" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
             onChange={e => onSetFilter(e.target.value)} onKeyDown={e => e.stopPropagation()} style={kb.filter} />
+          <button style={{ ...kb.hBtn, background: statusSync ? '#16a34a' : 'rgba(0,0,0,0.28)' }} title={statusSync ? 'Status sync ON — moving a card sets its Status property to the column' : 'Status sync OFF — turn on to sync card Status to its column'} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleStatusSync() }}>⇄ Status</button>
           <button style={kb.hBtn} title="Add column" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onAddColumn() }}>＋ Col</button>
           <button style={kb.hBtn} title="Expand back to nodes" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>⤢</button>
         </div>
         {/* columns */}
         <div style={kb.cols} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
           {columns.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 10 }}>No columns yet — click ＋ Col.</div>}
-          {columns.map(col => {
-            const shown = col.cards.filter(matches)
-            return (
-              <div key={col.id} data-kbcol={col.id} style={{ ...kb.col, width: COLW }}>
-                <div style={kb.colHeader}>
-                  <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />
-                  <span style={kb.colCount}>{q ? `${shown.length}/${col.cards.length}` : col.cards.length}</span>
-                  <button style={kb.colDel} title="Delete column" onClick={() => onDeleteColumn(col.id)}>×</button>
-                </div>
-                <div style={kb.colBody}>
-                  {shown.map(card => (
-                    <div key={card.id} data-kbcard={card.id} style={{ ...kb.cardItem, opacity: drag?.cardId === card.id ? 0.4 : 1 }}
-                      onMouseDown={e => startDrag(e, card)} onClick={e => { e.stopPropagation(); onSelect(card.id) }}>
-                      <EditableText value={card.label} onCommit={l => onRenameCard(card.id, l)} style={kb.cardLabel} multiline title="Double-click to edit" />
-                      {(card.meta?.tags || []).length > 0 && (
-                        <div style={kb.cardTags}>
-                          {card.meta.tags.slice(0, 4).map(t => <span key={t} style={{ ...kb.cardTag, background: tagColor(t) + '2e', border: `1px solid ${tagColor(t)}`, color: '#e6ebff' }}>{t}</span>)}
-                        </div>
-                      )}
-                      <button style={kb.cardDel} title="Delete card" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDeleteCard(card.id) }}>×</button>
-                    </div>
-                  ))}
-                  <AddCardRow onAdd={label => onAddCard(col.id, label)} />
-                </div>
-              </div>
-            )
-          })}
+          {columns.map(col => (
+            <KanbanColumn key={col.id} col={col} q={q} matches={matches} drag={drag} startDrag={startDrag} COLW={COLW}
+              onRenameColumn={onRenameColumn} onDeleteColumn={onDeleteColumn} onSetColumnColor={onSetColumnColor} onSetColumnWip={onSetColumnWip}
+              onAddCard={onAddCard} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} onSelect={onSelect} />
+          ))}
         </div>
       </div>
       {drag && createPortal(
@@ -4970,6 +4967,85 @@ function AddCardRow({ onAdd }) {
       onChange={e => setDraft(e.target.value)} onBlur={() => commit(false)}
       onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(true) } if (e.key === 'Escape') { setDraft(''); setAdding(false) } }}
       style={kb.addInput} rows={2} />
+  )
+}
+
+// One kanban column: header (name, count/WIP, ⋯ menu for color + WIP limit + delete) and its cards.
+function KanbanColumn({ col, q, matches, drag, startDrag, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
+  const [menu, setMenu] = useState(false)
+  const shown = col.cards.filter(matches)
+  const accent = col.color || null
+  const over = col.wip != null && col.cards.length > col.wip
+  const countText = q ? `${shown.length}/${col.cards.length}` : (col.wip != null ? `${col.cards.length}/${col.wip}` : String(col.cards.length))
+  const swatches = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899']
+  return (
+    <div data-kbcol={col.id} style={{ ...kb.col, width: COLW, borderTop: accent ? `3px solid ${accent}` : '3px solid transparent' }}>
+      <div style={{ ...kb.colHeader, background: accent ? accent + '22' : 'transparent' }}>
+        <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />
+        <span style={{ ...kb.colCount, color: over ? '#f87171' : '#8090b8' }} title={over ? 'Over WIP limit' : undefined}>{countText}</span>
+        <div style={{ position: 'relative' }}>
+          <button style={kb.colMenuBtn} title="Column options" onClick={e => { e.stopPropagation(); setMenu(m => !m) }}>⋯</button>
+          {menu && (<>
+            <div onMouseDown={e => { e.stopPropagation(); setMenu(false) }} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
+            <div onMouseDown={e => e.stopPropagation()} style={kb.colMenu}>
+              <div style={kb.menuLabel}>Column color</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '2px 10px 8px' }}>
+                <div title="None" onClick={() => { onSetColumnColor(col.id, null); setMenu(false) }} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid #3a4a8a', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: 11 }}>∅</div>
+                {swatches.map(c => <div key={c} onClick={() => { onSetColumnColor(col.id, c); setMenu(false) }} style={{ width: 18, height: 18, borderRadius: 5, background: c, cursor: 'pointer', border: accent === c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)' }} />)}
+              </div>
+              <div style={kb.menuLabel}>WIP limit</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 8px' }}>
+                <input type="number" min="0" value={col.wip ?? ''} placeholder="none"
+                  onChange={e => onSetColumnWip(col.id, e.target.value === '' ? null : Math.max(0, Number(e.target.value)))}
+                  style={{ width: 64, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 12, padding: '3px 6px', outline: 'none' }} />
+                {col.wip != null && <button onClick={() => onSetColumnWip(col.id, null)} style={{ ...kb.menuBtn }}>Clear</button>}
+              </div>
+              <div style={{ borderTop: '1px solid #23233e', margin: '2px 0' }} />
+              <div style={{ ...kb.menuItem, color: '#f87171' }} onClick={() => { setMenu(false); onDeleteColumn(col.id) }}>Delete column</div>
+            </div>
+          </>)}
+        </div>
+      </div>
+      <div style={{ ...kb.colBody, boxShadow: over ? 'inset 0 0 0 1.5px rgba(248,113,113,0.4)' : undefined }}>
+        {shown.map(card => (
+          <KanbanCardView key={card.id} card={card} drag={drag} startDrag={startDrag}
+            onSelect={onSelect} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} />
+        ))}
+        <AddCardRow onAdd={label => onAddCard(col.id, label)} />
+      </div>
+    </div>
+  )
+}
+
+// One kanban card: label, tags, expandable note, and its own note/delete buttons.
+function KanbanCardView({ card, drag, startDrag, onSelect, onRenameCard, onSetCardNotes, onDeleteCard }) {
+  const [noteOpen, setNoteOpen] = useState(false)
+  const hasNote = !!(card.notes && card.notes.trim())
+  return (
+    <div data-kbcard={card.id} style={{ ...kb.cardItem, opacity: drag?.cardId === card.id ? 0.4 : 1 }}
+      onMouseDown={e => startDrag(e, card)} onClick={e => { e.stopPropagation(); onSelect(card.id) }}>
+      <EditableText value={card.label} onCommit={l => onRenameCard(card.id, l)} style={kb.cardLabel} multiline title="Double-click to edit" />
+      {(card.meta?.tags || []).length > 0 && (
+        <div style={kb.cardTags}>
+          {card.meta.tags.slice(0, 4).map(t => <span key={t} style={{ ...kb.cardTag, background: tagColor(t) + '2e', border: `1px solid ${tagColor(t)}`, color: '#e6ebff' }}>{t}</span>)}
+        </div>
+      )}
+      {hasNote && !noteOpen && (
+        <div style={kb.notePreview} onClick={e => { e.stopPropagation(); setNoteOpen(true) }} title="Click to edit note">{card.notes}</div>
+      )}
+      {noteOpen && (
+        <textarea autoFocus value={card.notes || ''} placeholder="Note / description…"
+          onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+          onChange={e => onSetCardNotes(card.id, e.target.value)}
+          onBlur={() => setNoteOpen(false)}
+          onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setNoteOpen(false) }}
+          style={kb.noteInput} rows={3} />
+      )}
+      <div style={kb.cardBtns} onMouseDown={e => e.stopPropagation()}>
+        <button style={{ ...kb.cardMini, color: hasNote || noteOpen ? '#8ecbff' : '#7080a0' }} title={hasNote ? 'Edit note' : 'Add note'} onClick={e => { e.stopPropagation(); setNoteOpen(o => !o) }}>📝</button>
+        <button style={{ ...kb.cardMini, color: '#f87171' }} title="Delete card" onClick={e => { e.stopPropagation(); onDeleteCard(card.id) }}>×</button>
+      </div>
+    </div>
   )
 }
 
@@ -4997,16 +5073,23 @@ const kb = {
   hBtn: { background: 'rgba(0,0,0,0.28)', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '4px 7px', whiteSpace: 'nowrap' },
   cols: { flex: 1, display: 'flex', gap: 10, padding: 10, overflowX: 'auto', overflowY: 'hidden', alignItems: 'flex-start' },
   col: { display: 'flex', flexDirection: 'column', background: '#0e0e1c', border: '1px solid #23233e', borderRadius: 10, maxHeight: '100%', flexShrink: 0 },
-  colHeader: { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px', borderBottom: '1px solid #23233e', flexShrink: 0 },
+  colHeader: { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px', borderBottom: '1px solid #23233e', flexShrink: 0, borderTopLeftRadius: 7, borderTopRightRadius: 7 },
   colTitle: { fontWeight: 600, fontSize: 12.5, color: '#c5d0ff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
-  colCount: { fontSize: 11, color: '#8090b8', fontWeight: 600 },
-  colDel: { background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1, opacity: 0.7 },
-  colBody: { flex: 1, overflowY: 'auto', padding: 7, display: 'flex', flexDirection: 'column', gap: 6, minHeight: 40 },
-  cardItem: { position: 'relative', background: '#191934', border: '1px solid #2d3a6a', borderRadius: 7, padding: '7px 22px 7px 9px', cursor: 'grab', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' },
+  colCount: { fontSize: 11, fontWeight: 600 },
+  colMenuBtn: { background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: 15, lineHeight: 1, padding: '0 2px' },
+  colMenu: { position: 'absolute', top: '110%', right: 0, zIndex: 21, minWidth: 176, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
+  menuLabel: { padding: '4px 10px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
+  menuItem: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
+  menuBtn: { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 4, cursor: 'pointer', fontSize: '0.72rem', padding: '2px 8px' },
+  colBody: { flex: 1, overflowY: 'auto', padding: 7, display: 'flex', flexDirection: 'column', gap: 6, minHeight: 40, borderRadius: 8 },
+  cardItem: { position: 'relative', background: '#191934', border: '1px solid #2d3a6a', borderRadius: 7, padding: '7px 34px 7px 9px', cursor: 'grab', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' },
   cardLabel: { display: 'block', fontSize: 12.5, color: '#dbe4ff', lineHeight: 1.35, wordBreak: 'break-word', cursor: 'text' },
   cardTags: { display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 },
   cardTag: { fontSize: 10, borderRadius: 7, padding: '0 5px', whiteSpace: 'nowrap' },
-  cardDel: { position: 'absolute', top: 4, right: 4, background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 },
+  notePreview: { marginTop: 5, fontSize: 11, color: '#9aa6c8', lineHeight: 1.35, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 46, overflow: 'hidden', cursor: 'text', borderLeft: '2px solid #2d3a6a', paddingLeft: 6 },
+  noteInput: { marginTop: 5, width: '100%', boxSizing: 'border-box', background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '4px 6px', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4 },
+  cardBtns: { position: 'absolute', top: 4, right: 4, display: 'flex', gap: 1 },
+  cardMini: { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '1px 2px' },
   addCard: { background: 'transparent', border: '1px dashed #3a4a8a', borderRadius: 7, color: '#8090b8', cursor: 'pointer', fontSize: 12, padding: '5px 8px', textAlign: 'left' },
   addInput: { background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 6, color: '#dbe4ff', fontSize: 12.5, padding: '5px 7px', outline: 'none', resize: 'none', fontFamily: 'inherit' },
 }

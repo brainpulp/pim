@@ -828,6 +828,24 @@ const useGraphStore = create((set, get) => ({
     return { edges }
   }),
 
+  // Status↔column sync: set a card's "Status" select property to `statusName`, auto-creating the
+  // Status select property and the matching option (by name, case-insensitive) if they don't exist.
+  // Keeps the board column and the Table's Status column as one system.
+  setNodeStatusByColumn: (cardId, statusName) => set(s => {
+    const name = String(statusName || '').trim()
+    if (!name) return {}
+    const palette = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#94a3b8']
+    let defs = s.propertyDefs
+    let prop = defs.find(p => p.type === 'select' && (p.name || '').toLowerCase() === 'status')
+    if (!prop) { prop = { id: uid(), name: 'Status', type: 'select', options: [] }; defs = [...defs, prop] }
+    let options = prop.options || []
+    let opt = options.find(o => (o.name || '').toLowerCase() === name.toLowerCase())
+    if (!opt) { opt = { id: uid(), name, color: palette[options.length % palette.length] }; options = [...options, opt] }
+    defs = defs.map(p => p.id === prop.id ? { ...p, options } : p)
+    const nodes = s.nodes.map(n => n.id === cardId ? { ...n, props: { ...(n.props || {}), [prop.id]: opt.id } } : n)
+    return { propertyDefs: defs, nodes }
+  }),
+
   // ── Table nodes ───────────────────────────────────────────────────────────
   // A table node is any node carrying a view-independent `table` = { columns, rows }.
   //   columns: [{ id, name, type:'text'|'number'|'checkbox'|'select'|'date', width, options? }]
