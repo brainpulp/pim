@@ -754,6 +754,38 @@ const useGraphStore = create((set, get) => ({
     })
   })),
 
+  // ── Kanban board nodes ──────────────────────────────────────────────────────
+  // A board is a node flagged (per view) as kanban: its DIRECT children are the columns, and each
+  // column's children are the cards. The whole subtree is hidden from the canvas (like a list card)
+  // and drawn by KanbanCard. Mutually exclusive with the list-card flag.
+  toggleKanbanNode: (nodeId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const kb = new Set(v.kanbanNodeIds || [])
+      const list = new Set(v.listNodeIds || [])
+      const coll = new Set(v.collapsedNodeIds || [])
+      if (kb.has(nodeId)) kb.delete(nodeId)
+      else { kb.add(nodeId); list.delete(nodeId); coll.delete(nodeId) }
+      return { ...v, kanbanNodeIds: [...kb], listNodeIds: [...list], collapsedNodeIds: [...coll] }
+    })
+  })),
+
+  // Create a fresh board (with three starter columns) and flag it as kanban in the active view.
+  addKanbanNode: (x = null, y = null) => {
+    const boardId = uid()
+    const cols = ['To do', 'Doing', 'Done'].map(name => ({ id: uid(), name }))
+    set(s => ({
+      nodes: [...s.nodes, { id: boardId, label: 'Board', notes: '' }, ...cols.map(c => ({ id: c.id, label: c.name, notes: '' }))],
+      edges: [...s.edges, ...cols.map(c => ({ id: uid(), source: boardId, target: c.id }))],
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v,
+        kanbanNodeIds: [...(v.kanbanNodeIds || []), boardId],
+        nodeProps: { ...v.nodeProps, [boardId]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
+      }),
+    }))
+    return boardId
+  },
+
   // Reorder a child among its siblings under `parentId`: move the (parent→child) edge to just before
   // the (parent→beforeId) edge, or to the end when beforeId is null. Children order = edge order.
   moveChild: (parentId, childId, beforeId) => set(s => {
@@ -768,6 +800,29 @@ const useGraphStore = create((set, get) => ({
       edges.splice(lastSib + 1, 0, moved)
     } else {
       const to = edges.findIndex(e => e.source === parentId && e.target === beforeId)
+      edges.splice(to < 0 ? edges.length : to, 0, moved)
+    }
+    return { edges }
+  }),
+
+  // Move a card under a new column (or reorder within its column) in one atomic edit: drop the card's
+  // current parent edge, then insert a (column→card) edge before `beforeId` (or append when null).
+  // Used by Kanban drag-and-drop. Refuses moves that would create a cycle.
+  moveCardToColumn: (cardId, columnId, beforeId = null) => set(s => {
+    if (!columnId || columnId === cardId) return {}
+    // cycle guard: never drop a card into its own descendant
+    const kids = {}; s.edges.forEach(e => { (kids[e.source] = kids[e.source] || []).push(e.target) })
+    const desc = new Set(); const stack = [cardId]
+    while (stack.length) { const c = stack.pop(); (kids[c] || []).forEach(t => { if (!desc.has(t)) { desc.add(t); stack.push(t) } }) }
+    if (desc.has(columnId)) return {}
+    const edges = s.edges.filter(e => e.target !== cardId)   // detach from old parent
+    const moved = { id: uid(), source: columnId, target: cardId }
+    if (beforeId == null || beforeId === cardId) {
+      let lastSib = -1
+      edges.forEach((e, i) => { if (e.source === columnId) lastSib = i })
+      edges.splice(lastSib + 1, 0, moved)
+    } else {
+      const to = edges.findIndex(e => e.source === columnId && e.target === beforeId)
       edges.splice(to < 0 ? edges.length : to, 0, moved)
     }
     return { edges }

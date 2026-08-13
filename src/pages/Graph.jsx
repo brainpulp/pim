@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
@@ -741,6 +742,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const customEmojis  = activeView?.customEmojis || []
   const collapsedNodeIds = activeView?.collapsedNodeIds || []
   const listNodeIds = activeView?.listNodeIds || []   // nodes shown as a nested list card (subtree hidden)
+  const kanbanNodeIds = activeView?.kanbanNodeIds || []   // nodes shown as a kanban board (subtree hidden)
   const presentingSlideBg = (presentingSlideIdx !== null)
     ? (activeSlideshow?.slideBgColors?.[slideIds[presentingSlideIdx]] || bgColor)
     : bgColor
@@ -834,10 +836,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     } else {
       base = new Set(storeNodes.filter(n => viewNodeProps[n.id]?.visible !== false).map(n => n.id))
     }
-    // Hide the descendants of any collapsed OR list-card node (the card renders that subtree itself).
-    if (collapsedNodeIds.length || listNodeIds.length) {
+    // Hide the descendants of any collapsed, list-card, OR kanban node (the card renders that subtree itself).
+    if (collapsedNodeIds.length || listNodeIds.length || kanbanNodeIds.length) {
       const hidden = new Set()
-      const q = [...collapsedNodeIds, ...listNodeIds]
+      const q = [...collapsedNodeIds, ...listNodeIds, ...kanbanNodeIds]
       while (q.length) {
         const cur = q.shift()
         storeEdges.forEach(e => {
@@ -866,7 +868,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
     }
     return base
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, propFilter, storePropertyDefs])
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, kanbanNodeIds, propFilter, storePropertyDefs])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
 
@@ -896,6 +898,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   // ── List-card ("show children as list") support ──────────────────────────────
   const toggleListNode = useGraphStore(s => s.toggleListNode)
+  const toggleKanbanNode = useGraphStore(s => s.toggleKanbanNode)
+  const addKanbanNode  = useGraphStore(s => s.addKanbanNode)
+  const moveCardToColumn = useGraphStore(s => s.moveCardToColumn)
   const moveChild      = useGraphStore(s => s.moveChild)
   const addTableNode      = useGraphStore(s => s.addTableNode)
   const setTableCell      = useGraphStore(s => s.setTableCell)
@@ -913,6 +918,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const updateDrawing     = useGraphStore(s => s.updateDrawing)
   const deleteDrawing     = useGraphStore(s => s.deleteDrawing)
   const listNodeSet    = useMemo(() => new Set(listNodeIds), [listNodeIds])
+  const kanbanNodeSet  = useMemo(() => new Set(kanbanNodeIds), [kanbanNodeIds])
   const tableNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.table).map(n => n.id)), [storeNodes])
   const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
   const nodeLabelById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.label])), [storeNodes])
@@ -3339,7 +3345,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             )}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
               const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
               return (
@@ -3396,6 +3402,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onReorder={reorderRow}
                 onExit={() => toggleListNode(n.id)} />
             ))}
+
+            {/* Kanban boards — a node whose children are columns and grandchildren are cards. */}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && kanbanNodeSet.has(n.id)).map(n => {
+              const board = storeNodeById[n.id]
+              const columns = (childrenOrdered[n.id] || []).map(cid => ({
+                id: cid,
+                label: nodeLabelById[cid] || '',
+                cards: (childrenOrdered[cid] || []).map(kid => ({ id: kid, label: nodeLabelById[kid] || '', meta: storeNodeById[kid]?.meta || {} })),
+              }))
+              return (
+                <KanbanCard key={'kb' + n.id} node={n} title={board?.label || 'Board'} columns={columns}
+                  filter={board?.meta?.boardFilter || ''}
+                  selectedId={selected?.type === 'node' ? selected.id : null}
+                  zoomRef={zoomTransformRef}
+                  onHeaderDown={e => handleNodeMouseDown(e, n.id)}
+                  onSelect={id => setSelected({ id, type: 'node' })}
+                  onRenameBoard={label => updateLabel(n.id, label)}
+                  onSetFilter={f => setNodeMeta(n.id, { boardFilter: f })}
+                  onAddColumn={() => { pushUndo(); addNode('New column', n.id) }}
+                  onRenameColumn={(id, label) => updateLabel(id, label)}
+                  onDeleteColumn={id => { pushUndo(); deleteNode(id) }}
+                  onAddCard={(colId, label) => { pushUndo(); addNode(label || 'New card', colId) }}
+                  onRenameCard={(id, label) => updateLabel(id, label)}
+                  onDeleteCard={id => { pushUndo(); deleteNode(id) }}
+                  onMoveCard={(cardId, colId, beforeId) => { pushUndo(); moveCardToColumn(cardId, colId, beforeId) }}
+                  onMoveColumn={(colId, beforeId) => { pushUndo(); moveChild(n.id, colId, beforeId) }}
+                  onExit={() => toggleKanbanNode(n.id)} />
+              )
+            })}
 
             {/* Table nodes — a node carrying `table` is drawn as an editable spreadsheet card. */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && tableNodeSet.has(n.id)).map(n => {
@@ -3525,6 +3560,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addTableNode(sx, sy)
+                      if (drillRoot) addEdge(drillRoot, id)   // keep it inside the drilled subtree so it renders
+                      setSelected({ id, type: 'node' })
+                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                      close()
+                    })}
+                    {item('🗂️', 'New board here', () => {
+                      pushUndo()
+                      const { sx, sy } = contextMenu
+                      const id = addKanbanNode(sx, sy)
                       if (drillRoot) addEdge(drillRoot, id)   // keep it inside the drilled subtree so it renders
                       setSelected({ id, type: 'node' })
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
@@ -3780,6 +3824,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onDrill={() => { setDrillRoot(hn.id); close() }}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
+              onToggleKanban={() => { toggleKanbanNode(hn.id); close() }}
+              isKanban={kanbanNodeSet.has(hn.id)}
               hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
               childrenEffect={vp.childrenEffect}
               onSetChildrenEffect={fx => setNodeViewProp(hn.id, 'childrenEffect', fx)}
@@ -4807,6 +4853,162 @@ const lc = {
   input: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 5px', fontSize: 12.5, outline: 'none', minWidth: 0 },
   actions: { display: 'flex', gap: 1, flexShrink: 0 },
   rowBtn: { background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: 10, padding: '0 3px', lineHeight: 1 },
+}
+
+// ─── KanbanCard ───────────────────────────────────────────────────────────────
+// A board node drawn as a kanban: direct children = columns, their children = cards. Rendered in a
+// <foreignObject> like the list/table cards. Cards drag between columns (mouse-based, using
+// elementFromPoint + data-attrs — the same technique as the outliner; HTML5 DnD is unreliable inside
+// foreignObject). A per-board text filter hides non-matching cards (matches label or #tag).
+function KanbanCard({ node, title, columns, filter, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilter, onAddColumn, onRenameColumn, onDeleteColumn, onAddCard, onRenameCard, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
+  const COLW = 210, GAP = 10, headerH = 38, colHeaderH = 30, PADT = headerH + 8
+  const bodyH = 420
+  const W = Math.max(COLW + 24, columns.length * (COLW + GAP) + GAP + 8)
+  const H = PADT + bodyH + 10
+  const [drag, setDrag] = useState(null)    // { cardId, x, y, label }
+
+  const q = (filter || '').trim().toLowerCase()
+  const matches = (card) => {
+    if (!q) return true
+    if ((card.label || '').toLowerCase().includes(q)) return true
+    const tags = card.meta?.tags || []
+    const needle = q.replace(/^#/, '')
+    return tags.some(t => String(t).toLowerCase().includes(needle))
+  }
+
+  // ── Card drag (mouse) ──────────────────────────────────────────────────────
+  const startDrag = (e, card) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const ox = e.clientX, oy = e.clientY
+    let moved = false
+    const onMove = ev => {
+      if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 5) return   // ignore micro-jitter → keep clicks clean
+      moved = true
+      setDrag({ cardId: card.id, label: card.label, x: ev.clientX, y: ev.clientY })
+    }
+    const onUp = ev => {
+      document.removeEventListener('mousemove', onMove, true)
+      document.removeEventListener('mouseup', onUp, true)
+      setDrag(null)
+      if (!moved) return   // it was a click, not a drag — don't reorder
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)
+      if (el) {
+        const colEl = el.closest('[data-kbcol]')
+        if (colEl) {
+          const colId = colEl.getAttribute('data-kbcol')
+          const cardEl = el.closest('[data-kbcard]')
+          const beforeId = cardEl && cardEl.getAttribute('data-kbcard') !== card.id ? cardEl.getAttribute('data-kbcard') : null
+          if (colId) onMoveCard(card.id, colId, beforeId)
+        }
+      }
+    }
+    document.addEventListener('mousemove', onMove, true)
+    document.addEventListener('mouseup', onUp, true)
+  }
+
+  const accent = '#3a4a8a'
+  return (
+    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
+      <div style={kb.card}>
+        {/* board header — drag to move, dbl-click title to rename */}
+        <div style={kb.header(accent)} onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }} title="Drag to move · click to select">
+          <EditableText value={title} onCommit={onRenameBoard} style={kb.boardTitle} title="Double-click to rename board" />
+          <input value={filter} placeholder="Filter…" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+            onChange={e => onSetFilter(e.target.value)} onKeyDown={e => e.stopPropagation()} style={kb.filter} />
+          <button style={kb.hBtn} title="Add column" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onAddColumn() }}>＋ Col</button>
+          <button style={kb.hBtn} title="Expand back to nodes" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>⤢</button>
+        </div>
+        {/* columns */}
+        <div style={kb.cols} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
+          {columns.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 10 }}>No columns yet — click ＋ Col.</div>}
+          {columns.map(col => {
+            const shown = col.cards.filter(matches)
+            return (
+              <div key={col.id} data-kbcol={col.id} style={{ ...kb.col, width: COLW }}>
+                <div style={kb.colHeader}>
+                  <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />
+                  <span style={kb.colCount}>{q ? `${shown.length}/${col.cards.length}` : col.cards.length}</span>
+                  <button style={kb.colDel} title="Delete column" onClick={() => onDeleteColumn(col.id)}>×</button>
+                </div>
+                <div style={kb.colBody}>
+                  {shown.map(card => (
+                    <div key={card.id} data-kbcard={card.id} style={{ ...kb.cardItem, opacity: drag?.cardId === card.id ? 0.4 : 1 }}
+                      onMouseDown={e => startDrag(e, card)} onClick={e => { e.stopPropagation(); onSelect(card.id) }}>
+                      <EditableText value={card.label} onCommit={l => onRenameCard(card.id, l)} style={kb.cardLabel} multiline title="Double-click to edit" />
+                      {(card.meta?.tags || []).length > 0 && (
+                        <div style={kb.cardTags}>
+                          {card.meta.tags.slice(0, 4).map(t => <span key={t} style={{ ...kb.cardTag, background: tagColor(t) + '2e', border: `1px solid ${tagColor(t)}`, color: '#e6ebff' }}>{t}</span>)}
+                        </div>
+                      )}
+                      <button style={kb.cardDel} title="Delete card" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDeleteCard(card.id) }}>×</button>
+                    </div>
+                  ))}
+                  <AddCardRow onAdd={label => onAddCard(col.id, label)} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      {drag && createPortal(
+        <div style={{ position: 'fixed', left: drag.x + 8, top: drag.y + 8, zIndex: 9999, pointerEvents: 'none', maxWidth: 200, background: '#1b2140', border: '1px solid #5b6af0', borderRadius: 6, padding: '5px 8px', fontSize: 12, color: '#dbe4ff', boxShadow: '0 6px 18px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
+          {drag.label || '(card)'}
+        </div>, document.body)}
+    </foreignObject>
+  )
+}
+
+// Small inline card-adder: shows a "＋ Add card" button that turns into an input.
+function AddCardRow({ onAdd }) {
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+  const commit = (keep) => { const t = draft.trim(); if (t) onAdd(t); setDraft(''); if (!keep) setAdding(false) }
+  if (!adding) return <button style={kb.addCard} onClick={e => { e.stopPropagation(); setAdding(true) }}>＋ Add card</button>
+  return (
+    <textarea autoFocus value={draft} placeholder="Card text… (Enter to add)" onClick={e => e.stopPropagation()}
+      onChange={e => setDraft(e.target.value)} onBlur={() => commit(false)}
+      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(true) } if (e.key === 'Escape') { setDraft(''); setAdding(false) } }}
+      style={kb.addInput} rows={2} />
+  )
+}
+
+// Double-click-to-edit text used for board title, column titles, and card labels.
+function EditableText({ value, onCommit, style, multiline, title }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  useEffect(() => { if (!editing) setDraft(value) }, [value, editing])
+  const commit = () => { const t = draft.trim(); onCommit(t || value); setEditing(false) }
+  if (!editing) return <span style={style} title={title} onDoubleClick={e => { e.stopPropagation(); setDraft(value); setEditing(true) }}>{value || '(untitled)'}</span>
+  const common = {
+    autoFocus: true, value: draft, onClick: e => e.stopPropagation(), onMouseDown: e => e.stopPropagation(),
+    onChange: e => setDraft(e.target.value), onBlur: commit,
+    onKeyDown: e => { e.stopPropagation(); if (e.key === 'Enter' && !(multiline && e.shiftKey)) { e.preventDefault(); commit() } if (e.key === 'Escape') setEditing(false) },
+    style: { ...style, background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 4, color: '#fff', outline: 'none', padding: '1px 5px', width: '100%', boxSizing: 'border-box', font: 'inherit', resize: 'none' },
+  }
+  return multiline ? <textarea {...common} rows={2} /> : <input {...common} />
+}
+
+const kb = {
+  card: { width: '100%', height: '100%', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' },
+  header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: accent, cursor: 'grab', flexShrink: 0 }),
+  boardTitle: { fontWeight: 700, fontSize: 14, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
+  filter: { width: 96, background: 'rgba(0,0,0,0.28)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 6, color: '#fff', fontSize: 12, padding: '2px 7px', outline: 'none' },
+  hBtn: { background: 'rgba(0,0,0,0.28)', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '4px 7px', whiteSpace: 'nowrap' },
+  cols: { flex: 1, display: 'flex', gap: 10, padding: 10, overflowX: 'auto', overflowY: 'hidden', alignItems: 'flex-start' },
+  col: { display: 'flex', flexDirection: 'column', background: '#0e0e1c', border: '1px solid #23233e', borderRadius: 10, maxHeight: '100%', flexShrink: 0 },
+  colHeader: { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px', borderBottom: '1px solid #23233e', flexShrink: 0 },
+  colTitle: { fontWeight: 600, fontSize: 12.5, color: '#c5d0ff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' },
+  colCount: { fontSize: 11, color: '#8090b8', fontWeight: 600 },
+  colDel: { background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 14, lineHeight: 1, opacity: 0.7 },
+  colBody: { flex: 1, overflowY: 'auto', padding: 7, display: 'flex', flexDirection: 'column', gap: 6, minHeight: 40 },
+  cardItem: { position: 'relative', background: '#191934', border: '1px solid #2d3a6a', borderRadius: 7, padding: '7px 22px 7px 9px', cursor: 'grab', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' },
+  cardLabel: { display: 'block', fontSize: 12.5, color: '#dbe4ff', lineHeight: 1.35, wordBreak: 'break-word', cursor: 'text' },
+  cardTags: { display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 },
+  cardTag: { fontSize: 10, borderRadius: 7, padding: '0 5px', whiteSpace: 'nowrap' },
+  cardDel: { position: 'absolute', top: 4, right: 4, background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 },
+  addCard: { background: 'transparent', border: '1px dashed #3a4a8a', borderRadius: 7, color: '#8090b8', cursor: 'pointer', fontSize: 12, padding: '5px 8px', textAlign: 'left' },
+  addInput: { background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 6, color: '#dbe4ff', fontSize: 12.5, padding: '5px 7px', outline: 'none', resize: 'none', fontFamily: 'inherit' },
 }
 
 // ─── TableCard ────────────────────────────────────────────────────────────────
@@ -6456,7 +6658,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], onAddTag, onRemoveTag,
@@ -6625,6 +6827,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
+        {hasChildrenForList && onToggleKanban && textRow(isKanban ? 'Show children as nodes' : 'Show as kanban board', onToggleKanban, { icon: '🗂️', right: isKanban ? '•' : '›', rightColor: isKanban ? '#f6ad55' : '#8090b8', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}
         {textRow('Delete', onDelete, { icon: '🗑️', color: '#f87171', opens: null })}
