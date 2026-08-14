@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
@@ -4890,10 +4890,39 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
   const H = bodyH + 20
   const s = scale || 1
   const [drag, setDrag] = useState(null)      // { cardId, x, y, label }
-  const [overCol, setOverCol] = useState(null) // column id currently under the dragged card
+  const [cardDrop, setCardDrop] = useState(null) // { colId, beforeId } insertion point for the dragged card
   const [colDrag, setColDrag] = useState(null) // { colId, label, x, y } while dragging a column
+  const [colDrop, setColDrop] = useState(null) // { beforeColId } insertion point for the dragged column
   const [hover, setHover] = useState(false)    // reveal the header bar only on hover
   const [filterOpen, setFilterOpen] = useState(false)
+
+  // Where would a dragged card land? → { colId, beforeId } (beforeId null = end of column).
+  const computeCardDrop = (x, y, draggedId) => {
+    const el = document.elementFromPoint(x, y)
+    const colEl = el && el.closest('[data-kbcol]')
+    if (!colEl) return null
+    const colId = colEl.getAttribute('data-kbcol')
+    const cardEl = el.closest('[data-kbcard]')
+    if (cardEl && cardEl.getAttribute('data-kbcard') !== draggedId) {
+      const r = cardEl.getBoundingClientRect()
+      if (y < r.top + r.height / 2) return { colId, beforeId: cardEl.getAttribute('data-kbcard') }
+      let sib = cardEl.nextElementSibling
+      while (sib && !sib.getAttribute?.('data-kbcard')) sib = sib.nextElementSibling
+      return { colId, beforeId: sib ? sib.getAttribute('data-kbcard') : null }
+    }
+    return { colId, beforeId: null }
+  }
+  // Where would a dragged column land? → { beforeColId } (null = end). Nearest column by cursor x.
+  const computeColDrop = (x) => {
+    let best = null
+    for (const c of columns) {
+      const node = document.querySelector(`[data-kbcol="${c.id}"]`)
+      if (!node) continue
+      const r = node.getBoundingClientRect()
+      if (x < r.left + r.width / 2) { best = c.id; break }
+    }
+    return { beforeColId: best }
+  }
 
   const conds = Array.isArray(filters) ? filters : []
   const q = (filterText || '').trim().toLowerCase()
@@ -4927,27 +4956,16 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
       if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 5) return   // ignore micro-jitter → keep clicks clean
       if (!moved) { moved = true; document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSelect, true) }
       setDrag({ cardId: card.id, label: card.label, x: ev.clientX, y: ev.clientY })
-      const t = document.elementFromPoint(ev.clientX, ev.clientY)
-      const colEl = t && t.closest('[data-kbcol]')
-      setOverCol(colEl ? colEl.getAttribute('data-kbcol') : null)
+      setCardDrop(computeCardDrop(ev.clientX, ev.clientY, card.id))
     }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove, true)
       document.removeEventListener('mouseup', onUp, true)
       document.removeEventListener('selectstart', noSelect, true)
       document.body.style.userSelect = ''
-      setDrag(null); setOverCol(null)
-      if (!moved) return   // it was a click, not a drag — don't reorder
-      const el = document.elementFromPoint(ev.clientX, ev.clientY)
-      if (el) {
-        const colEl = el.closest('[data-kbcol]')
-        if (colEl) {
-          const colId = colEl.getAttribute('data-kbcol')
-          const cardEl = el.closest('[data-kbcard]')
-          const beforeId = cardEl && cardEl.getAttribute('data-kbcard') !== card.id ? cardEl.getAttribute('data-kbcard') : null
-          if (colId) onMoveCard(card.id, colId, beforeId)
-        }
-      }
+      const d = moved ? computeCardDrop(ev.clientX, ev.clientY, card.id) : null
+      setDrag(null); setCardDrop(null)
+      if (d && d.colId) onMoveCard(card.id, d.colId, d.beforeId)
     }
     document.addEventListener('mousemove', onMove, true)
     document.addEventListener('mouseup', onUp, true)
@@ -4965,28 +4983,16 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
       if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 5) return
       if (!moved) { moved = true; document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSelect, true) }
       setColDrag({ colId: col.id, label: col.label, x: ev.clientX, y: ev.clientY })
+      setColDrop(computeColDrop(ev.clientX))
     }
     const onUp = ev => {
       document.removeEventListener('mousemove', onMove, true)
       document.removeEventListener('mouseup', onUp, true)
       document.removeEventListener('selectstart', noSelect, true)
       document.body.style.userSelect = ''
-      setColDrag(null)
-      if (!moved) return
-      const el = document.elementFromPoint(ev.clientX, ev.clientY)
-      const tgt = el && el.closest('[data-kbcol]')
-      if (tgt) {
-        const targetId = tgt.getAttribute('data-kbcol')
-        if (targetId && targetId !== col.id) {
-          const rect = tgt.getBoundingClientRect()
-          const after = ev.clientX > rect.left + rect.width / 2
-          const ids = columns.map(c => c.id)
-          const ti = ids.indexOf(targetId)
-          let beforeId = after ? (ids[ti + 1] ?? null) : targetId
-          if (beforeId === col.id) beforeId = null
-          onMoveColumn(col.id, beforeId)
-        }
-      }
+      const d = moved ? computeColDrop(ev.clientX) : null
+      setColDrag(null); setColDrop(null)
+      if (d) { let beforeId = d.beforeColId; if (beforeId === col.id) beforeId = null; onMoveColumn(col.id, beforeId) }
     }
     document.addEventListener('mousemove', onMove, true)
     document.addEventListener('mouseup', onUp, true)
@@ -5020,13 +5026,17 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
         </div>
         {/* columns */}
         <div style={kb.cols} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
-          {columns.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 10 }}>No columns — hover the top bar and click ＋ Col.</div>}
+          {columns.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 10 }}>No columns — use the ＋ Col button in the bar.</div>}
           {columns.map(col => (
-            <KanbanColumn key={col.id} col={col} q={q} matches={matches} drag={drag} dragOver={drag && overCol === col.id} startDrag={startDrag} COLW={COLW}
-              startColDrag={startColDrag} colDragging={colDrag?.colId === col.id}
-              onRenameColumn={onRenameColumn} onDeleteColumn={onDeleteColumn} onSetColumnColor={onSetColumnColor} onSetColumnWip={onSetColumnWip}
-              onAddCard={onAddCard} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} onSelect={onSelect} />
+            <Fragment key={col.id}>
+              {colDrag && colDrop?.beforeColId === col.id && <div style={kb.vLine} />}
+              <KanbanColumn col={col} q={q} matches={matches} drag={drag} cardDrop={drag ? cardDrop : null} dragOver={drag && cardDrop?.colId === col.id} startDrag={startDrag} COLW={COLW}
+                startColDrag={startColDrag} colDragging={colDrag?.colId === col.id}
+                onRenameColumn={onRenameColumn} onDeleteColumn={onDeleteColumn} onSetColumnColor={onSetColumnColor} onSetColumnWip={onSetColumnWip}
+                onAddCard={onAddCard} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} onSelect={onSelect} />
+            </Fragment>
           ))}
+          {colDrag && colDrop?.beforeColId == null && <div style={kb.vLine} />}
         </div>
       </div>
       {/* resize handle (bottom-right) — appears on hover; scales the board from the top-left corner */}
@@ -5110,7 +5120,7 @@ function AddCardRow({ onAdd }) {
 }
 
 // One kanban column: header (name, count/limit, ⋯ menu for color + limit + delete) and its cards.
-function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, startColDrag, colDragging, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
+function KanbanColumn({ col, q, matches, drag, cardDrop, dragOver, startDrag, startColDrag, colDragging, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
   const [menu, setMenu] = useState(false)
   const shown = col.cards.filter(matches)
   const accent = col.color || null
@@ -5149,9 +5159,13 @@ function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, startColDrag
       </div>
       <div style={{ ...kb.colBody, boxShadow: over ? 'inset 0 0 0 1.5px rgba(248,113,113,0.4)' : undefined }}>
         {shown.map(card => (
-          <KanbanCardView key={card.id} card={card} drag={drag} startDrag={startDrag}
-            onSelect={onSelect} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} />
+          <Fragment key={card.id}>
+            {cardDrop && cardDrop.colId === col.id && cardDrop.beforeId === card.id && <div style={kb.hLine} />}
+            <KanbanCardView card={card} drag={drag} startDrag={startDrag}
+              onSelect={onSelect} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} />
+          </Fragment>
         ))}
+        {cardDrop && cardDrop.colId === col.id && cardDrop.beforeId == null && <div style={kb.hLine} />}
         <AddCardRow onAdd={label => onAddCard(col.id, label)} />
       </div>
     </div>
@@ -5233,6 +5247,8 @@ const kb = {
   cardMini: { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '1px 2px' },
   addCard: { background: 'transparent', border: '1px dashed #3a4a8a', borderRadius: 7, color: '#8090b8', cursor: 'pointer', fontSize: 12, padding: '5px 8px', textAlign: 'left' },
   addInput: { background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 6, color: '#dbe4ff', fontSize: 12.5, padding: '5px 7px', outline: 'none', resize: 'none', fontFamily: 'inherit' },
+  hLine: { height: 3, borderRadius: 2, background: '#7c8cff', boxShadow: '0 0 6px #7c8cff', margin: '1px 0', flexShrink: 0 },
+  vLine: { width: 3, alignSelf: 'stretch', borderRadius: 2, background: '#7c8cff', boxShadow: '0 0 6px #7c8cff', flexShrink: 0 },
 }
 
 // ─── TableCard ────────────────────────────────────────────────────────────────
