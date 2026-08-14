@@ -38,6 +38,8 @@ export const STYLE_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth
 
 export const COLOR_PALETTE = PALETTE
 export const FILL_COLORS = PALETTE
+// Palette for kanban column option colors (matches PropertyField's select-option palette).
+const KANBAN_OPT_COLORS = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#94a3b8']
 export const TEXT_COLORS = PALETTE
 
 export const BG_COLORS = [
@@ -771,12 +773,20 @@ const useGraphStore = create((set, get) => ({
   })),
 
   // Create a fresh board (with three starter columns) and flag it as kanban in the active view.
+  // A board owns a per-board SELECT property whose options ARE its columns — so each column is both a
+  // node (its cards are children) and a value of that property. Cards get the property = their column.
+  // board.meta.propId links the board to its property; column.meta.optId links a column to its option.
   addKanbanNode: (x = null, y = null) => {
-    const boardId = uid()
-    const cols = ['To do', 'Doing', 'Done'].map(name => ({ id: uid(), name }))
+    const boardId = uid(), propId = uid()
+    const cols = ['To do', 'Doing', 'Done'].map((name, i) => ({ id: uid(), name, optId: uid(), color: KANBAN_OPT_COLORS[i % KANBAN_OPT_COLORS.length] }))
+    const prop = { id: propId, name: 'Board', type: 'select', options: cols.map(c => ({ id: c.optId, name: c.name, color: c.color })) }
     set(s => ({
-      nodes: [...s.nodes, { id: boardId, label: 'Board', notes: '' }, ...cols.map(c => ({ id: c.id, label: c.name, notes: '' }))],
+      nodes: [...s.nodes,
+        { id: boardId, label: 'Board', notes: '', meta: { propId } },
+        ...cols.map(c => ({ id: c.id, label: c.name, notes: '', meta: { optId: c.optId } })),
+      ],
       edges: [...s.edges, ...cols.map(c => ({ id: uid(), source: boardId, target: c.id }))],
+      propertyDefs: [...s.propertyDefs, prop],
       views: s.views.map(v => v.id !== s.activeViewId ? v : {
         ...v,
         kanbanNodeIds: [...(v.kanbanNodeIds || []), boardId],
@@ -785,6 +795,55 @@ const useGraphStore = create((set, get) => ({
     }))
     return boardId
   },
+
+  // Add a column to a board: a child node + a matching option in the board's property (linked by optId).
+  addKanbanColumn: (boardId, propId, name = 'New column') => {
+    const colId = uid(), optId = uid()
+    set(s => {
+      const prop = s.propertyDefs.find(p => p.id === propId)
+      const color = KANBAN_OPT_COLORS[((prop?.options || []).length) % KANBAN_OPT_COLORS.length]
+      return {
+        nodes: [...s.nodes, { id: colId, label: name, notes: '', meta: { optId } }],
+        edges: [...s.edges, { id: uid(), source: boardId, target: colId }],
+        propertyDefs: propId ? s.propertyDefs.map(p => p.id !== propId ? p : { ...p, options: [...(p.options || []), { id: optId, name, color }] }) : s.propertyDefs,
+      }
+    })
+    return colId
+  },
+
+  // Rename a column and its linked property option together.
+  renameKanbanColumn: (colId, propId, label) => set(s => {
+    const optId = s.nodes.find(n => n.id === colId)?.meta?.optId
+    return {
+      nodes: s.nodes.map(n => n.id === colId ? { ...n, label } : n),
+      propertyDefs: (propId && optId) ? s.propertyDefs.map(p => p.id !== propId ? p : { ...p, options: (p.options || []).map(o => o.id === optId ? { ...o, name: label } : o) }) : s.propertyDefs,
+    }
+  }),
+
+  // Delete a column: removes the column node, its cards, and the linked property option.
+  deleteKanbanColumn: (colId, propId) => set(s => {
+    const optId = s.nodes.find(n => n.id === colId)?.meta?.optId
+    const cardIds = s.edges.filter(e => e.source === colId).map(e => e.target)
+    const kill = new Set([colId, ...cardIds])
+    return {
+      nodes: s.nodes.filter(n => !kill.has(n.id)).map(n => {
+        if (!optId || !n.props || n.props[propId] !== optId) return n
+        return { ...n, props: { ...n.props, [propId]: null } }
+      }),
+      edges: s.edges.filter(e => !kill.has(e.source) && !kill.has(e.target)),
+      propertyDefs: (propId && optId) ? s.propertyDefs.map(p => p.id !== propId ? p : { ...p, options: (p.options || []).filter(o => o.id !== optId) }) : s.propertyDefs,
+      views: s.views.map(v => {
+        const np = { ...v.nodeProps }; kill.forEach(id => delete np[id])
+        return { ...v, nodeProps: np }
+      }),
+    }
+  }),
+
+  // Rename a board and keep its property's name in sync.
+  renameKanbanBoard: (boardId, propId, label) => set(s => ({
+    nodes: s.nodes.map(n => n.id === boardId ? { ...n, label } : n),
+    propertyDefs: propId ? s.propertyDefs.map(p => p.id === propId ? { ...p, name: label } : p) : s.propertyDefs,
+  })),
 
   // Reorder a child among its siblings under `parentId`: move the (parent→child) edge to just before
   // the (parent→beforeId) edge, or to the end when beforeId is null. Children order = edge order.
