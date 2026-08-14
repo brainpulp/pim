@@ -4891,6 +4891,7 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
   const s = scale || 1
   const [drag, setDrag] = useState(null)      // { cardId, x, y, label }
   const [overCol, setOverCol] = useState(null) // column id currently under the dragged card
+  const [colDrag, setColDrag] = useState(null) // { colId, label, x, y } while dragging a column
   const [hover, setHover] = useState(false)    // reveal the header bar only on hover
   const [filterOpen, setFilterOpen] = useState(false)
 
@@ -4952,6 +4953,45 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
     document.addEventListener('mouseup', onUp, true)
   }
 
+  // ── Column drag (mouse) → reorder columns by dragging their header ─────────────
+  const startColDrag = (e, col) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    const ox = e.clientX, oy = e.clientY
+    let moved = false
+    const noSelect = ev => ev.preventDefault()
+    const onMove = ev => {
+      if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 5) return
+      if (!moved) { moved = true; document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSelect, true) }
+      setColDrag({ colId: col.id, label: col.label, x: ev.clientX, y: ev.clientY })
+    }
+    const onUp = ev => {
+      document.removeEventListener('mousemove', onMove, true)
+      document.removeEventListener('mouseup', onUp, true)
+      document.removeEventListener('selectstart', noSelect, true)
+      document.body.style.userSelect = ''
+      setColDrag(null)
+      if (!moved) return
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)
+      const tgt = el && el.closest('[data-kbcol]')
+      if (tgt) {
+        const targetId = tgt.getAttribute('data-kbcol')
+        if (targetId && targetId !== col.id) {
+          const rect = tgt.getBoundingClientRect()
+          const after = ev.clientX > rect.left + rect.width / 2
+          const ids = columns.map(c => c.id)
+          const ti = ids.indexOf(targetId)
+          let beforeId = after ? (ids[ti + 1] ?? null) : targetId
+          if (beforeId === col.id) beforeId = null
+          onMoveColumn(col.id, beforeId)
+        }
+      }
+    }
+    document.addEventListener('mousemove', onMove, true)
+    document.addEventListener('mouseup', onUp, true)
+  }
+
   // bottom-right handle → scale the board; the top-left (opposite) corner stays pinned because the
   // foreignObject's x/y use the UNSCALED W/H, so growing s only extends down-right.
   const startScale = (e) => {
@@ -4967,9 +5007,8 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
       <div style={{ width: W, height: H, transform: `scale(${s})`, transformOrigin: '0 0', position: 'relative' }}
         onMouseEnter={() => setHover(true)} onMouseLeave={() => { setHover(false); setFilterOpen(false) }}>
       <div style={{ ...kb.card, userSelect: 'none' }}>
-        {/* board header — in-flow bar that collapses to zero at rest and expands on hover (columns
-            shift down, never occluded); drag to move, dbl-click title to rename */}
-        <div style={{ ...kb.header, height: hover ? 40 : 0, borderBottom: hover ? '1px solid #2d3a6a' : 'none', opacity: hover ? 1 : 0, pointerEvents: hover ? 'auto' : 'none', transition: 'height 0.15s ease, opacity 0.15s ease' }}
+        {/* board header — always-present minimal bar (no fill), for the title + options; drag to move */}
+        <div style={kb.header}
           onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }} title="Drag to move · click to select">
           <EditableText value={title} onCommit={onRenameBoard} style={kb.boardTitle} title="Double-click to rename board" />
           <div style={{ position: 'relative' }}>
@@ -4984,6 +5023,7 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
           {columns.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 10 }}>No columns — hover the top bar and click ＋ Col.</div>}
           {columns.map(col => (
             <KanbanColumn key={col.id} col={col} q={q} matches={matches} drag={drag} dragOver={drag && overCol === col.id} startDrag={startDrag} COLW={COLW}
+              startColDrag={startColDrag} colDragging={colDrag?.colId === col.id}
               onRenameColumn={onRenameColumn} onDeleteColumn={onDeleteColumn} onSetColumnColor={onSetColumnColor} onSetColumnWip={onSetColumnWip}
               onAddCard={onAddCard} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} onSelect={onSelect} />
           ))}
@@ -4996,6 +5036,10 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
       {drag && createPortal(
         <div style={{ position: 'fixed', left: drag.x + 8, top: drag.y + 8, zIndex: 9999, pointerEvents: 'none', maxWidth: 200, background: '#1b2140', border: '1px solid #5b6af0', borderRadius: 6, padding: '5px 8px', fontSize: 12, color: '#dbe4ff', boxShadow: '0 6px 18px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
           {drag.label || '(card)'}
+        </div>, document.body)}
+      {colDrag && createPortal(
+        <div style={{ position: 'fixed', left: colDrag.x + 8, top: colDrag.y + 8, zIndex: 9999, pointerEvents: 'none', background: '#2a3260', border: '1px solid #7c8cff', borderRadius: 7, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, color: '#eef2ff', boxShadow: '0 8px 22px rgba(0,0,0,0.65)', fontFamily: '-apple-system, sans-serif' }}>
+          ⠿ {colDrag.label || '(column)'}
         </div>, document.body)}
     </foreignObject>
   )
@@ -5065,8 +5109,8 @@ function AddCardRow({ onAdd }) {
   )
 }
 
-// One kanban column: header (name, count/WIP, ⋯ menu for color + WIP limit + delete) and its cards.
-function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
+// One kanban column: header (name, count/limit, ⋯ menu for color + limit + delete) and its cards.
+function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, startColDrag, colDragging, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
   const [menu, setMenu] = useState(false)
   const shown = col.cards.filter(matches)
   const accent = col.color || null
@@ -5074,12 +5118,14 @@ function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, COLW, onRena
   const countText = q ? `${shown.length}/${col.cards.length}` : (col.wip != null ? `${col.cards.length}/${col.wip}` : String(col.cards.length))
   const swatches = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899']
   return (
-    <div data-kbcol={col.id} style={{ ...kb.col, width: COLW, border: dragOver ? '2px solid #7c8cff' : (accent ? `1px solid ${accent}` : '1px solid #23233e'), background: dragOver ? (accent ? accent + '4d' : '#1a2246') : (accent ? accent + '30' : '#101024') }}>
-      <div style={{ ...kb.colHeader, background: accent ? accent + '66' : 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+    <div data-kbcol={col.id} style={{ ...kb.col, width: COLW, opacity: colDragging ? 0.4 : 1, border: dragOver ? '2px solid #7c8cff' : (accent ? `1px solid ${accent}` : '1px solid #23233e'), background: dragOver ? (accent ? accent + '4d' : '#1a2246') : (accent ? accent + '30' : '#101024') }}>
+      <div style={{ ...kb.colHeader, cursor: 'grab', background: accent ? accent + '66' : 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}
+        onMouseDown={e => startColDrag?.(e, col)} title="Drag to reorder column">
+        <span style={{ color: '#8090b8', fontSize: 12, flexShrink: 0, cursor: 'grab' }}>⠿</span>
         <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />
-        <span style={{ ...kb.colCount, color: over ? '#f87171' : '#8090b8' }} title={over ? 'Over WIP limit' : undefined}>{countText}</span>
+        <span style={{ ...kb.colCount, color: over ? '#f87171' : '#8090b8' }} title={over ? 'Over limit' : undefined}>{countText}</span>
         <div style={{ position: 'relative' }}>
-          <button style={kb.colMenuBtn} title="Column options" onClick={e => { e.stopPropagation(); setMenu(m => !m) }}>⋯</button>
+          <button style={kb.colMenuBtn} title="Column options" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setMenu(m => !m) }}>⋯</button>
           {menu && (<>
             <div onMouseDown={e => { e.stopPropagation(); setMenu(false) }} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
             <div onMouseDown={e => e.stopPropagation()} style={kb.colMenu}>
@@ -5088,7 +5134,7 @@ function KanbanColumn({ col, q, matches, drag, dragOver, startDrag, COLW, onRena
                 <div title="None" onClick={() => { onSetColumnColor(col.id, null); setMenu(false) }} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid #3a4a8a', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: 11 }}>∅</div>
                 {swatches.map(c => <div key={c} onClick={() => { onSetColumnColor(col.id, c); setMenu(false) }} style={{ width: 18, height: 18, borderRadius: 5, background: c, cursor: 'pointer', border: accent === c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)' }} />)}
               </div>
-              <div style={kb.menuLabel}>WIP limit</div>
+              <div style={kb.menuLabel}>Limit</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 8px' }}>
                 <input type="number" min="0" value={col.wip ?? ''} placeholder="none"
                   onChange={e => onSetColumnWip(col.id, e.target.value === '' ? null : Math.max(0, Number(e.target.value)))}
@@ -5162,8 +5208,8 @@ function EditableText({ value, onCommit, style, multiline, title }) {
 
 const kb = {
   card: { width: '100%', height: '100%', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column', overflow: 'visible', fontFamily: '-apple-system, sans-serif', position: 'relative' },
-  header: { display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 10px', background: 'linear-gradient(#20264d, #191d3a)', cursor: 'grab', borderTopLeftRadius: 12, borderTopRightRadius: 12, flexShrink: 0, overflow: 'visible' },
-  boardTitle: { fontWeight: 700, fontSize: 14, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'grab' },
+  header: { display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '7px 10px', background: 'transparent', cursor: 'grab', borderTopLeftRadius: 12, borderTopRightRadius: 12, flexShrink: 0, overflow: 'visible', borderBottom: '1px solid #20233f' },
+  boardTitle: { fontWeight: 700, fontSize: 13.5, color: '#dbe4ff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'grab' },
   hBtn: { background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '4px 7px', whiteSpace: 'nowrap' },
   filterPop: { position: 'absolute', top: '112%', right: 0, zIndex: 31, minWidth: 210, maxHeight: 320, overflowY: 'auto', background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 9, padding: '5px 0', boxShadow: '0 10px 30px rgba(0,0,0,0.65)' },
   cols: { flex: 1, display: 'flex', gap: 10, padding: 10, overflowX: 'auto', overflowY: 'hidden', alignItems: 'flex-start' },
