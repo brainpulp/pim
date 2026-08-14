@@ -4967,8 +4967,9 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
       <div style={{ width: W, height: H, transform: `scale(${s})`, transformOrigin: '0 0', position: 'relative' }}
         onMouseEnter={() => setHover(true)} onMouseLeave={() => { setHover(false); setFilterOpen(false) }}>
       <div style={{ ...kb.card, userSelect: 'none' }}>
-        {/* board header — overlay, revealed on hover; drag to move, dbl-click title to rename */}
-        <div style={{ ...kb.header, opacity: hover ? 1 : 0, pointerEvents: hover ? 'auto' : 'none', transition: 'opacity 0.14s' }}
+        {/* board header — in-flow bar that collapses to zero at rest and expands on hover (columns
+            shift down, never occluded); drag to move, dbl-click title to rename */}
+        <div style={{ ...kb.header, height: hover ? 40 : 0, borderBottom: hover ? '1px solid #2d3a6a' : 'none', opacity: hover ? 1 : 0, pointerEvents: hover ? 'auto' : 'none', transition: 'height 0.15s ease, opacity 0.15s ease' }}
           onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }} title="Drag to move · click to select">
           <EditableText value={title} onCommit={onRenameBoard} style={kb.boardTitle} title="Double-click to rename board" />
           <div style={{ position: 'relative' }}>
@@ -5161,7 +5162,7 @@ function EditableText({ value, onCommit, style, multiline, title }) {
 
 const kb = {
   card: { width: '100%', height: '100%', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column', overflow: 'visible', fontFamily: '-apple-system, sans-serif', position: 'relative' },
-  header: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 6, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'linear-gradient(#20264d, #191d3aee)', cursor: 'grab', borderTopLeftRadius: 12, borderTopRightRadius: 12, borderBottom: '1px solid #2d3a6a' },
+  header: { display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 10px', background: 'linear-gradient(#20264d, #191d3a)', cursor: 'grab', borderTopLeftRadius: 12, borderTopRightRadius: 12, flexShrink: 0, overflow: 'visible' },
   boardTitle: { fontWeight: 700, fontSize: 14, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'grab' },
   hBtn: { background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '4px 7px', whiteSpace: 'nowrap' },
   filterPop: { position: 'absolute', top: '112%', right: 0, zIndex: 31, minWidth: 210, maxHeight: 320, overflowY: 'auto', background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 9, padding: '5px 0', boxShadow: '0 10px 30px rgba(0,0,0,0.65)' },
