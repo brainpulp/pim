@@ -74,6 +74,10 @@ const MAX_UNDO = 50
 // (see lastStyle below), so styling one node carries forward to the next you create — even across
 // sessions (persisted to localStorage). Shape is captured only for basic shapes, never frame/3d/image.
 export const LAST_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape', 'shadow', 'borderBlur', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle']
+// A brand-new node inherits ONLY the plain look (color/shape/opacity) from the last-styled node —
+// never the decorative border effects, blur, spin, or motion (those made every new empty node look
+// like "patchwork"). Duplicate/sister still copy the full style.
+const NEW_NODE_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape']
 const BASIC_SHAPES = new Set(['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none'])
 const LS_KEY = 'pim_last_node_style'
 const loadLastStyle = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {} } catch { return {} } }
@@ -176,17 +180,22 @@ const useGraphStore = create((set, get) => ({
 
   addNode: (label = 'New node', parentId = null, x = null, y = null) => {
     const id = uid()
-    set(s => ({
-      nodes: [...s.nodes, { id, label, notes: '' }],
-      edges: parentId ? [...s.edges, { id: uid(), source: parentId, target: id }] : s.edges,
-      views: s.views.map(v => v.id !== s.activeViewId ? v : {
-        ...v,
-        nodeProps: {
-          ...v.nodeProps,
-          [id]: { ...DEFAULT_NODE_PROPS, ...(s.lastStyle || {}), ...(x !== null ? { fx: x, fy: y } : {}) },
-        },
-      }),
-    }))
+    set(s => {
+      const ls = s.lastStyle || {}
+      const inherit = {}
+      NEW_NODE_STYLE_PROPS.forEach(k => { if (k in ls) inherit[k] = ls[k] })   // plain look only — no borderFx/spin/motion
+      return {
+        nodes: [...s.nodes, { id, label, notes: '' }],
+        edges: parentId ? [...s.edges, { id: uid(), source: parentId, target: id }] : s.edges,
+        views: s.views.map(v => v.id !== s.activeViewId ? v : {
+          ...v,
+          nodeProps: {
+            ...v.nodeProps,
+            [id]: { ...DEFAULT_NODE_PROPS, ...inherit, ...(x !== null ? { fx: x, fy: y } : {}) },
+          },
+        }),
+      }
+    })
     return id
   },
 
