@@ -905,6 +905,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const renameKanbanColumn = useGraphStore(s => s.renameKanbanColumn)
   const deleteKanbanColumn = useGraphStore(s => s.deleteKanbanColumn)
   const renameKanbanBoard = useGraphStore(s => s.renameKanbanBoard)
+  const addGroupedBoard = useGraphStore(s => s.addGroupedBoard)
+  const setKanbanGroupBy = useGraphStore(s => s.setKanbanGroupBy)
+  const renameSelectOption = useGraphStore(s => s.renameSelectOption)
+  const deleteSelectOption = useGraphStore(s => s.deleteSelectOption)
+  const recolorSelectOption = useGraphStore(s => s.recolorSelectOption)
   const moveChild      = useGraphStore(s => s.moveChild)
   const addTableNode      = useGraphStore(s => s.addTableNode)
   const setTableCell      = useGraphStore(s => s.setTableCell)
@@ -3408,49 +3413,99 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onExit={() => toggleListNode(n.id)} />
             ))}
 
-            {/* Kanban boards — a node whose children are columns and grandchildren are cards. */}
+            {/* Kanban boards — structural (columns = child nodes) OR grouped (columns = a property's
+                values, cards = the source's flattened descendants bucketed by value). */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && kanbanNodeSet.has(n.id)).map(n => {
               const board = storeNodeById[n.id]
+              const kanban = board?.meta?.kanban || null
+              const common = {
+                key: 'kb' + n.id, node: n, title: board?.label || 'Board',
+                propertyDefs: storePropertyDefs, allTags: allProjectTags,
+                filters: board?.meta?.boardFilters || null, filterText: board?.meta?.boardFilter || '',
+                scale: getVP(n.id).boardScale || 1,
+                onSetScale: k => setNodeViewProp(n.id, 'boardScale', k),
+                selectedId: selected?.type === 'node' ? selected.id : null,
+                zoomRef: zoomTransformRef,
+                onHeaderDown: e => handleNodeMouseDown(e, n.id),
+                onSelect: id => setSelected({ id, type: 'node' }),
+                onSetFilterText: f => setNodeMeta(n.id, { boardFilter: f }),
+                onSetFilters: arr => setNodeMeta(n.id, { boardFilters: arr }),
+                onRenameCard: (id, label) => updateLabel(id, label),
+                onSetCardNotes: (id, notes) => updateNotes(id, notes),
+                onExit: () => { if (kanban) { toggleKanbanNode(n.id); deleteNode(n.id) } else toggleKanbanNode(n.id) },
+              }
+
+              if (kanban) {
+                // ── GROUPED board ──────────────────────────────────────────────
+                const gb = kanban.groupBy || { mode: 'property', propId: null }
+                const def = gb.mode === 'property' ? storePropertyDefs.find(d => d.id === gb.propId) : null
+                const isMulti = def?.type === 'multiSelect'
+                const items = flattenSubtree(kanban.sourceId).map(r => storeNodeById[r.id]).filter(Boolean)
+                const toCard = it => ({ id: it.id, label: it.label || '', meta: it.meta || {}, notes: it.notes || '', props: it.props || {} })
+                let columns = []
+                if (gb.mode === 'tag') {
+                  const tset = new Set(); items.forEach(it => (it.meta?.tags || []).forEach(t => tset.add(t)))
+                  columns = [...tset].sort().map(t => ({ id: 'tag:' + t, label: t, color: tagColor(t), cards: items.filter(it => (it.meta?.tags || []).includes(t)).map(toCard) }))
+                  columns.push({ id: '__none__', label: 'No tag', locked: true, cards: items.filter(it => !(it.meta?.tags || []).length).map(toCard) })
+                } else {
+                  const opts = def?.options || []
+                  const val = it => it.props?.[gb.propId]
+                  const inOpt = (it, oid) => isMulti ? (Array.isArray(val(it)) && val(it).includes(oid)) : val(it) === oid
+                  const unset = it => isMulti ? !(Array.isArray(val(it)) && val(it).length) : (val(it) == null || val(it) === '')
+                  columns = opts.map(o => ({ id: 'opt:' + o.id, label: o.name, optId: o.id, color: o.color, cards: items.filter(it => inOpt(it, o.id)).map(toCard) }))
+                  columns.push({ id: '__none__', label: 'No value', locked: true, cards: items.filter(unset).map(toCard) })
+                }
+                const cardVal = cid => storeNodeById[cid]?.props?.[gb.propId]
+                const applyMove = (cardId, colId) => {
+                  if (gb.mode === 'tag') { if (colId.startsWith('tag:')) addNodeTag(cardId, colId.slice(4)); return }
+                  if (colId === '__none__') { setNodeProp(cardId, gb.propId, isMulti ? [] : null); return }
+                  if (!colId.startsWith('opt:')) return
+                  const oid = colId.slice(4)
+                  if (isMulti) { const cur = Array.isArray(cardVal(cardId)) ? cardVal(cardId) : []; if (!cur.includes(oid)) setNodeProp(cardId, gb.propId, [...cur, oid]) }
+                  else setNodeProp(cardId, gb.propId, oid)
+                }
+                const colOptId = colId => colId.startsWith('opt:') ? colId.slice(4) : null
+                return (
+                  <KanbanCard {...common} columns={columns} grouped groupBy={gb}
+                    onSetGroupBy={g => setKanbanGroupBy(n.id, g)}
+                    onRenameBoard={label => updateLabel(n.id, label)}
+                    onAddColumn={() => { if (gb.mode === 'property' && gb.propId) { pushUndo(); const OC = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#94a3b8']; addSelectOption(gb.propId, 'New value', OC[(storePropertyDefs.find(d => d.id === gb.propId)?.options?.length || 0) % OC.length]) } }}
+                    onRenameColumn={(colId, label) => { const oid = colOptId(colId); if (oid) renameSelectOption(gb.propId, oid, label) }}
+                    onDeleteColumn={colId => { const oid = colOptId(colId); if (oid) { pushUndo(); deleteSelectOption(gb.propId, oid) } }}
+                    onSetColumnColor={(colId, color) => { const oid = colOptId(colId); if (oid && color) recolorSelectOption(gb.propId, oid, color) }}
+                    onSetColumnWip={() => {}}
+                    onAddCard={(colId, label) => { pushUndo(); const id = addNode(label || 'New card', kanban.sourceId); applyMove(id, colId) }}
+                    onDeleteCard={id => { pushUndo(); deleteNode(id) }}
+                    onMoveCard={(cardId, colId) => { pushUndo(); applyMove(cardId, colId) }}
+                    onMoveColumn={() => {}} />
+                )
+              }
+
+              // ── STRUCTURAL board (default) ──────────────────────────────────
               const propId = board?.meta?.propId || null
               const colOptById = {}
               const columns = (childrenOrdered[n.id] || []).map(cid => {
                 const cnode = storeNodeById[cid]
                 colOptById[cid] = cnode?.meta?.optId || null
                 return {
-                  id: cid,
-                  label: nodeLabelById[cid] || '',
-                  optId: cnode?.meta?.optId || null,
-                  color: cnode?.meta?.color || null,
-                  wip: cnode?.meta?.wip ?? null,
+                  id: cid, label: nodeLabelById[cid] || '', optId: cnode?.meta?.optId || null,
+                  color: cnode?.meta?.color || null, wip: cnode?.meta?.wip ?? null,
                   cards: (childrenOrdered[cid] || []).map(kid => ({ id: kid, label: nodeLabelById[kid] || '', meta: storeNodeById[kid]?.meta || {}, notes: storeNodeById[kid]?.notes || '', props: storeNodeById[kid]?.props || {} })),
                 }
               })
               const setCardCol = (cardId, colId) => { if (propId && colOptById[colId]) setNodeProp(cardId, propId, colOptById[colId]) }
               return (
-                <KanbanCard key={'kb' + n.id} node={n} title={board?.label || 'Board'} columns={columns}
-                  propId={propId} propertyDefs={storePropertyDefs} allTags={allProjectTags}
-                  filters={board?.meta?.boardFilters || null} filterText={board?.meta?.boardFilter || ''}
-                  scale={getVP(n.id).boardScale || 1}
-                  onSetScale={k => setNodeViewProp(n.id, 'boardScale', k)}
-                  selectedId={selected?.type === 'node' ? selected.id : null}
-                  zoomRef={zoomTransformRef}
-                  onHeaderDown={e => handleNodeMouseDown(e, n.id)}
-                  onSelect={id => setSelected({ id, type: 'node' })}
+                <KanbanCard {...common} columns={columns} propId={propId}
                   onRenameBoard={label => renameKanbanBoard(n.id, propId, label)}
-                  onSetFilterText={f => setNodeMeta(n.id, { boardFilter: f })}
-                  onSetFilters={arr => setNodeMeta(n.id, { boardFilters: arr })}
                   onAddColumn={() => { pushUndo(); addKanbanColumn(n.id, propId) }}
                   onRenameColumn={(id, label) => renameKanbanColumn(id, propId, label)}
                   onDeleteColumn={id => { pushUndo(); deleteKanbanColumn(id, propId) }}
                   onSetColumnColor={(id, color) => setNodeMeta(id, { color })}
                   onSetColumnWip={(id, wip) => setNodeMeta(id, { wip })}
                   onAddCard={(colId, label) => { pushUndo(); const id = addNode(label || 'New card', colId); setCardCol(id, colId) }}
-                  onRenameCard={(id, label) => updateLabel(id, label)}
-                  onSetCardNotes={(id, notes) => updateNotes(id, notes)}
                   onDeleteCard={id => { pushUndo(); deleteNode(id) }}
                   onMoveCard={(cardId, colId, beforeId) => { pushUndo(); moveCardToColumn(cardId, colId, beforeId); setCardCol(cardId, colId) }}
-                  onMoveColumn={(colId, beforeId) => { pushUndo(); moveChild(n.id, colId, beforeId) }}
-                  onExit={() => toggleKanbanNode(n.id)} />
+                  onMoveColumn={(colId, beforeId) => { pushUndo(); moveChild(n.id, colId, beforeId) }} />
               )
             })}
 
@@ -3849,6 +3904,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               isList={listNodeSet.has(hn.id)}
               onToggleKanban={() => { toggleKanbanNode(hn.id); close() }}
               isKanban={kanbanNodeSet.has(hn.id)}
+              onGroupBoard={gb => { pushUndo(); const bx = (hn.x || 0) + 160, by = (hn.y || 0); const id = addGroupedBoard(hn.id, gb, bx, by); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = bx; sn.y = by; sn.fx = bx; sn.fy = by } scheduleRender() }, 0); close() }}
               hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
               childrenEffect={vp.childrenEffect}
               onSetChildrenEffect={fx => setNodeViewProp(hn.id, 'childrenEffect', fx)}
@@ -4883,7 +4939,7 @@ const lc = {
 // <foreignObject> like the list/table cards. Cards drag between columns (mouse-based, using
 // elementFromPoint + data-attrs — the same technique as the outliner; HTML5 DnD is unreliable inside
 // foreignObject). A per-board text filter hides non-matching cards (matches label or #tag).
-function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags = [], filters, filterText, scale = 1, onSetScale, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilterText, onSetFilters, onAddColumn, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
+function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags = [], filters, filterText, grouped = false, groupBy, onSetGroupBy, scale = 1, onSetScale, selectedId, zoomRef, onHeaderDown, onSelect, onRenameBoard, onSetFilterText, onSetFilters, onAddColumn, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onMoveCard, onMoveColumn, onExit }) {
   const COLW = 210, GAP = 10
   const bodyH = 420
   const W = Math.max(COLW + 24, columns.length * (COLW + GAP) + GAP + 8)
@@ -4893,6 +4949,8 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
   const [cardDrop, setCardDrop] = useState(null) // { colId, beforeId } insertion point for the dragged card
   const [colDrag, setColDrag] = useState(null) // { colId, label, x, y } while dragging a column
   const [colDrop, setColDrop] = useState(null) // { beforeColId } insertion point for the dragged column
+  const [groupMenu, setGroupMenu] = useState(false)
+  const groupByLabel = grouped ? (groupBy?.mode === 'tag' ? 'Tags' : (propertyDefs.find(d => d.id === groupBy?.propId)?.name || 'property')) : null
   const [hover, setHover] = useState(false)    // reveal the header bar only on hover
   const [filterOpen, setFilterOpen] = useState(false)
 
@@ -5017,12 +5075,27 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
         <div style={kb.header}
           onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }} title="Drag to move · click to select">
           <EditableText value={title} onCommit={onRenameBoard} style={kb.boardTitle} title="Double-click to rename board" />
+          {grouped && (
+            <div style={{ position: 'relative' }}>
+              <button style={{ ...kb.hBtn, background: '#2e2a5a' }} title="Group cards by…" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setGroupMenu(o => !o) }}>⌗ {groupByLabel} ▾</button>
+              {groupMenu && (<>
+                <div onMouseDown={e => { e.stopPropagation(); setGroupMenu(false) }} style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
+                <div onMouseDown={e => e.stopPropagation()} style={kb.filterPop}>
+                  <div style={kb.menuLabel}>Group by</div>
+                  {propertyDefs.filter(d => d.type === 'select' || d.type === 'multiSelect').map(d => (
+                    <div key={d.id} style={{ ...kb.menuItem, color: groupBy?.propId === d.id ? '#fff' : '#c5d0ff' }} onClick={() => { onSetGroupBy({ mode: 'property', propId: d.id }); setGroupMenu(false) }}>{d.name}{groupBy?.propId === d.id ? '  ✓' : ''}</div>
+                  ))}
+                  <div style={{ ...kb.menuItem, color: groupBy?.mode === 'tag' ? '#fff' : '#c5d0ff' }} onClick={() => { onSetGroupBy({ mode: 'tag' }); setGroupMenu(false) }}>Tags{groupBy?.mode === 'tag' ? '  ✓' : ''}</div>
+                </div>
+              </>)}
+            </div>
+          )}
           <div style={{ position: 'relative' }}>
             <button style={{ ...kb.hBtn, background: (q || conds.length) ? '#3b4db0' : 'rgba(0,0,0,0.28)' }} title="Filter cards" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setFilterOpen(o => !o) }}>⚑ Filter{conds.length ? ` (${conds.length})` : ''}</button>
             {filterOpen && <FilterPopover text={filterText} conds={conds} propertyDefs={propertyDefs} allTags={allTags} onSetText={onSetFilterText} onSetConds={onSetFilters} onClose={() => setFilterOpen(false)} />}
           </div>
-          <button style={kb.hBtn} title="Add column" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onAddColumn() }}>＋ Col</button>
-          <button style={kb.hBtn} title="Expand back to nodes" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>⤢</button>
+          {!(grouped && groupBy?.mode === 'tag') && <button style={kb.hBtn} title={grouped ? 'Add a value/column' : 'Add column'} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onAddColumn() }}>＋ Col</button>}
+          <button style={kb.hBtn} title={grouped ? 'Remove this board (keeps the items)' : 'Expand back to nodes'} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>{grouped ? '✕' : '⤢'}</button>
         </div>
         {/* columns */}
         <div style={kb.cols} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
@@ -5031,7 +5104,7 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
             <Fragment key={col.id}>
               {colDrag && colDrop?.beforeColId === col.id && <div style={kb.vLine} />}
               <KanbanColumn col={col} q={q} matches={matches} drag={drag} cardDrop={drag ? cardDrop : null} dragOver={drag && cardDrop?.colId === col.id} startDrag={startDrag} COLW={COLW}
-                startColDrag={startColDrag} colDragging={colDrag?.colId === col.id}
+                startColDrag={grouped ? null : startColDrag} colDragging={colDrag?.colId === col.id} grouped={grouped} locked={col.locked}
                 onRenameColumn={onRenameColumn} onDeleteColumn={onDeleteColumn} onSetColumnColor={onSetColumnColor} onSetColumnWip={onSetColumnWip}
                 onAddCard={onAddCard} onRenameCard={onRenameCard} onSetCardNotes={onSetCardNotes} onDeleteCard={onDeleteCard} onSelect={onSelect} />
             </Fragment>
@@ -5120,7 +5193,7 @@ function AddCardRow({ onAdd }) {
 }
 
 // One kanban column: header (name, count/limit, ⋯ menu for color + limit + delete) and its cards.
-function KanbanColumn({ col, q, matches, drag, cardDrop, dragOver, startDrag, startColDrag, colDragging, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
+function KanbanColumn({ col, q, matches, drag, cardDrop, dragOver, startDrag, startColDrag, colDragging, grouped, locked, COLW, onRenameColumn, onDeleteColumn, onSetColumnColor, onSetColumnWip, onAddCard, onRenameCard, onSetCardNotes, onDeleteCard, onSelect }) {
   const [menu, setMenu] = useState(false)
   const shown = col.cards.filter(matches)
   const accent = col.color || null
@@ -5129,12 +5202,14 @@ function KanbanColumn({ col, q, matches, drag, cardDrop, dragOver, startDrag, st
   const swatches = ['#f43f5e', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899']
   return (
     <div data-kbcol={col.id} style={{ ...kb.col, width: COLW, opacity: colDragging ? 0.4 : 1, border: dragOver ? '2px solid #7c8cff' : (accent ? `1px solid ${accent}` : '1px solid #23233e'), background: dragOver ? (accent ? accent + '4d' : '#1a2246') : (accent ? accent + '30' : '#101024') }}>
-      <div style={{ ...kb.colHeader, cursor: 'grab', background: accent ? accent + '66' : 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}
-        onMouseDown={e => startColDrag?.(e, col)} title="Drag to reorder column">
-        <span style={{ color: '#8090b8', fontSize: 12, flexShrink: 0, cursor: 'grab' }}>⠿</span>
-        <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />
+      <div style={{ ...kb.colHeader, cursor: startColDrag ? 'grab' : 'default', background: accent ? accent + '66' : 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}
+        onMouseDown={e => startColDrag?.(e, col)} title={startColDrag ? 'Drag to reorder column' : undefined}>
+        {startColDrag && <span style={{ color: '#8090b8', fontSize: 12, flexShrink: 0, cursor: 'grab' }}>⠿</span>}
+        {locked
+          ? <span style={{ ...kb.colTitle, color: '#8090b8', fontStyle: 'italic' }}>{col.label}</span>
+          : <EditableText value={col.label} onCommit={l => onRenameColumn(col.id, l)} style={kb.colTitle} title="Double-click to rename column" />}
         <span style={{ ...kb.colCount, color: over ? '#f87171' : '#8090b8' }} title={over ? 'Over limit' : undefined}>{countText}</span>
-        <div style={{ position: 'relative' }}>
+        {!locked && <div style={{ position: 'relative' }}>
           <button style={kb.colMenuBtn} title="Column options" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setMenu(m => !m) }}>⋯</button>
           {menu && (<>
             <div onMouseDown={e => { e.stopPropagation(); setMenu(false) }} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
@@ -5144,18 +5219,20 @@ function KanbanColumn({ col, q, matches, drag, cardDrop, dragOver, startDrag, st
                 <div title="None" onClick={() => { onSetColumnColor(col.id, null); setMenu(false) }} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid #3a4a8a', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: 11 }}>∅</div>
                 {swatches.map(c => <div key={c} onClick={() => { onSetColumnColor(col.id, c); setMenu(false) }} style={{ width: 18, height: 18, borderRadius: 5, background: c, cursor: 'pointer', border: accent === c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.15)' }} />)}
               </div>
-              <div style={kb.menuLabel}>Limit</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 8px' }}>
-                <input type="number" min="0" value={col.wip ?? ''} placeholder="none"
-                  onChange={e => onSetColumnWip(col.id, e.target.value === '' ? null : Math.max(0, Number(e.target.value)))}
-                  style={{ width: 64, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 12, padding: '3px 6px', outline: 'none' }} />
-                {col.wip != null && <button onClick={() => onSetColumnWip(col.id, null)} style={{ ...kb.menuBtn }}>Clear</button>}
-              </div>
+              {!grouped && <>
+                <div style={kb.menuLabel}>Limit</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 8px' }}>
+                  <input type="number" min="0" value={col.wip ?? ''} placeholder="none"
+                    onChange={e => onSetColumnWip(col.id, e.target.value === '' ? null : Math.max(0, Number(e.target.value)))}
+                    style={{ width: 64, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 12, padding: '3px 6px', outline: 'none' }} />
+                  {col.wip != null && <button onClick={() => onSetColumnWip(col.id, null)} style={{ ...kb.menuBtn }}>Clear</button>}
+                </div>
+              </>}
               <div style={{ borderTop: '1px solid #23233e', margin: '2px 0' }} />
-              <div style={{ ...kb.menuItem, color: '#f87171' }} onClick={() => { setMenu(false); onDeleteColumn(col.id) }}>Delete column</div>
+              <div style={{ ...kb.menuItem, color: '#f87171' }} onClick={() => { setMenu(false); onDeleteColumn(col.id) }}>{grouped ? 'Delete value' : 'Delete column'}</div>
             </div>
           </>)}
-        </div>
+        </div>}
       </div>
       <div style={{ ...kb.colBody, boxShadow: over ? 'inset 0 0 0 1.5px rgba(248,113,113,0.4)' : undefined }}>
         {shown.map(card => (
@@ -6898,7 +6975,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
@@ -7068,6 +7145,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && onToggleKanban && textRow(isKanban ? 'Show children as nodes' : 'Show as kanban board', onToggleKanban, { icon: '🗂️', right: isKanban ? '•' : '›', rightColor: isKanban ? '#f6ad55' : '#8090b8', opens: null })}
+        {hasChildrenForList && onGroupBoard && textRow('Group into board by…', () => setPanel('groupboard'), { icon: '⌗', right: '›', opens: 'groupboard' })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}
         {textRow('Delete', onDelete, { icon: '🗑️', color: '#f87171', opens: null })}
@@ -7445,6 +7523,26 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
               </div>
             )
           })()}
+        </div>
+      )}
+
+      {panel === 'groupboard' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:4, minWidth:210 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>GROUP INTO BOARD BY</span>
+          </div>
+          <div style={{ fontSize:'0.72rem', color:'#8090b8', padding:'0 4px 4px' }}>Makes a board of this node's descendants, bucketed by a property. You can make several.</div>
+          {(propertyDefs || []).filter(d => d.type === 'select' || d.type === 'multiSelect').map(d => (
+            <div key={d.id} onClick={() => onGroupBoard({ mode:'property', propId:d.id })}
+              style={{ padding:'6px 9px', borderRadius:5, cursor:'pointer', color:'#c5d0ff', fontSize:'0.82rem' }}
+              onMouseEnter={e => e.currentTarget.style.background = '#23234a'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>{d.name}</div>
+          ))}
+          <div onClick={() => onGroupBoard({ mode:'tag' })}
+            style={{ padding:'6px 9px', borderRadius:5, cursor:'pointer', color:'#c5d0ff', fontSize:'0.82rem' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#23234a'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>Tags</div>
+          {(propertyDefs || []).filter(d => d.type === 'select' || d.type === 'multiSelect').length === 0 &&
+            <div style={{ fontSize:'0.74rem', color:'#8090b8', padding:'4px 9px' }}>Tip: add a Select property (or Tags) in the Table first, then group by it here.</div>}
         </div>
       )}
 

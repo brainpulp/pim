@@ -130,7 +130,9 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const byId = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes])
   const childrenOf = useMemo(() => { const m = {}; edges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [edges])
   const parentOf = useMemo(() => { const m = {}; edges.forEach(e => { m[e.target] = e.source }); return m }, [edges])
-  const roots = useMemo(() => nodes.filter(n => !parentOf[n.id]).map(n => n.id), [nodes, parentOf])
+  // Parentless nodes are outline roots — except grouped-board view nodes (meta.kanban), which are
+  // standalone canvas views over another node's descendants and shouldn't clutter the outline.
+  const roots = useMemo(() => nodes.filter(n => !parentOf[n.id] && !n.meta?.kanban).map(n => n.id), [nodes, parentOf])
 
   const [dark, setDark] = useState(() => { try { return localStorage.getItem('pim_writer_dark') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('pim_writer_dark', dark ? '1' : '0') } catch { /* ignore */ } }, [dark])

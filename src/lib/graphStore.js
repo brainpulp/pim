@@ -805,6 +805,30 @@ const useGraphStore = create((set, get) => ({
     return boardId
   },
 
+  // Create a GROUPED board: a lightweight view node that references a source parent and groups the
+  // source's flattened descendants by a property (or by tags). It has no columns/cards of its own —
+  // columns are the property's options (or the distinct tags); cards are computed. Multiple grouped
+  // boards can point at the same source with different groupings.
+  // groupBy = { mode:'property', propId } | { mode:'tag' }
+  addGroupedBoard: (sourceId, groupBy, x = null, y = null) => {
+    const boardId = uid()
+    const srcLabel = get().nodes.find(n => n.id === sourceId)?.label || 'Board'
+    set(s => ({
+      nodes: [...s.nodes, { id: boardId, label: srcLabel, notes: '', meta: { kanban: { sourceId, groupBy } } }],
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v,
+        kanbanNodeIds: [...(v.kanbanNodeIds || []), boardId],
+        nodeProps: { ...v.nodeProps, [boardId]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
+      }),
+    }))
+    return boardId
+  },
+
+  // Change a grouped board's grouping (property or tag) in place.
+  setKanbanGroupBy: (boardId, groupBy) => set(s => ({
+    nodes: s.nodes.map(n => n.id === boardId ? { ...n, meta: { ...(n.meta || {}), kanban: { ...(n.meta?.kanban || {}), groupBy } } } : n),
+  })),
+
   // Add a column to a board: a child node + a matching option in the board's property (linked by optId).
   addKanbanColumn: (boardId, propId, name = 'New column') => {
     const colId = uid(), optId = uid()
