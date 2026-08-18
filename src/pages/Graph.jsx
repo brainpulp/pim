@@ -959,6 +959,29 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     else if (dir === 'down' && i < sibs.length - 1) moveChild(parentId, childId, sibs[i + 2] ?? null)
   }, [childrenOrdered, moveChild])
 
+  // Build the list-card rows honoring its `order`: Structure = edge order (nested); Arrangement =
+  // a saved custom order of the FIRST-GEN children (nested subtrees follow); Sort = first-gen sorted
+  // by a key. Only the first generation is reordered — deeper levels keep their structural order.
+  const buildListRows = useCallback((rootId, order, arrangements) => {
+    const firstGen = childrenOrdered[rootId] || []
+    let top = firstGen
+    if (order?.mode === 'arrangement') {
+      const arr = (arrangements || []).find(a => a.id === order.arrangementId)
+      if (arr) { const set = new Set(firstGen); const inArr = (arr.order || []).filter(id => set.has(id)); const rest = firstGen.filter(id => !inArr.includes(id)); top = [...inArr, ...rest] }
+    } else if (order?.mode === 'sort' && order.sortKey) {
+      top = [...firstGen].sort((a, b) => cmpListVals(listSortValue(order.sortKey, storeNodeById[a], storePropertyDefs), listSortValue(order.sortKey, storeNodeById[b], storePropertyDefs)))
+      if (order.sortDir === 'desc') top.reverse()
+    }
+    const rows = []; const seen = new Set([rootId])
+    const walk = (id, depth, parentId) => {
+      if (seen.has(id)) return; seen.add(id)
+      rows.push({ id, parentId, label: nodeLabelById[id] || '(untitled)', depth })
+      ;(childrenOrdered[id] || []).forEach(c => walk(c, depth + 1, id))
+    }
+    top.forEach(cid => walk(cid, 0, rootId))
+    return rows
+  }, [childrenOrdered, nodeLabelById, storeNodeById, storePropertyDefs])
+
   // Build a clean, self-contained SVG of the CURRENT graph (visible nodes as shapes + labels, edges
   // as lines) for export — no foreignObjects, so it rasterizes/prints reliably.
   const captureGraphSVG = useCallback(() => {
@@ -3499,17 +3522,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             )})}
 
             {/* List cards — a node whose subtree is shown as one nested, editable outline card. */}
-            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && listNodeSet.has(n.id)).map(n => (
-              <ListCard key={'lc' + n.id} node={n} rootLabel={n.label} rows={flattenSubtree(n.id)}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && listNodeSet.has(n.id)).map(n => {
+              const meta = storeNodeById[n.id]?.meta || {}
+              const order = meta.listOrder || { mode: 'structure' }
+              const arrangements = meta.listArrangements || []
+              const rows = buildListRows(n.id, order, arrangements)
+              const topOrder = rows.filter(r => r.depth === 0).map(r => r.id)
+              return (
+              <ListCard key={'lc' + n.id} node={n} rootLabel={n.label} rows={rows}
                 fill={getVP(n.id).fillColor} selectedId={selected?.type === 'node' ? selected.id : null}
+                order={order} arrangements={arrangements} topOrder={topOrder} propertyDefs={storePropertyDefs}
                 onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                 onSelect={id => setSelected({ id, type: 'node' })}
                 onRename={(id, label) => updateLabel(id, label)}
                 onDelete={id => { pushUndo(); deleteNode(id) }}
                 onReorder={reorderRow}
                 onMoveRow={(rowId, parentId, beforeId) => { pushUndo(); moveCardToColumn(rowId, parentId, beforeId) }}
+                onSetOrder={o => setNodeMeta(n.id, { listOrder: o })}
+                onAddArrangement={name => { const id = crypto.randomUUID(); setNodeMeta(n.id, { listArrangements: [...arrangements, { id, name: name || `Arrangement ${arrangements.length + 1}`, order: topOrder }], listOrder: { mode: 'arrangement', arrangementId: id } }) }}
+                onRenameArrangement={(id, name) => setNodeMeta(n.id, { listArrangements: arrangements.map(a => a.id === id ? { ...a, name } : a) })}
+                onDeleteArrangement={id => setNodeMeta(n.id, { listArrangements: arrangements.filter(a => a.id !== id), ...(order.arrangementId === id ? { listOrder: { mode: 'structure' } } : {}) })}
+                onReorderArrangement={newOrder => { const aid = order.arrangementId; setNodeMeta(n.id, { listArrangements: arrangements.map(a => a.id === aid ? { ...a, order: newOrder } : a) }) }}
                 onExit={() => toggleListNode(n.id)} />
-            ))}
+              )
+            })}
 
             {/* Alt-drag duplicate ghost — translucent preview that follows the cursor */}
             {dupGhost && (() => {
@@ -4998,12 +5034,43 @@ function DepthSlider({ level, max, onChange }) {
 // A node rendered as one nested, editable outline card (its subtree hidden on the canvas). Drag the
 // header to move the node; a row: click = select, double-click = rename, ▲▼ = reorder among siblings,
 // × = delete. Rendered as an HTML card inside a <foreignObject> so inputs/scroll/buttons just work.
-function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSelect, onRename, onDelete, onReorder, onMoveRow, onExit }) {
+// Extract a comparable value from a node for a list sort key ('title' | 'done' | 'tag' | 'prop:<id>').
+function listSortValue(sortKey, node, defs) {
+  if (!node) return ''
+  if (sortKey === 'title') return (node.label || '').toLowerCase()
+  if (sortKey === 'done') return node.meta?.done ? 1 : 0
+  if (sortKey === 'tag') return (node.meta?.tags || []).slice().sort().join(',')
+  if (sortKey.startsWith('prop:')) {
+    const pid = sortKey.slice(5), def = (defs || []).find(d => d.id === pid), v = node.props?.[pid]
+    if (v == null || v === '') return ''
+    if (def?.type === 'select') return ((def.options || []).find(o => o.id === v)?.name || '').toLowerCase()
+    if (def?.type === 'multiSelect') return (Array.isArray(v) ? v : []).map(id => (def.options || []).find(o => o.id === id)?.name || '').sort().join(',').toLowerCase()
+    if (def?.type === 'number') return Number(v)
+    if (def?.type === 'checkbox') return v ? 1 : 0
+    return String(v).toLowerCase()   // date, text, url
+  }
+  return ''
+}
+// Compare two list-sort values: empties last, numbers numeric, else locale string compare.
+function cmpListVals(a, b) {
+  const ae = a === '' || a == null, be = b === '' || b == null
+  if (ae && be) return 0; if (ae) return 1; if (be) return -1
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  return String(a).localeCompare(String(b))
+}
+
+function ListCard({ node, rootLabel, rows, fill, selectedId, order, arrangements, topOrder, propertyDefs, onHeaderDown, onSelect, onRename, onDelete, onReorder, onMoveRow, onSetOrder, onAddArrangement, onRenameArrangement, onDeleteArrangement, onReorderArrangement, onExit }) {
   const W = 248, rowH = 24, headerH = 32, maxH = 360
   const H = Math.min(maxH, headerH + rows.length * rowH + 12)
   const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#3a4a8a'
+  const mode = order?.mode || 'structure'
   const [drag, setDrag] = useState(null)   // { id, label, x, y } while dragging a row
   const [dropT, setDropT] = useState(null) // { rowId, pos:'before'|'after'|'into' }
+  const [orderMenu, setOrderMenu] = useState(false)
+  const orderLabel = mode === 'structure' ? 'Structure'
+    : mode === 'arrangement' ? (arrangements.find(a => a.id === order.arrangementId)?.name || 'Arrangement')
+    : (order.sortKey === 'title' ? 'Title' : order.sortKey === 'done' ? 'Done' : order.sortKey === 'tag' ? 'Tags'
+        : (propertyDefs.find(d => 'prop:' + d.id === order.sortKey)?.name || 'Sort'))
 
   // Where would a dragged row land? top zone = before target, bottom = after, middle = into (child).
   const computeDrop = (x, y, dragId) => {
@@ -5018,6 +5085,8 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSel
   }
   const startRowDrag = (e, row) => {
     if (e.button !== 0) return
+    if (mode === 'sort') return                          // sorted list order is computed — not draggable
+    if (mode === 'arrangement' && row.depth !== 0) return // arrangements only reorder the first generation
     e.stopPropagation(); e.preventDefault()
     const ox = e.clientX, oy = e.clientY
     let moved = false
@@ -5035,6 +5104,16 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSel
       setDrag(null); setDropT(null)
       if (!d) return
       const target = rows.find(r => r.id === d.rowId); if (!target) return
+      // Arrangement mode: reorder the first-gen order only (no nesting), then save it.
+      if (mode === 'arrangement') {
+        if (target.depth !== 0) return
+        const pos = d.pos === 'into' ? 'after' : d.pos
+        const ord = topOrder.filter(id => id !== row.id)
+        const ti = ord.indexOf(target.id)
+        ord.splice(pos === 'before' ? ti : ti + 1, 0, row.id)
+        onReorderArrangement(ord)
+        return
+      }
       if (d.pos === 'into') { onMoveRow(row.id, target.id, null); return }
       const parentId = target.parentId
       if (d.pos === 'before') { onMoveRow(row.id, parentId, target.id); return }
@@ -5057,11 +5136,18 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSel
           onDoubleClick={e => e.stopPropagation()} title="Drag to move · click to select">
           <span style={lc.title}>{rootLabel || '(untitled)'}</span>
           <span style={lc.count}>{rows.length}</span>
+          <div style={{ position: 'relative' }} onMouseDown={e => e.stopPropagation()}>
+            <button style={lc.exitBtn} title="Order the first-generation items" onClick={e => { e.stopPropagation(); setOrderMenu(o => !o) }}>⇅ {orderLabel} ▾</button>
+            {orderMenu && <ListOrderMenu order={order} arrangements={arrangements} propertyDefs={propertyDefs}
+              onSetOrder={onSetOrder} onAddArrangement={onAddArrangement} onRenameArrangement={onRenameArrangement} onDeleteArrangement={onDeleteArrangement}
+              onClose={() => setOrderMenu(false)} />}
+          </div>
           <button style={lc.exitBtn} title="Expand back to nodes" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>⤢</button>
         </div>
         <div style={lc.body} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
           {rows.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: '6px 10px' }}>No children yet.</div>}
-          {rows.map(r => <ListRow key={r.id} row={r} selected={selectedId === r.id}
+          {rows.map(r => <ListRow key={r.id} row={r} selected={selectedId === r.id} mode={mode}
+            canDrag={mode === 'structure' || (mode === 'arrangement' && r.depth === 0)}
             dropPos={drag && dropT?.rowId === r.id ? dropT.pos : null} dragging={drag?.id === r.id}
             startRowDrag={startRowDrag} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onReorder={onReorder} />)}
         </div>
@@ -5074,16 +5160,16 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSel
   )
 }
 
-function ListRow({ row, selected, dropPos, dragging, startRowDrag, onSelect, onRename, onDelete, onReorder }) {
+function ListRow({ row, selected, mode = 'structure', canDrag = true, dropPos, dragging, startRowDrag, onSelect, onRename, onDelete, onReorder }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.label)
   useEffect(() => { if (!editing) setDraft(row.label) }, [row.label, editing])
   const commit = () => { const t = draft.trim(); onRename(row.id, t || row.label); setEditing(false) }
   return (
     <div data-listrow={row.id}
-      style={{ ...lc.row, position: 'relative', cursor: 'grab', opacity: dragging ? 0.4 : 1, paddingLeft: 8 + row.depth * 14,
+      style={{ ...lc.row, position: 'relative', cursor: canDrag ? 'grab' : 'pointer', opacity: dragging ? 0.4 : 1, paddingLeft: 8 + row.depth * 14,
         background: dropPos === 'into' ? '#26305e' : (selected ? '#1e2048' : 'transparent') }}
-      onMouseDown={e => startRowDrag(e, row)}
+      onMouseDown={e => canDrag && startRowDrag(e, row)}
       onClick={e => { e.stopPropagation(); onSelect(row.id) }}>
       {dropPos === 'before' && <div style={lc.dropLine} />}
       {dropPos === 'after' && <div style={{ ...lc.dropLine, top: 'auto', bottom: -1 }} />}
@@ -5096,17 +5182,60 @@ function ListRow({ row, selected, dropPos, dragging, startRowDrag, onSelect, onR
         <span style={lc.rowLabel} onDoubleClick={e => { e.stopPropagation(); setDraft(row.label); setEditing(true) }} title={row.label}>{row.label}</span>
       )}
       <span style={lc.actions} onMouseDown={e => e.stopPropagation()}>
-        <button style={lc.rowBtn} title="Move up" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'up') }}>▲</button>
-        <button style={lc.rowBtn} title="Move down" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'down') }}>▼</button>
+        {mode === 'structure' && <>
+          <button style={lc.rowBtn} title="Move up" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'up') }}>▲</button>
+          <button style={lc.rowBtn} title="Move down" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'down') }}>▼</button>
+        </>}
         <button style={{ ...lc.rowBtn, color: '#f87171' }} title="Delete" onClick={e => { e.stopPropagation(); onDelete(row.id) }}>×</button>
       </span>
     </div>
   )
 }
 
+// Order menu for a list card: Structure (tree order), named Arrangements (manual), or Sort by a key.
+function ListOrderMenu({ order, arrangements, propertyDefs, onSetOrder, onAddArrangement, onRenameArrangement, onDeleteArrangement, onClose }) {
+  const [renaming, setRenaming] = useState(null)
+  const [nm, setNm] = useState('')
+  const mode = order?.mode || 'structure'
+  const sortDefs = (propertyDefs || []).filter(d => ['select', 'multiSelect', 'number', 'date', 'text', 'checkbox', 'url'].includes(d.type))
+  const item = (label, active, onClick, extra) => (
+    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', fontSize: '0.8rem', color: active ? '#fff' : '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', background: active ? '#23234a' : 'transparent', borderRadius: 4 }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#1c1c3a' }} onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}>
+      <span style={{ flex: 1 }}>{label}</span>{active && <span style={{ color: '#8ab4ff' }}>✓</span>}{extra}
+    </div>
+  )
+  const setSort = (key) => { const dir = (mode === 'sort' && order.sortKey === key && order.sortDir === 'asc') ? 'desc' : 'asc'; onSetOrder({ mode: 'sort', sortKey: key, sortDir: dir }) }
+  const arrow = (key) => mode === 'sort' && order.sortKey === key ? (order.sortDir === 'desc' ? ' ↓' : ' ↑') : ''
+  return (<>
+    <div onMouseDown={e => { e.stopPropagation(); onClose() }} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+    <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, minWidth: 190, maxHeight: 320, overflowY: 'auto', background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 9, padding: '5px 0', boxShadow: '0 10px 28px rgba(0,0,0,0.65)' }}>
+      {item('Structure (tree order)', mode === 'structure', () => { onSetOrder({ mode: 'structure' }); onClose() })}
+      <div style={{ padding: '4px 10px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' }}>Arrangements</div>
+      {arrangements.map(a => renaming === a.id ? (
+        <div key={a.id} style={{ display: 'flex', gap: 4, padding: '3px 8px' }} onMouseDown={e => e.stopPropagation()}>
+          <input autoFocus value={nm} onChange={e => setNm(e.target.value)} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { onRenameArrangement(a.id, nm.trim() || a.name); setRenaming(null) } if (e.key === 'Escape') setRenaming(null) }}
+            style={{ flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 4, color: '#fff', fontSize: 12, padding: '2px 6px', outline: 'none' }} />
+        </div>
+      ) : (
+        <div key={a.id} style={{ display: 'flex', alignItems: 'center' }}>
+          {item(a.name, mode === 'arrangement' && order.arrangementId === a.id, () => { onSetOrder({ mode: 'arrangement', arrangementId: a.id }); onClose() })}
+          <button title="Rename" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setNm(a.name); setRenaming(a.id) }} style={{ background: 'transparent', border: 'none', color: '#8090b8', cursor: 'pointer', fontSize: 11, padding: '0 4px' }}>✎</button>
+          <button title="Delete" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDeleteArrangement(a.id) }} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12, padding: '0 6px 0 2px' }}>×</button>
+        </div>
+      ))}
+      <div onClick={() => { onAddArrangement(''); onClose() }} style={{ padding: '5px 10px', fontSize: '0.8rem', color: '#5b6af0', cursor: 'pointer' }}>＋ New arrangement</div>
+      <div style={{ padding: '4px 10px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' }}>Sort by</div>
+      {item('Title' + arrow('title'), mode === 'sort' && order.sortKey === 'title', () => setSort('title'))}
+      {item('Tags' + arrow('tag'), mode === 'sort' && order.sortKey === 'tag', () => setSort('tag'))}
+      {sortDefs.map(d => item(d.name + arrow('prop:' + d.id), mode === 'sort' && order.sortKey === 'prop:' + d.id, () => setSort('prop:' + d.id)))}
+      {sortDefs.length === 0 && <div style={{ padding: '2px 10px 6px', fontSize: 11, color: '#8090b8' }}>No properties yet — add some in the Table.</div>}
+    </div>
+  </>)
+}
+
 const lc = {
-  card: (accent) => ({ width: '100%', height: '100%', background: '#14142a', border: `1px solid ${accent}`, borderRadius: 10, boxShadow: '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }),
-  header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', background: accent, cursor: 'grab', flexShrink: 0 }),
+  card: (accent) => ({ width: '100%', height: '100%', background: '#14142a', border: `1px solid ${accent}`, borderRadius: 10, boxShadow: '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'visible', fontFamily: '-apple-system, sans-serif' }),
+  header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', background: accent, cursor: 'grab', flexShrink: 0, borderTopLeftRadius: 10, borderTopRightRadius: 10 }),
   title: { fontWeight: 700, fontSize: 13, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   count: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600 },
   exitBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 5px' },
