@@ -174,6 +174,20 @@ export async function saveProjectToNotion(nodes, propertyDefs) {
 // Upload a base64 data-URL image to Storage; returns a public URL (or the original on failure).
 // Photos were being embedded as base64 in view.images[].src, bloating the project row to MBs — which
 // made loads crawl and oversized saves fail silently. Offloading keeps the row tiny.
+// Upload a File/Blob (e.g. a video) directly to Storage and return its public URL. Avoids ever
+// base64-encoding a large file into app state. Returns null on failure (caller keeps the local URL).
+export async function uploadMediaFile(file, projectId) {
+  if (!file) return null
+  try {
+    const ext = ((file.type.split('/')[1] || 'bin').split('+')[0]).slice(0, 5)
+    const path = `${projectId}/vid-${crypto.randomUUID()}.${ext}`
+    const { error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: true, contentType: file.type || 'video/mp4' })
+    if (error) throw error
+    const { data } = supabase.storage.from(BUCKET).getPublicUrl(path)
+    return data.publicUrl
+  } catch (e) { console.warn('Video upload failed:', e?.message || e); return null }
+}
+
 export async function uploadImageDataUrl(dataUrl, projectId) {
   if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return dataUrl
   try {

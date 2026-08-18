@@ -6,7 +6,7 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS, NEW_NODE_STYLE_PROPS } from '../lib/graphStore'
 import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
-import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
+import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -618,6 +618,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setContainedIn  = useGraphStore(s => s.setContainedIn)
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
+  const addVideo        = useGraphStore(s => s.addVideo)
   const updateImage     = useGraphStore(s => s.updateImage)
   const deleteImage     = useGraphStore(s => s.deleteImage)
   const groupImages     = useGraphStore(s => s.groupImages)
@@ -2786,6 +2787,44 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     input.click()
   }, [addImage, updateImage, projectId])
 
+  // Add a video from a local file: read it, size the box to the video's aspect ratio, then offload
+  // the file to Storage (same bucket as images) and swap the inline data URL for the public URL.
+  const addVideoFileAt = useCallback((sx, sy) => {
+    const input = document.createElement('input')
+    input.type = 'file'; input.accept = 'video/*'
+    input.onchange = () => {
+      const file = input.files?.[0]; if (!file) return
+      // Preview instantly from a local blob URL (a tiny string — never the whole file in state);
+      // upload the file to Storage in the background, then swap to the durable public URL.
+      const blobUrl = URL.createObjectURL(file)
+      const el = document.createElement('video')
+      const finish = (ar) => {
+        const MAX = 320
+        const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
+        const vid = addVideo({ videoKind: 'file', src: blobUrl }, sx, sy, w, h)
+        uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(vid, { src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+      }
+      el.onloadedmetadata = () => finish((el.videoWidth / el.videoHeight) || (16 / 9))
+      el.onerror = () => finish(16 / 9)
+      el.src = blobUrl
+    }
+    input.click()
+  }, [addVideo, updateImage, projectId])
+
+  // Parse a YouTube URL/ID and drop a 16:9 YouTube player on the canvas.
+  const addYoutubeAt = useCallback((sx, sy) => {
+    const raw = window.prompt('Paste a YouTube link (or video ID):')
+    if (!raw) return
+    const s = raw.trim()
+    let vidId = null
+    const m = s.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/)
+    if (m) vidId = m[1]
+    else if (/^[A-Za-z0-9_-]{11}$/.test(s)) vidId = s
+    if (!vidId) { alert('Could not find a YouTube video ID in that link.'); return }
+    const W = 320
+    addVideo({ videoKind: 'youtube', youtubeId: vidId }, sx, sy, W, Math.round(W * 9 / 16))
+  }, [addVideo])
+
   const pasteImageAt = useCallback(async (sx, sy) => {
     try {
       const clip = await navigator.clipboard.read()
@@ -3665,6 +3704,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     })}
                     {item('🖼️', 'Add image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
+                    {item('🎬', 'Add video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
+                    {item('▶️', 'Add YouTube…', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('🗂️', 'New view', () => { pushUndo(); addView(); close() })}
                     {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
@@ -5771,6 +5812,7 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
+  const isVideo = img.type === 'video'
   const hw = width / 2, hh = height / 2
 
   // Crop rect (normalised source rect → local box coords). Defaults to the whole box.
@@ -5852,6 +5894,19 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       )}
       {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2}
         mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />}
+      {isVideo ? (
+        // Video body — a <video> (uploaded file) or a YouTube <iframe>, in a foreignObject.
+        // pointer-events are on only when selected, so an unselected video still selects/drags via
+        // the parent <g> (same idea as 3D nodes); when selected you can use the player controls.
+        <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
+          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: isSelected ? 'auto' : 'none' }}>
+            {img.videoKind === 'youtube'
+              ? <iframe src={`https://www.youtube.com/embed/${img.youtubeId}`} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
+              : <video src={src} controls playsInline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />}
+          </div>
+        </foreignObject>
+      ) : (<>
       {/* While cropping, show the full image dimmed so trimmed areas stay visible */}
       {isCropping && (
         <image href={src} x={-hw} y={-hh} width={width} height={height} opacity={0.3}
@@ -5867,10 +5922,18 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           clipPath={hasCrop ? `url(#${clipId})` : undefined}
           mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />
       )}
+      </>)}
 
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+        {/* Video: a top drag-bar to move it (the player controls own the body's pointer events) */}
+        {isVideo && (
+          <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
+            <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
+            <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
+          </g>
+        )}
         {/* Four square corner resize handles — pivot on the opposite corner (Miro style) */}
         {corners.map(([c, hx, hy, cur]) => (
           <rect key={c} x={hx - HS} y={hy - HS} {...SQ} rx={1.5}

@@ -525,6 +525,18 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // A video is stored in the SAME view.images[] array (so it shares selection/drag/resize/group/delete)
+  // but flagged type:'video'. fields = { videoKind:'youtube', youtubeId } | { videoKind:'file', src }.
+  addVideo: (fields, x, y, width, height) => {
+    const id = uid()
+    set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, images: [...(v.images || []), { id, type: 'video', x, y, width, height, rotation: 0, bgColor: null, ...fields }],
+      }),
+    }))
+    return id
+  },
+
   updateImage: (imageId, props) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v, images: (v.images || []).map(img => img.id === imageId ? { ...img, ...props } : img),
