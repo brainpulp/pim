@@ -3531,6 +3531,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               return (
               <ListCard key={'lc' + n.id} node={n} rootLabel={n.label} rows={rows}
                 fill={getVP(n.id).fillColor} selectedId={selected?.type === 'node' ? selected.id : null}
+                width={meta.listWidth || 248} onSetWidth={w => setNodeMeta(n.id, { listWidth: w })} zoomRef={zoomTransformRef}
                 order={order} arrangements={arrangements} topOrder={topOrder} propertyDefs={storePropertyDefs}
                 onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                 onSelect={id => setSelected({ id, type: 'node' })}
@@ -5059,9 +5060,17 @@ function cmpListVals(a, b) {
   return String(a).localeCompare(String(b))
 }
 
-function ListCard({ node, rootLabel, rows, fill, selectedId, order, arrangements, topOrder, propertyDefs, onHeaderDown, onSelect, onRename, onDelete, onReorder, onMoveRow, onSetOrder, onAddArrangement, onRenameArrangement, onDeleteArrangement, onReorderArrangement, onExit }) {
-  const W = 248, rowH = 24, headerH = 32, maxH = 360
+function ListCard({ node, rootLabel, rows, fill, selectedId, width, onSetWidth, zoomRef, order, arrangements, topOrder, propertyDefs, onHeaderDown, onSelect, onRename, onDelete, onReorder, onMoveRow, onSetOrder, onAddArrangement, onRenameArrangement, onDeleteArrangement, onReorderArrangement, onExit }) {
+  const W = width || 248, rowH = 26, headerH = 32, maxH = 420
   const H = Math.min(maxH, headerH + rows.length * rowH + 12)
+  // Drag the right edge to widen (symmetric, handle tracks the cursor). Labels wrap, never truncate.
+  const startWidthDrag = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const sx = e.clientX, w0 = W, k = zoomRef?.current?.k || 1
+    const move = ev => onSetWidth(Math.max(180, Math.min(680, Math.round(w0 + 2 * (ev.clientX - sx) / k))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
   const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#3a4a8a'
   const mode = order?.mode || 'structure'
   const [drag, setDrag] = useState(null)   // { id, label, x, y } while dragging a row
@@ -5146,11 +5155,17 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, order, arrangements
         </div>
         <div style={lc.body} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
           {rows.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: '6px 10px' }}>No children yet.</div>}
-          {rows.map(r => <ListRow key={r.id} row={r} selected={selectedId === r.id} mode={mode}
-            canDrag={mode === 'structure' || (mode === 'arrangement' && r.depth === 0)}
-            dropPos={drag && dropT?.rowId === r.id ? dropT.pos : null} dragging={drag?.id === r.id}
-            startRowDrag={startRowDrag} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onReorder={onReorder} />)}
+          {(() => { let firstGenN = 0; return rows.map(r => {
+            const ordinal = (mode !== 'structure' && r.depth === 0) ? (++firstGenN) : null
+            return <ListRow key={r.id} row={r} selected={selectedId === r.id} mode={mode} ordinal={ordinal}
+              canDrag={mode === 'structure' || (mode === 'arrangement' && r.depth === 0)}
+              dropPos={drag && dropT?.rowId === r.id ? dropT.pos : null} dragging={drag?.id === r.id}
+              startRowDrag={startRowDrag} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onReorder={onReorder} />
+          }) })()}
         </div>
+        {/* right-edge resize handle — a thin bar; drag to widen */}
+        <div onMouseDown={startWidthDrag} title="Drag to widen"
+          style={{ position: 'absolute', top: headerH + 4, bottom: 6, right: -3, width: 7, cursor: 'ew-resize' }} />
       </div>
       {drag && createPortal(
         <div style={{ position: 'fixed', left: drag.x + 8, top: drag.y + 6, zIndex: 9999, pointerEvents: 'none', maxWidth: 200, background: '#1b2140', border: '1px solid #5b6af0', borderRadius: 6, padding: '3px 8px', fontSize: 12, color: '#dbe4ff', boxShadow: '0 6px 16px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
@@ -5160,7 +5175,7 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, order, arrangements
   )
 }
 
-function ListRow({ row, selected, mode = 'structure', canDrag = true, dropPos, dragging, startRowDrag, onSelect, onRename, onDelete, onReorder }) {
+function ListRow({ row, selected, mode = 'structure', ordinal = null, canDrag = true, dropPos, dragging, startRowDrag, onSelect, onRename, onDelete, onReorder }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.label)
   useEffect(() => { if (!editing) setDraft(row.label) }, [row.label, editing])
@@ -5173,7 +5188,7 @@ function ListRow({ row, selected, mode = 'structure', canDrag = true, dropPos, d
       onClick={e => { e.stopPropagation(); onSelect(row.id) }}>
       {dropPos === 'before' && <div style={lc.dropLine} />}
       {dropPos === 'after' && <div style={{ ...lc.dropLine, top: 'auto', bottom: -1 }} />}
-      <span style={{ color: '#5b6af0', fontSize: 9, flexShrink: 0 }}>•</span>
+      {ordinal != null ? <span style={lc.ordinal}>{ordinal}.</span> : <span style={{ color: '#5b6af0', fontSize: 9, flexShrink: 0, lineHeight: 1.9 }}>•</span>}
       {editing ? (
         <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
           onBlur={commit} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); commit() } if (e.key === 'Escape') setEditing(false) }}
@@ -5234,15 +5249,16 @@ function ListOrderMenu({ order, arrangements, propertyDefs, onSetOrder, onAddArr
 }
 
 const lc = {
-  card: (accent) => ({ width: '100%', height: '100%', background: '#14142a', border: `1px solid ${accent}`, borderRadius: 10, boxShadow: '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'visible', fontFamily: '-apple-system, sans-serif' }),
+  card: (accent) => ({ position: 'relative', width: '100%', height: '100%', background: '#14142a', border: `1px solid ${accent}`, borderRadius: 10, boxShadow: '0 6px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', overflow: 'visible', fontFamily: '-apple-system, sans-serif' }),
   header: (accent) => ({ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', background: accent, cursor: 'grab', flexShrink: 0, borderTopLeftRadius: 10, borderTopRightRadius: 10 }),
-  title: { fontWeight: 700, fontSize: 13, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  count: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600 },
-  exitBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 5px' },
+  title: { fontWeight: 700, fontSize: 13, color: '#fff', flex: 1, overflow: 'hidden', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.25 },
+  count: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600, flexShrink: 0 },
+  exitBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 5px', flexShrink: 0, whiteSpace: 'nowrap' },
   body: { flex: 1, overflowY: 'auto', padding: '4px 0' },
-  row: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 6px', minHeight: 20, cursor: 'pointer' },
+  row: { display: 'flex', alignItems: 'flex-start', gap: 5, padding: '4px 6px', minHeight: 20, cursor: 'pointer' },
   dropLine: { position: 'absolute', left: 6, right: 6, top: -1, height: 2, background: '#7c8cff', borderRadius: 1, boxShadow: '0 0 5px #7c8cff', pointerEvents: 'none', zIndex: 2 },
-  rowLabel: { flex: 1, fontSize: 12.5, color: '#dbe4ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  rowLabel: { flex: 1, fontSize: 12.5, color: '#dbe4ff', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.3 },
+  ordinal: { color: '#8ab4ff', fontSize: 11, fontWeight: 600, flexShrink: 0, minWidth: 14, textAlign: 'right', lineHeight: 1.5 },
   input: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 5px', fontSize: 12.5, outline: 'none', minWidth: 0 },
   actions: { display: 'flex', gap: 1, flexShrink: 0 },
   rowBtn: { background: 'transparent', border: 'none', color: '#7080a0', cursor: 'pointer', fontSize: 10, padding: '0 3px', lineHeight: 1 },
