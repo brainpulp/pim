@@ -1827,7 +1827,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
-      // Ctrl/Cmd+Enter → create child node
+      // Ctrl/Cmd+Enter → create child node (with a node selected), or a floating node (on empty bg)
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
         if (selected?.type === 'node') {
@@ -1835,6 +1835,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const newId = addNode('New node', selected.id)
           setSelected({ id: newId, type: 'node' })
           setPendingEditId(newId)
+        } else if (svgRef.current) {
+          // nothing selected → drop a floating node, anchored at the viewport center
+          pushUndo()
+          const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
+          const gs = useGraphStore.getState()
+          const dr = gs.views.find(v => v.id === gs.activeViewId)?.drillRoot
+          const newId = addNode('New node', dr || null, cx, cy)   // attach to drilled subtree so it renders there
+          setSelected({ id: newId, type: 'node' })
+          setPendingEditId(newId)
+          setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === newId); if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy } scheduleRender() }, 0)
         }
         return
       }
