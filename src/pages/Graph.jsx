@@ -3499,6 +3499,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onRename={(id, label) => updateLabel(id, label)}
                 onDelete={id => { pushUndo(); deleteNode(id) }}
                 onReorder={reorderRow}
+                onMoveRow={(rowId, parentId, beforeId) => { pushUndo(); moveCardToColumn(rowId, parentId, beforeId) }}
                 onExit={() => toggleListNode(n.id)} />
             ))}
 
@@ -4989,10 +4990,58 @@ function DepthSlider({ level, max, onChange }) {
 // A node rendered as one nested, editable outline card (its subtree hidden on the canvas). Drag the
 // header to move the node; a row: click = select, double-click = rename, ▲▼ = reorder among siblings,
 // × = delete. Rendered as an HTML card inside a <foreignObject> so inputs/scroll/buttons just work.
-function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSelect, onRename, onDelete, onReorder, onExit }) {
+function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSelect, onRename, onDelete, onReorder, onMoveRow, onExit }) {
   const W = 248, rowH = 24, headerH = 32, maxH = 360
   const H = Math.min(maxH, headerH + rows.length * rowH + 12)
   const accent = fill && fill !== 'none' && fill !== 'transparent' ? fill : '#3a4a8a'
+  const [drag, setDrag] = useState(null)   // { id, label, x, y } while dragging a row
+  const [dropT, setDropT] = useState(null) // { rowId, pos:'before'|'after'|'into' }
+
+  // Where would a dragged row land? top zone = before target, bottom = after, middle = into (child).
+  const computeDrop = (x, y, dragId) => {
+    const el = document.elementFromPoint(x, y)
+    const rowEl = el && el.closest('[data-listrow]')
+    if (!rowEl) return null
+    const rid = rowEl.getAttribute('data-listrow')
+    if (rid === dragId) return null
+    const r = rowEl.getBoundingClientRect()
+    const rel = (y - r.top) / r.height
+    return { rowId: rid, pos: rel < 0.28 ? 'before' : rel > 0.72 ? 'after' : 'into' }
+  }
+  const startRowDrag = (e, row) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    const ox = e.clientX, oy = e.clientY
+    let moved = false
+    const noSel = ev => ev.preventDefault()
+    const onMove = ev => {
+      if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 4) return
+      if (!moved) { moved = true; document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSel, true) }
+      setDrag({ id: row.id, label: row.label, x: ev.clientX, y: ev.clientY })
+      setDropT(computeDrop(ev.clientX, ev.clientY, row.id))
+    }
+    const onUp = ev => {
+      document.removeEventListener('mousemove', onMove, true); document.removeEventListener('mouseup', onUp, true)
+      document.removeEventListener('selectstart', noSel, true); document.body.style.userSelect = ''
+      const d = moved ? computeDrop(ev.clientX, ev.clientY, row.id) : null
+      setDrag(null); setDropT(null)
+      if (!d) return
+      const target = rows.find(r => r.id === d.rowId); if (!target) return
+      if (d.pos === 'into') { onMoveRow(row.id, target.id, null); return }
+      const parentId = target.parentId
+      if (d.pos === 'before') { onMoveRow(row.id, parentId, target.id); return }
+      // after → insert before the target's next sibling under the same parent (or append)
+      const idx = rows.findIndex(r => r.id === target.id)
+      let beforeId = null
+      for (let i = idx + 1; i < rows.length; i++) {
+        if (rows[i].parentId === parentId) { beforeId = rows[i].id; break }
+        if (rows[i].depth <= target.depth) break
+      }
+      onMoveRow(row.id, parentId, beforeId)
+    }
+    document.addEventListener('mousemove', onMove, true); document.addEventListener('mouseup', onUp, true)
+  }
+
   return (
     <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
       <div style={lc.card(accent)}>
@@ -5004,30 +5053,41 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, onHeaderDown, onSel
         </div>
         <div style={lc.body} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
           {rows.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: '6px 10px' }}>No children yet.</div>}
-          {rows.map(r => <ListRow key={r.id} row={r} selected={selectedId === r.id} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onReorder={onReorder} />)}
+          {rows.map(r => <ListRow key={r.id} row={r} selected={selectedId === r.id}
+            dropPos={drag && dropT?.rowId === r.id ? dropT.pos : null} dragging={drag?.id === r.id}
+            startRowDrag={startRowDrag} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onReorder={onReorder} />)}
         </div>
       </div>
+      {drag && createPortal(
+        <div style={{ position: 'fixed', left: drag.x + 8, top: drag.y + 6, zIndex: 9999, pointerEvents: 'none', maxWidth: 200, background: '#1b2140', border: '1px solid #5b6af0', borderRadius: 6, padding: '3px 8px', fontSize: 12, color: '#dbe4ff', boxShadow: '0 6px 16px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
+          {drag.label || '(item)'}
+        </div>, document.body)}
     </foreignObject>
   )
 }
 
-function ListRow({ row, selected, onSelect, onRename, onDelete, onReorder }) {
+function ListRow({ row, selected, dropPos, dragging, startRowDrag, onSelect, onRename, onDelete, onReorder }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.label)
   useEffect(() => { if (!editing) setDraft(row.label) }, [row.label, editing])
   const commit = () => { const t = draft.trim(); onRename(row.id, t || row.label); setEditing(false) }
   return (
-    <div style={{ ...lc.row, paddingLeft: 8 + row.depth * 14, background: selected ? '#1e2048' : 'transparent' }}
+    <div data-listrow={row.id}
+      style={{ ...lc.row, position: 'relative', cursor: 'grab', opacity: dragging ? 0.4 : 1, paddingLeft: 8 + row.depth * 14,
+        background: dropPos === 'into' ? '#26305e' : (selected ? '#1e2048' : 'transparent') }}
+      onMouseDown={e => startRowDrag(e, row)}
       onClick={e => { e.stopPropagation(); onSelect(row.id) }}>
+      {dropPos === 'before' && <div style={lc.dropLine} />}
+      {dropPos === 'after' && <div style={{ ...lc.dropLine, top: 'auto', bottom: -1 }} />}
       <span style={{ color: '#5b6af0', fontSize: 9, flexShrink: 0 }}>•</span>
       {editing ? (
-        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onClick={e => e.stopPropagation()}
+        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
           onBlur={commit} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); commit() } if (e.key === 'Escape') setEditing(false) }}
           style={lc.input} />
       ) : (
         <span style={lc.rowLabel} onDoubleClick={e => { e.stopPropagation(); setDraft(row.label); setEditing(true) }} title={row.label}>{row.label}</span>
       )}
-      <span style={lc.actions}>
+      <span style={lc.actions} onMouseDown={e => e.stopPropagation()}>
         <button style={lc.rowBtn} title="Move up" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'up') }}>▲</button>
         <button style={lc.rowBtn} title="Move down" onClick={e => { e.stopPropagation(); onReorder(row.parentId, row.id, 'down') }}>▼</button>
         <button style={{ ...lc.rowBtn, color: '#f87171' }} title="Delete" onClick={e => { e.stopPropagation(); onDelete(row.id) }}>×</button>
@@ -5044,6 +5104,7 @@ const lc = {
   exitBtn: { background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', borderRadius: 5, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 5px' },
   body: { flex: 1, overflowY: 'auto', padding: '4px 0' },
   row: { display: 'flex', alignItems: 'center', gap: 5, padding: '3px 6px', minHeight: 20, cursor: 'pointer' },
+  dropLine: { position: 'absolute', left: 6, right: 6, top: -1, height: 2, background: '#7c8cff', borderRadius: 1, boxShadow: '0 0 5px #7c8cff', pointerEvents: 'none', zIndex: 2 },
   rowLabel: { flex: 1, fontSize: 12.5, color: '#dbe4ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   input: { flex: 1, background: '#0f0f22', border: '1px solid #5b6af0', color: '#fff', borderRadius: 4, padding: '1px 5px', fontSize: 12.5, outline: 'none', minWidth: 0 },
   actions: { display: 'flex', gap: 1, flexShrink: 0 },
