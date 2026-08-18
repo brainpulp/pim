@@ -502,6 +502,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
   const [showFlowchart, setShowFlowchart] = useState(false)  // flowchart text⇄graph panel
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
+  const [dupGhost, setDupGhost] = useState(null)         // alt-drag duplicate: translucent preview { x, y, label, fill, shape, scale }
+  const [dupChildrenPrompt, setDupChildrenPrompt] = useState(null) // { srcId, newId, cx, cy } after alt-drop when source has children
   const [floatDock, setFloatDock] = useState(() => { try { return localStorage.getItem('pim_style_undock') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('pim_style_undock', floatDock ? '1' : '0') } catch { /* ignore */ } }, [floatDock])
   const [floatRect, setFloatRect] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_style_floatpos') || 'null') || { x: 80, y: 90 } } catch { return { x: 80, y: 90 } } })
@@ -619,6 +621,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
   const addVideo        = useGraphStore(s => s.addVideo)
+  const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
+  const copyChildrenInto = useGraphStore(s => s.copyChildrenInto)
   const updateImage     = useGraphStore(s => s.updateImage)
   const deleteImage     = useGraphStore(s => s.deleteImage)
   const groupImages     = useGraphStore(s => s.groupImages)
@@ -1900,6 +1904,40 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
     canvasFocused.current = true
+
+    // Alt-drag → duplicate: drag a translucent ghost (original stays put); on drop, create a copy —
+    // a sister under the same parent, or a floating node if the source has no parent. If the source
+    // has children, ask afterwards whether to also copy them.
+    if (e.altKey && !(e.metaKey || e.ctrlKey)) {
+      const srcSim = simNodesRef.current.find(n => n.id === nodeId)
+      if (!srcSim) return
+      const vp = viewNodePropsRef.current[nodeId] || {}
+      const label = storeNodes.find(n => n.id === nodeId)?.label || ''
+      const hasChildren = storeEdges.some(ed => ed.source === nodeId)
+      const start = { x: e.clientX, y: e.clientY }
+      let moved = false
+      setDupGhost({ x: srcSim.x, y: srcSim.y, label, fill: vp.fillColor, shape: vp.shape || 'circle', scale: vp.scale || 1 })
+      setGestureCursor('copy')
+      const onMove = me => {
+        const [sx, sy] = clientToSim(me.clientX, me.clientY)
+        if (!moved && Math.hypot(me.clientX - start.x, me.clientY - start.y) < 3) return
+        moved = true
+        setDupGhost(g => g ? { ...g, x: sx, y: sy } : g)
+      }
+      const onUp = me => {
+        window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp)
+        setDupGhost(null); setGestureCursor(null)
+        const [dx, dy] = clientToSim(me.clientX, me.clientY)
+        pushUndo()
+        const newId = duplicateNodeAt(nodeId, dx, dy)
+        if (!newId) return
+        setSelected({ id: newId, type: 'node' }); setSelectedNodeIds(new Set())
+        setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === newId); if (sn) { sn.x = dx; sn.y = dy; sn.fx = dx; sn.fy = dy } scheduleRender() }, 0)
+        if (hasChildren) setDupChildrenPrompt({ srcId: nodeId, newId, cx: me.clientX, cy: me.clientY })
+      }
+      window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+      return
+    }
 
     // Ctrl/Cmd-click toggles a node in/out of the multi-selection (no drag) — build a selection by
     // clicking several nodes, then right-click for bulk changes.
@@ -3464,6 +3502,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onExit={() => toggleListNode(n.id)} />
             ))}
 
+            {/* Alt-drag duplicate ghost — translucent preview that follows the cursor */}
+            {dupGhost && (() => {
+              const r = NODE_R * (dupGhost.scale || 1)
+              const fill = (dupGhost.fill && dupGhost.fill !== 'none' && dupGhost.fill !== 'transparent') ? dupGhost.fill : '#2a3260'
+              return (
+                <g transform={`translate(${dupGhost.x},${dupGhost.y})`} opacity={0.55} style={{ pointerEvents: 'none' }}>
+                  <circle r={r} fill={fill} stroke="#7c8cff" strokeWidth={2} strokeDasharray="4,3" />
+                  <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="#fff" style={{ userSelect: 'none' }}>{(dupGhost.label || '').slice(0, 14)}</text>
+                  <text y={r + 14} textAnchor="middle" fontSize={10} fill="#7c8cff" style={{ userSelect: 'none' }}>＋ copy</text>
+                </g>
+              )
+            })()}
+
             {/* Kanban boards — structural (columns = child nodes) OR grouped (columns = a property's
                 values, cards = the source's flattened descendants bucketed by value). */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && kanbanNodeSet.has(n.id)).map(n => {
@@ -4325,6 +4376,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           {dragDraw.kind === 'emoji' ? dragDraw.defaults.emoji : dragDraw.kind === 'text' ? 'Text' : dragDraw.kind === 'shape' ? (dragDraw.defaults.shape) : dragDraw.kind}
         </div>
       )}
+
+      {/* Alt-drag: after duplicating a node that has children, ask whether to also copy the children */}
+      {dupChildrenPrompt && (<>
+        <div onMouseDown={() => setDupChildrenPrompt(null)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
+        <div style={{ position: 'fixed', left: Math.max(120, Math.min(window.innerWidth - 120, dupChildrenPrompt.cx)), top: Math.max(20, Math.min(window.innerHeight - 80, dupChildrenPrompt.cy)), zIndex: 60, transform: 'translate(-50%, 10px)', background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 9, padding: '9px 11px', boxShadow: '0 10px 28px rgba(0,0,0,0.65)' }}>
+          <div style={{ fontSize: 12.5, color: '#c5d0ff', marginBottom: 7, whiteSpace: 'nowrap' }}>This node has children — copy them too?</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => setDupChildrenPrompt(null)} style={{ background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '5px 10px' }}>Just this node</button>
+            <button onClick={() => { pushUndo(); copyChildrenInto(dupChildrenPrompt.srcId, dupChildrenPrompt.newId); setDupChildrenPrompt(null) }} style={{ background: '#2e3a72', border: '1px solid #5b6af0', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '5px 10px', fontWeight: 600 }}>With children</button>
+          </div>
+        </div>
+      </>)}
 
       {notePopupId && (() => {
         const n = simNodesRef.current.find(x => x.id === notePopupId)

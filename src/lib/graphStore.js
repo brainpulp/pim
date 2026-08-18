@@ -199,6 +199,56 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // Duplicate ONE node (no children) at position (x,y): a sister under the same parent, or a floating
+  // root if the source has no parent. Copies label, notes, meta, props, and the active view's style.
+  duplicateNodeAt: (nodeId, x, y) => {
+    const s = get()
+    const src = s.nodes.find(n => n.id === nodeId)
+    if (!src) return null
+    const parentId = s.edges.find(e => e.target === nodeId)?.source || null
+    const newId = uid()
+    const srcVp = s.views.find(v => v.id === s.activeViewId)?.nodeProps?.[nodeId] || {}
+    const newNode = { ...src, id: newId, meta: src.meta ? { ...src.meta } : undefined, props: src.props ? { ...src.props } : undefined }
+    set(st => ({
+      nodes: [...st.nodes, newNode],
+      edges: parentId ? [...st.edges, { id: uid(), source: parentId, target: newId }] : st.edges,
+      views: st.views.map(v => v.id !== st.activeViewId ? v : {
+        ...v, nodeProps: { ...v.nodeProps, [newId]: { ...DEFAULT_NODE_PROPS, ...srcVp, fx: x, fy: y } },
+      }),
+    }))
+    return newId
+  },
+
+  // Deep-copy srcNode's whole subtree of children UNDER targetNode (used after duplicateNodeAt when the
+  // source had children and the user chose "with children"). Offsets anchored positions by the move delta.
+  copyChildrenInto: (srcId, targetId) => set(s => {
+    const kids = {}; s.edges.forEach(e => { (kids[e.source] = kids[e.source] || []).push(e.target) })
+    const vp = s.views.find(v => v.id === s.activeViewId)?.nodeProps || {}
+    const dx = (vp[targetId]?.fx ?? 0) - (vp[srcId]?.fx ?? 0)
+    const dy = (vp[targetId]?.fy ?? 0) - (vp[srcId]?.fy ?? 0)
+    const byId = Object.fromEntries(s.nodes.map(n => [n.id, n]))
+    const newNodes = [], newEdges = [], newProps = {}, seen = new Set([srcId])
+    const clone = (origId, newParentId) => {
+      (kids[origId] || []).forEach(childId => {
+        if (seen.has(childId)) return   // cycle / shared-node guard: copy each descendant once
+        seen.add(childId)
+        const c = byId[childId]; if (!c) return
+        const nid = uid()
+        newNodes.push({ ...c, id: nid, meta: c.meta ? { ...c.meta } : undefined, props: c.props ? { ...c.props } : undefined })
+        newEdges.push({ id: uid(), source: newParentId, target: nid })
+        const cvp = vp[childId]
+        if (cvp) { const nv = { ...cvp }; if (nv.fx != null) nv.fx += dx; if (nv.fy != null) nv.fy += dy; newProps[nid] = nv }
+        clone(childId, nid)
+      })
+    }
+    clone(srcId, targetId)
+    return {
+      nodes: [...s.nodes, ...newNodes],
+      edges: [...s.edges, ...newEdges],
+      views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, nodeProps: { ...v.nodeProps, ...newProps } }),
+    }
+  }),
+
   updateLabel: (id, label) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, label } : n),
   })),
