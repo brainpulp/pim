@@ -77,7 +77,7 @@ export const LAST_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strok
 // A brand-new node inherits ONLY the plain look (color/shape/opacity) from the last-styled node —
 // never the decorative border effects, blur, spin, or motion (those made every new empty node look
 // like "patchwork"). Duplicate/sister still copy the full style.
-const NEW_NODE_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape']
+export const NEW_NODE_STYLE_PROPS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'opacity', 'shape']
 const BASIC_SHAPES = new Set(['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none'])
 const LS_KEY = 'pim_last_node_style'
 const loadLastStyle = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {} } catch { return {} } }

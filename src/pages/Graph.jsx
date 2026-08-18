@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
-import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS } from '../lib/graphStore'
+import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS, NEW_NODE_STYLE_PROPS } from '../lib/graphStore'
 import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl } from '../lib/db'
@@ -1342,9 +1342,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const handleCreateSister = useCallback((nodeId) => {
     const { parentId } = getSiblings(nodeId)
     const newId = addNode('New node', parentId)
-    // Match the source node's look: copy its style props onto the new sister.
+    // Match the source node's plain look (color/shape) — but NOT decorative border effects, spin,
+    // blur, or motion (those made every new sister come out looking like patchwork). Duplicate copies
+    // the full style; a sister stays clean.
     const src = viewNodePropsRef.current[nodeId] || {}
-    LAST_STYLE_PROPS.forEach(k => { if (src[k] !== undefined) setNodeViewProp(newId, k, src[k]) })
+    NEW_NODE_STYLE_PROPS.forEach(k => { if (src[k] !== undefined) setNodeViewProp(newId, k, src[k]) })
     setSelected({ id: newId, type: 'node' })
     setPendingEditId(newId)
   }, [getSiblings, addNode, setNodeViewProp])
