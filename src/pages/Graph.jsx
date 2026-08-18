@@ -1190,6 +1190,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         .force('bound', boundingForce())
         .alphaDecay(0.04).velocityDecay(0.5).alphaMin(0.005).on('tick', scheduleRender)
     } else {
+      // The sim is created empty on first mount, then populated once the project loads. That first
+      // empty→populated transition is a FRESH layout (all floating nodes start stacked at screen
+      // center), so it needs a full-strength settle — 0.25 decays before they spread, which looked
+      // like "everything is pulled to the middle until you move a node". Incremental edits after that
+      // stay gentle (0.25) so ordinary changes don't re-explode the layout.
+      const wasEmpty = simRef.current.nodes().length === 0
       simRef.current.nodes(simNodesRef.current)
       // While Organize is active it owns the layout (packed + pinned). Re-adding the link force or
       // restarting here on a retag is exactly what yanked every node back into a force layout — the
@@ -1197,7 +1203,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (organizeActiveRef.current) return
       simRef.current
         .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(150).strength(0.4))
-        .alpha(0.25).restart()
+        .alpha(wasEmpty && simNodesRef.current.length ? 0.9 : 0.25).restart()
     }
   }, [storeNodes, storeEdges, scheduleRender]) // eslint-disable-line
 
@@ -1208,7 +1214,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const p = { ...DEFAULT_NODE_PROPS, ...(vp[n.id] || {}) }
       n.fx = p.fx ?? null; n.fy = p.fy ?? null
     })
-    if (simRef.current) simRef.current.alpha(0.2).restart()
+    // Re-settle floaters for the new view's anchors — but never LOWER an already-hotter run (e.g. the
+    // initial load's full-strength settle fires on the same render as the first view id).
+    if (simRef.current) simRef.current.alpha(Math.max(simRef.current.alpha(), 0.2)).restart()
   }, [activeViewId])
 
   // ── Organize (force-cluster "pack" by a property) ─────────────────────────
