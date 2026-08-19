@@ -20,6 +20,20 @@ import { EMOJIS } from '../components/Drawing'
 const setGestureCursor = (c) => { document.body.style.cursor = c }
 const clearGestureCursor = () => { document.body.style.cursor = '' }
 
+// Drag shield: a full-viewport transparent overlay mounted on <body> during a drag. Cross-origin
+// iframes (YouTube embeds) swallow mousemove/mouseup so a drag started elsewhere "sticks" — the
+// document-level mouseup never fires once the pointer crosses the iframe. The shield sits above all
+// iframes and receives those events itself (they still bubble to document), so drags release cleanly.
+let _dragShield = null
+const showDragShield = (cursor = 'grabbing') => {
+  if (_dragShield) return
+  const el = document.createElement('div')
+  el.style.cssText = `position:fixed;inset:0;z-index:2147483000;cursor:${cursor};background:transparent`
+  document.body.appendChild(el)
+  _dragShield = el
+}
+const hideDragShield = () => { if (_dragShield) { _dragShield.remove(); _dragShield = null } }
+
 // Gentle gravity toward the cloud's OWN centroid (not a fixed point) — counteracts the charge
 // repulsion so the layout stays compact instead of scattering disconnected nodes/branches outward
 // every time the simulation restarts. Skips pinned nodes. Robust to pan/zoom (uses live positions).
@@ -748,6 +762,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const collapsedNodeIds = activeView?.collapsedNodeIds || []
   const listNodeIds = activeView?.listNodeIds || []   // nodes shown as a nested list card (subtree hidden)
   const kanbanNodeIds = activeView?.kanbanNodeIds || []   // nodes shown as a kanban board (subtree hidden)
+  const strategyNodeIds = activeView?.strategyNodeIds || []   // nodes shown as a strategy card (subtree hidden)
   const presentingSlideBg = (presentingSlideIdx !== null)
     ? (activeSlideshow?.slideBgColors?.[slideIds[presentingSlideIdx]] || bgColor)
     : bgColor
@@ -842,9 +857,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       base = new Set(storeNodes.filter(n => viewNodeProps[n.id]?.visible !== false).map(n => n.id))
     }
     // Hide the descendants of any collapsed, list-card, OR kanban node (the card renders that subtree itself).
-    if (collapsedNodeIds.length || listNodeIds.length || kanbanNodeIds.length) {
+    if (collapsedNodeIds.length || listNodeIds.length || kanbanNodeIds.length || strategyNodeIds.length) {
       const hidden = new Set()
-      const q = [...collapsedNodeIds, ...listNodeIds, ...kanbanNodeIds]
+      const q = [...collapsedNodeIds, ...listNodeIds, ...kanbanNodeIds, ...strategyNodeIds]
       while (q.length) {
         const cur = q.shift()
         storeEdges.forEach(e => {
@@ -873,7 +888,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
     }
     return base
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, kanbanNodeIds, propFilter, storePropertyDefs])
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, kanbanNodeIds, strategyNodeIds, propFilter, storePropertyDefs])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
 
@@ -904,6 +919,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // ── List-card ("show children as list") support ──────────────────────────────
   const toggleListNode = useGraphStore(s => s.toggleListNode)
   const toggleKanbanNode = useGraphStore(s => s.toggleKanbanNode)
+  const toggleStrategyNode = useGraphStore(s => s.toggleStrategyNode)
+  const setStrategyPos = useGraphStore(s => s.setStrategyPos)
+  const setStrategyPositions = useGraphStore(s => s.setStrategyPositions)
+  const addStrategyEdge = useGraphStore(s => s.addStrategyEdge)
+  const setStrategyEdge = useGraphStore(s => s.setStrategyEdge)
+  const removeStrategyEdge = useGraphStore(s => s.removeStrategyEdge)
+  const toggleStrategyDecision = useGraphStore(s => s.toggleStrategyDecision)
   const addKanbanNode  = useGraphStore(s => s.addKanbanNode)
   const moveCardToColumn = useGraphStore(s => s.moveCardToColumn)
   const addKanbanColumn = useGraphStore(s => s.addKanbanColumn)
@@ -933,6 +955,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const deleteDrawing     = useGraphStore(s => s.deleteDrawing)
   const listNodeSet    = useMemo(() => new Set(listNodeIds), [listNodeIds])
   const kanbanNodeSet  = useMemo(() => new Set(kanbanNodeIds), [kanbanNodeIds])
+  const strategyNodeSet = useMemo(() => new Set(strategyNodeIds), [strategyNodeIds])
   const allProjectTags = useMemo(() => { const set = new Set(); storeNodes.forEach(n => (n.meta?.tags || []).forEach(t => set.add(t))); return [...set].sort() }, [storeNodes])
   const tableNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.table).map(n => n.id)), [storeNodes])
   const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
@@ -2993,7 +3016,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const onUp = () => {
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
+        hideDragShield()
       }
+      showDragShield('move')
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
 
@@ -3041,7 +3066,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           x: ncx, y: ncy,
         })
       }
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); hideDragShield() }
+      showDragShield('nwse-resize')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'crop') {
@@ -3066,7 +3092,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (edge === 'b') { h = Math.max(0.05, Math.min(1 - y, h + ddy)) }
         updateImage(imageId, { crop: { x, y, w, h } })
       }
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); hideDragShield() }
+      showDragShield('crosshair')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
 
     } else if (mode === 'rotate') {
@@ -3080,7 +3107,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const a = Math.atan2(me.clientY - screenCY, me.clientX - screenCX) * 180 / Math.PI
         updateImage(imageId, { rotation: startRot + a - startAngleDeg })
       }
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); hideDragShield() }
+      showDragShield('grabbing')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
   }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId])
@@ -3475,7 +3503,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             )}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
               const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
               return (
@@ -3654,6 +3682,33 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onDeleteCard={id => { pushUndo(); deleteNode(id) }}
                   onMoveCard={(cardId, colId, beforeId) => { pushUndo(); moveCardToColumn(cardId, colId, beforeId); setCardCol(cardId, colId) }}
                   onMoveColumn={(colId, beforeId) => { pushUndo(); moveChild(n.id, colId, beforeId) }} />
+              )
+            })}
+
+            {/* Strategy cards — a node whose whole subtree (every generation) is laid out as draggable
+                cards with hand-drawn typed arrows (next / needs / decision-branch). Arrows live on
+                node.meta.strategy, SEPARATE from graph edges. */}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && strategyNodeSet.has(n.id)).map(n => {
+              const board = storeNodeById[n.id]
+              const items = flattenSubtree(n.id).map(r => ({ id: r.id, label: nodeLabelById[r.id] || '(untitled)' }))
+              const strat = board?.meta?.strategy || {}
+              return (
+                <StrategyCard key={'st' + n.id} node={n} title={board?.label || 'Strategy'} items={items}
+                  strategy={strat} zoomRef={zoomTransformRef} scale={getVP(n.id).strategyScale || 1}
+                  fill={getVP(n.id).fillColor}
+                  selectedId={selected?.type === 'node' ? selected.id : null}
+                  onHeaderDown={e => handleNodeMouseDown(e, n.id)}
+                  onSelect={id => setSelected({ id, type: 'node' })}
+                  onRenameBoard={label => updateLabel(n.id, label)}
+                  onRenameItem={(id, label) => updateLabel(id, label)}
+                  onSetPos={(id, x, y) => setStrategyPos(n.id, id, x, y)}
+                  onSetPositions={posMap => setStrategyPositions(n.id, posMap)}
+                  onAddEdge={(from, to, kind, label) => addStrategyEdge(n.id, from, to, kind, label)}
+                  onSetEdge={(eid, patch) => setStrategyEdge(n.id, eid, patch)}
+                  onRemoveEdge={eid => removeStrategyEdge(n.id, eid)}
+                  onToggleDecision={id => toggleStrategyDecision(n.id, id)}
+                  onSetScale={k => setNodeViewProp(n.id, 'strategyScale', k)}
+                  onExit={() => toggleStrategyNode(n.id)} />
               )
             })}
 
@@ -4054,6 +4109,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               isList={listNodeSet.has(hn.id)}
               onToggleKanban={() => { toggleKanbanNode(hn.id); close() }}
               isKanban={kanbanNodeSet.has(hn.id)}
+              onToggleStrategy={() => { toggleStrategyNode(hn.id); close() }}
+              isStrategy={strategyNodeSet.has(hn.id)}
               onGroupBoard={gb => { pushUndo(); const bx = (hn.x || 0) + 160, by = (hn.y || 0); const id = addGroupedBoard(hn.id, gb, bx, by); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = bx; sn.y = by; sn.fx = bx; sn.fy = by } scheduleRender() }, 0); close() }}
               hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
               childrenEffect={vp.childrenEffect}
@@ -5656,6 +5713,277 @@ const kb = {
   addInput: { background: '#0f0f22', border: '1px solid #5b6af0', borderRadius: 6, color: '#dbe4ff', fontSize: 12.5, padding: '5px 7px', outline: 'none', resize: 'none', fontFamily: 'inherit' },
   hLine: { height: 3, borderRadius: 2, background: '#7c8cff', boxShadow: '0 0 6px #7c8cff', margin: '1px 0', flexShrink: 0 },
   vLine: { width: 3, alignSelf: 'stretch', borderRadius: 2, background: '#7c8cff', boxShadow: '0 0 6px #7c8cff', flexShrink: 0 },
+}
+
+// ─── StrategyCard ───────────────────────────────────────────────────────────
+// A node whose WHOLE subtree (every generation) is laid out as draggable cards inside one bespoke
+// SVG card. The user draws typed arrows by hand: next (→ solid), needs (⇢ dashed), decision-branch
+// (◈ labelled, leaves a diamond node). Arrows live on node.meta.strategy — SEPARATE from graph
+// edges, so drawing them never touches the outliner hierarchy. Drag-only, no DSL (v1).
+const ST_ITEMW = 150, ST_ITEMH = 54, ST_HGAP = 44, ST_VGAP = 74, ST_PAD = 26
+const ST_KINDS = {
+  next:   { label: 'Next',    icon: '→', color: '#7c8cff', dash: null },
+  needs:  { label: 'Needs',   icon: '⇢', color: '#f0a35b', dash: '6,5' },
+  branch: { label: 'Branch',  icon: '◈', color: '#f6c65b', dash: null },
+}
+
+// Layered top-down layout. Precedence: next/branch = from→to; needs = to→from (the needed one first).
+function computeStrategyLayout(items, edges) {
+  const ids = items.map(it => it.id)
+  const idset = new Set(ids)
+  const preds = {}; ids.forEach(id => (preds[id] = []))
+  const succs = {}; ids.forEach(id => (succs[id] = []))
+  ;(edges || []).forEach(e => {
+    if (!idset.has(e.from) || !idset.has(e.to)) return
+    const [a, b] = e.kind === 'needs' ? [e.to, e.from] : [e.from, e.to]   // a before b
+    succs[a].push(b); preds[b].push(a)
+  })
+  // longest-path layering with a cycle cap
+  const layer = {}; ids.forEach(id => (layer[id] = 0))
+  for (let pass = 0; pass < ids.length + 2; pass++) {
+    let changed = false
+    ids.forEach(id => {
+      const want = preds[id].length ? Math.max(...preds[id].map(p => layer[p] + 1)) : 0
+      if (want > layer[id] && want < ids.length + 2) { layer[id] = want; changed = true }
+    })
+    if (!changed) break
+  }
+  const byLayer = {}
+  ids.forEach(id => { (byLayer[layer[id]] = byLayer[layer[id]] || []).push(id) })
+  const pos = {}
+  Object.keys(byLayer).map(Number).sort((a, b) => a - b).forEach(L => {
+    byLayer[L].forEach((id, i) => { pos[id] = { x: ST_PAD + i * (ST_ITEMW + ST_HGAP), y: ST_PAD + L * (ST_ITEMH + ST_VGAP) } })
+  })
+  return pos
+}
+
+function StrategyCard({ node, title, items, strategy, zoomRef, scale = 1, fill, selectedId, onHeaderDown, onSelect, onRenameBoard, onRenameItem, onSetPos, onSetPositions, onAddEdge, onSetEdge, onRemoveEdge, onToggleDecision, onSetScale, onExit }) {
+  const s = scale || 1
+  const edges = strategy?.edges || []
+  const decision = strategy?.decision || {}
+  const storedPos = strategy?.pos || {}
+  const contentRef = useRef(null)
+  const [dragItem, setDragItem] = useState(null)   // { id, x, y } live override while moving
+  const [linking, setLinking] = useState(null)     // { from, x, y } while drawing an arrow (content coords)
+  const [edgeMenu, setEdgeMenu] = useState(null)    // { id, sx, sy } screen coords
+  const [hover, setHover] = useState(false)
+
+  // Fallback auto-layout for any item lacking a stored position.
+  const autoPos = useMemo(() => computeStrategyLayout(items, edges), [items, edges])
+  const posOf = id => (dragItem?.id === id ? dragItem : (storedPos[id] || autoPos[id] || { x: ST_PAD, y: ST_PAD }))
+
+  // content bounds → scrollable inner size (min = a comfortable viewport)
+  let maxX = 320, maxY = 240
+  items.forEach(it => { const p = posOf(it.id); maxX = Math.max(maxX, p.x + ST_ITEMW); maxY = Math.max(maxY, p.y + ST_ITEMH) })
+  const contentW = maxX + ST_PAD, contentH = maxY + ST_PAD
+  const viewW = 560, viewH = 400
+  const W = viewW, H = viewH
+
+  const centerOf = id => { const p = posOf(id); return { x: p.x + ST_ITEMW / 2, y: p.y + ST_ITEMH / 2 } }
+  const border = (cx, cy, tx, ty) => {
+    const dx = tx - cx, dy = ty - cy
+    if (!dx && !dy) return { x: cx, y: cy }
+    const tX = dx ? (ST_ITEMW / 2) / Math.abs(dx) : Infinity
+    const tY = dy ? (ST_ITEMH / 2) / Math.abs(dy) : Infinity
+    const t = Math.min(tX, tY)
+    return { x: cx + dx * t, y: cy + dy * t }
+  }
+  // client → content-local coords (accounts for D3 zoom k × card scale s, and scroll via getBoundingClientRect)
+  const toContent = (clientX, clientY) => {
+    const rect = contentRef.current?.getBoundingClientRect()
+    const k = (zoomRef?.current?.k || 1) * s
+    if (!rect) return { x: 0, y: 0 }
+    return { x: (clientX - rect.left) / k, y: (clientY - rect.top) / k }
+  }
+
+  // ── Move an item ──────────────────────────────────────────────────────────
+  const startMove = (e, id) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    const start = posOf(id)
+    const ox = e.clientX, oy = e.clientY
+    let moved = false
+    const noSelect = ev => ev.preventDefault()
+    const onMove = ev => {
+      const k = (zoomRef?.current?.k || 1) * s
+      const nx = start.x + (ev.clientX - ox) / k, ny = start.y + (ev.clientY - oy) / k
+      if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 4) return
+      if (!moved) { moved = true; document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSelect, true); showDragShield('grabbing') }
+      setDragItem({ id, x: Math.max(0, nx), y: Math.max(0, ny) })
+    }
+    const onUp = ev => {
+      document.removeEventListener('mousemove', onMove, true)
+      document.removeEventListener('mouseup', onUp, true)
+      document.removeEventListener('selectstart', noSelect, true)
+      document.body.style.userSelect = ''
+      hideDragShield()
+      if (moved) { const k = (zoomRef?.current?.k || 1) * s; onSetPos(id, Math.max(0, start.x + (ev.clientX - ox) / k), Math.max(0, start.y + (ev.clientY - oy) / k)) }
+      else onSelect(id)
+      setDragItem(null)
+    }
+    document.addEventListener('mousemove', onMove, true)
+    document.addEventListener('mouseup', onUp, true)
+  }
+
+  // ── Draw an arrow from an item's connector handle ───────────────────────────
+  const startLink = (e, from) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    const noSelect = ev => ev.preventDefault()
+    document.body.style.userSelect = 'none'; document.addEventListener('selectstart', noSelect, true); showDragShield('crosshair')
+    const onMove = ev => setLinking({ from, ...toContent(ev.clientX, ev.clientY) })
+    const onUp = ev => {
+      document.removeEventListener('mousemove', onMove, true)
+      document.removeEventListener('mouseup', onUp, true)
+      document.removeEventListener('selectstart', noSelect, true)
+      document.body.style.userSelect = ''
+      hideDragShield()
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)
+      const target = el && el.closest('[data-stratitem]')?.getAttribute('data-stratitem')
+      if (target && target !== from) onAddEdge(from, target, decision[from] ? 'branch' : 'next', '')
+      setLinking(null)
+    }
+    document.addEventListener('mousemove', onMove, true)
+    document.addEventListener('mouseup', onUp, true)
+  }
+
+  const startScale = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const sx = e.clientX, sy = e.clientY, s0 = s, k = zoomRef?.current?.k || 1
+    const move = ev => onSetScale(Math.max(0.5, Math.min(3, s0 + ((ev.clientX - sx) + (ev.clientY - sy)) / 2 / (k * 400))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); hideDragShield() }
+    showDragShield('nwse-resize')
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+
+  return (
+    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W * s + 20} height={H * s + 20} style={{ overflow: 'visible' }}>
+      <div style={{ width: W, height: H, transform: `scale(${s})`, transformOrigin: '0 0', position: 'relative' }}
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+        <div style={{ ...st.card, background: (fill && fill !== 'none' && fill !== 'transparent') ? fill : '#101026' }}>
+          {/* header — drag to move, rename, auto-arrange, exit */}
+          <div style={st.header} onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }} title="Drag to move · click to select">
+            <span style={st.hIcon}>🕸️</span>
+            <EditableText value={title} onCommit={onRenameBoard} style={st.title} title="Double-click to rename" />
+            <button style={st.hBtn} title="Auto-arrange (layered top-down)" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSetPositions(computeStrategyLayout(items, edges)) }}>⇄ Arrange</button>
+            <button style={st.hBtn} title="Expand back to nodes" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onExit() }}>⤢</button>
+          </div>
+          {/* body — scrollable strategy surface */}
+          <div style={st.body} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}>
+            {items.length === 0 && <div style={{ color: '#8090b8', fontSize: 12, padding: 14 }}>This node has no descendants yet. Add child nodes, then they appear here to connect.</div>}
+            <div ref={contentRef} style={{ position: 'relative', width: contentW, height: contentH }}>
+              {/* arrows layer (behind items) */}
+              <svg width={contentW} height={contentH} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible' }}>
+                <defs>
+                  {Object.entries(ST_KINDS).map(([k, def]) => (
+                    <marker key={k} id={`st-arrow-${node.id}-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                      <path d="M 0 0 L 10 5 L 0 10 z" fill={def.color} />
+                    </marker>
+                  ))}
+                </defs>
+                {edges.map(e => {
+                  const a = centerOf(e.from), b = centerOf(e.to)
+                  const p1 = border(a.x, a.y, b.x, b.y), p2 = border(b.x, b.y, a.x, a.y)
+                  const def = ST_KINDS[e.kind] || ST_KINDS.next
+                  return (
+                    <line key={e.id} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={def.color} strokeWidth={2}
+                      strokeDasharray={def.dash || undefined} markerEnd={`url(#st-arrow-${node.id}-${e.kind || 'next'})`} />
+                  )
+                })}
+                {linking && (() => { const a = centerOf(linking.from); return <line x1={a.x} y1={a.y} x2={linking.x} y2={linking.y} stroke="#7c8cff" strokeWidth={2} strokeDasharray="4,4" /> })()}
+              </svg>
+              {/* edge midpoint chips — click to edit kind/label, ×2 to delete */}
+              {edges.map(e => {
+                const a = centerOf(e.from), b = centerOf(e.to)
+                const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+                const def = ST_KINDS[e.kind] || ST_KINDS.next
+                return (
+                  <div key={'chip' + e.id} style={{ ...st.edgeChip, left: mx, top: my, borderColor: def.color, color: def.color }}
+                    title="Click to edit · double-click to delete"
+                    onMouseDown={ev => ev.stopPropagation()}
+                    onClick={ev => { ev.stopPropagation(); setEdgeMenu({ id: e.id, sx: ev.clientX, sy: ev.clientY }) }}
+                    onDoubleClick={ev => { ev.stopPropagation(); onRemoveEdge(e.id) }}>
+                    {def.icon}{e.label ? <span style={st.edgeLabel}>{e.label}</span> : null}
+                  </div>
+                )
+              })}
+              {/* item cards */}
+              {items.map(it => {
+                const p = posOf(it.id)
+                const isDec = !!decision[it.id]
+                const sel = selectedId === it.id
+                return (
+                  <div key={it.id} data-stratitem={it.id}
+                    style={{ ...st.item, left: p.x, top: p.y, width: ST_ITEMW, height: ST_ITEMH,
+                      ...(isDec ? st.itemDecision : null),
+                      borderColor: sel ? '#7c8cff' : (isDec ? '#f6c65b' : '#414d8a'),
+                      boxShadow: sel ? '0 0 0 2px rgba(124,140,255,0.5), 0 3px 10px rgba(0,0,0,0.5)' : '0 3px 10px rgba(0,0,0,0.45)' }}
+                    onMouseDown={e => startMove(e, it.id)}>
+                    <EditableText value={it.label} onCommit={label => onRenameItem(it.id, label)} style={st.itemLabel} title="Double-click to rename · drag to move" />
+                    {/* decision toggle */}
+                    <button style={{ ...st.itemBtn, top: 2, right: 2, color: isDec ? '#f6c65b' : '#6b76a8' }}
+                      title={isDec ? 'Decision node (branch source)' : 'Make this a decision node'}
+                      onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleDecision(it.id) }}>◇</button>
+                    {/* connector handle (bottom-center) — drag to another item to draw an arrow */}
+                    <div style={st.handle} title="Drag to another item to connect" onMouseDown={e => startLink(e, it.id)} />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+        {/* resize handle (bottom-right) */}
+        <div onMouseDown={startScale} title="Drag to resize"
+          style={{ position: 'absolute', right: -4, bottom: -4, width: 18, height: 18, cursor: 'nwse-resize', opacity: hover ? 1 : 0, transition: 'opacity 0.14s', borderRight: '2.5px solid #5b6af0', borderBottom: '2.5px solid #5b6af0', borderBottomRightRadius: 6 }} />
+      </div>
+      {/* edge menu (kind / label / delete) */}
+      {edgeMenu && createPortal((() => {
+        const e = edges.find(x => x.id === edgeMenu.id)
+        if (!e) return null
+        return (
+          <>
+            <div onMouseDown={ev => { ev.stopPropagation(); setEdgeMenu(null) }} onClick={ev => ev.stopPropagation()} style={{ position: 'fixed', inset: 0, zIndex: 9998 }} />
+            <div onMouseDown={ev => ev.stopPropagation()} onClick={ev => ev.stopPropagation()} onWheel={ev => ev.stopPropagation()}
+              style={{ position: 'fixed', left: Math.min(edgeMenu.sx, window.innerWidth - 210), top: Math.min(edgeMenu.sy, window.innerHeight - 200), zIndex: 9999, minWidth: 190, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 9, padding: '7px 0', boxShadow: '0 10px 30px rgba(0,0,0,0.7)', fontFamily: '-apple-system, sans-serif' }}>
+              <div style={st.menuLabel}>Arrow type</div>
+              <div style={{ display: 'flex', gap: 5, padding: '2px 10px 6px' }}>
+                {Object.entries(ST_KINDS).map(([k, def]) => (
+                  <button key={k} onClick={() => onSetEdge(e.id, { kind: k })}
+                    style={{ flex: 1, background: e.kind === k ? def.color : 'transparent', border: `1px solid ${def.color}`, color: e.kind === k ? '#0c0c1a' : def.color, borderRadius: 6, cursor: 'pointer', fontSize: 11.5, fontWeight: 600, padding: '5px 4px' }}
+                    title={def.label}>{def.icon} {def.label}</button>
+                ))}
+              </div>
+              <div style={st.menuLabel}>Label</div>
+              <input defaultValue={e.label || ''} placeholder="e.g. yes / no…" autoFocus
+                onKeyDown={ev => { ev.stopPropagation(); if (ev.key === 'Enter') { onSetEdge(e.id, { label: ev.target.value }); setEdgeMenu(null) } }}
+                onBlur={ev => onSetEdge(e.id, { label: ev.target.value })}
+                style={{ margin: '2px 10px 8px', width: 'calc(100% - 20px)', boxSizing: 'border-box', background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 12, padding: '5px 7px', outline: 'none' }} />
+              <div style={{ ...st.menuItem, color: '#ff9a9a', borderTop: '1px solid #20233f', marginTop: 2, paddingTop: 8 }} onClick={() => { onRemoveEdge(e.id); setEdgeMenu(null) }}>🗑 Delete arrow</div>
+            </div>
+          </>
+        )
+      })(), document.body)}
+      {linking && createPortal(<div style={{ position: 'fixed', inset: 0, zIndex: 1, pointerEvents: 'none' }} />, document.body)}
+    </foreignObject>
+  )
+}
+
+const st = {
+  card: { width: '100%', height: '100%', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif', position: 'relative' },
+  header: { display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '7px 10px', cursor: 'grab', flexShrink: 0, borderBottom: '1px solid #20233f' },
+  hIcon: { fontSize: 14, opacity: 0.9 },
+  title: { fontWeight: 700, fontSize: 13.5, color: '#dbe4ff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'grab' },
+  hBtn: { background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '4px 8px', whiteSpace: 'nowrap' },
+  body: { flex: 1, overflow: 'auto', position: 'relative', background: 'rgba(0,0,0,0.14)' },
+  item: { position: 'absolute', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', background: '#232a52', border: '1px solid #414d8a', borderRadius: 9, padding: '4px 10px', cursor: 'grab', userSelect: 'none' },
+  itemDecision: { background: '#2c2740', borderRadius: 4, clipPath: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)', padding: '4px 18px' },
+  itemLabel: { fontSize: 12.5, color: '#eef2ff', lineHeight: 1.25, wordBreak: 'break-word', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', cursor: 'grab', userSelect: 'none' },
+  itemBtn: { position: 'absolute', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '1px 3px' },
+  handle: { position: 'absolute', bottom: -6, left: '50%', transform: 'translateX(-50%)', width: 12, height: 12, borderRadius: '50%', background: '#7c8cff', border: '2px solid #101026', cursor: 'crosshair', boxShadow: '0 1px 4px rgba(0,0,0,0.5)' },
+  edgeChip: { position: 'absolute', transform: 'translate(-50%, -50%)', display: 'inline-flex', alignItems: 'center', gap: 4, background: '#101026', border: '1.5px solid', borderRadius: 10, padding: '1px 7px', fontSize: 12, fontWeight: 700, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', zIndex: 2 },
+  edgeLabel: { fontSize: 10.5, fontWeight: 600, color: '#dbe4ff' },
+  menuLabel: { padding: '4px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
+  menuItem: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
 }
 
 // ─── TableCard ────────────────────────────────────────────────────────────────
@@ -7327,7 +7655,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onToggleStrategy, isStrategy, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
@@ -7497,6 +7825,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && onToggleKanban && textRow(isKanban ? 'Show children as nodes' : 'Show as kanban board', onToggleKanban, { icon: '🗂️', right: isKanban ? '•' : '›', rightColor: isKanban ? '#f6ad55' : '#8090b8', opens: null })}
+        {hasChildrenForList && onToggleStrategy && textRow(isStrategy ? 'Show children as nodes' : 'Show as strategy', onToggleStrategy, { icon: '🕸️', right: isStrategy ? '•' : '›', rightColor: isStrategy ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && onGroupBoard && textRow('Group into board by…', () => setPanel('groupboard'), { icon: '⌗', right: '›', opens: 'groupboard' })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}

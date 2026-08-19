@@ -843,6 +843,84 @@ const useGraphStore = create((set, get) => ({
     })
   })),
 
+  // ── Strategy card nodes ─────────────────────────────────────────────────────
+  // A strategy node renders ALL its descendants (every generation) as draggable cards inside one
+  // bespoke SVG card, with typed arrows the user draws by hand (next / needs / decision-branch).
+  // The arrows live on the node's view-independent `meta.strategy` and are SEPARATE from graph edges
+  // (drawing them must never corrupt the outliner hierarchy). Mutually exclusive with kanban/list.
+  //   meta.strategy = { edges:[{ id, from, to, kind:'next'|'needs'|'branch', label }],
+  //                     pos:{[itemId]:{x,y}}, decision:{[itemId]:true} }
+  toggleStrategyNode: (nodeId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const strat = new Set(v.strategyNodeIds || [])
+      const kb = new Set(v.kanbanNodeIds || [])
+      const list = new Set(v.listNodeIds || [])
+      const coll = new Set(v.collapsedNodeIds || [])
+      if (strat.has(nodeId)) strat.delete(nodeId)
+      else { strat.add(nodeId); kb.delete(nodeId); list.delete(nodeId); coll.delete(nodeId) }
+      return { ...v, strategyNodeIds: [...strat], kanbanNodeIds: [...kb], listNodeIds: [...list], collapsedNodeIds: [...coll] }
+    })
+  })),
+
+  // Position one item within a strategy card (card-local coords).
+  setStrategyPos: (nodeId, itemId, x, y) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId) return n
+      const strat = n.meta?.strategy || {}
+      return { ...n, meta: { ...(n.meta || {}), strategy: { ...strat, pos: { ...(strat.pos || {}), [itemId]: { x, y } } } } }
+    }),
+  })),
+
+  // Bulk-set item positions (auto-arrange).
+  setStrategyPositions: (nodeId, posMap) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId) return n
+      const strat = n.meta?.strategy || {}
+      return { ...n, meta: { ...(n.meta || {}), strategy: { ...strat, pos: { ...(strat.pos || {}), ...posMap } } } }
+    }),
+  })),
+
+  // Add a typed arrow between two items in a strategy card. No-ops on self/duplicate edges.
+  addStrategyEdge: (nodeId, from, to, kind = 'next', label = '') => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId || !from || !to || from === to) return n
+      const strat = n.meta?.strategy || {}
+      const edges = strat.edges || []
+      if (edges.some(e => e.from === from && e.to === to)) return n
+      return { ...n, meta: { ...(n.meta || {}), strategy: { ...strat, edges: [...edges, { id: uid(), from, to, kind, label }] } } }
+    }),
+  })),
+
+  // Patch a strategy arrow (kind / label).
+  setStrategyEdge: (nodeId, edgeId, patch) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId) return n
+      const strat = n.meta?.strategy || {}
+      return { ...n, meta: { ...(n.meta || {}), strategy: { ...strat, edges: (strat.edges || []).map(e => e.id === edgeId ? { ...e, ...patch } : e) } } }
+    }),
+  })),
+
+  // Remove a strategy arrow.
+  removeStrategyEdge: (nodeId, edgeId) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId) return n
+      const strat = n.meta?.strategy || {}
+      return { ...n, meta: { ...(n.meta || {}), strategy: { ...strat, edges: (strat.edges || []).filter(e => e.id !== edgeId) } } }
+    }),
+  })),
+
+  // Toggle an item's "decision" flag (rendered as a diamond, branch arrows leave it labelled).
+  toggleStrategyDecision: (nodeId, itemId) => set(s => ({
+    nodes: s.nodes.map(n => {
+      if (n.id !== nodeId) return n
+      const strat = n.meta?.strategy || {}
+      const dec = { ...(strat.decision || {}) }
+      if (dec[itemId]) delete dec[itemId]; else dec[itemId] = true
+      return { ...n, meta: { ...(n.meta || {}), strategy: { ...strat, decision: dec } } }
+    }),
+  })),
+
   // Create a fresh board (with three starter columns) and flag it as kanban in the active view.
   // A board owns a per-board SELECT property whose options ARE its columns — so each column is both a
   // node (its cards are children) and a value of that property. Cards get the property = their column.
