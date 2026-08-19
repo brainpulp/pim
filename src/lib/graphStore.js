@@ -587,6 +587,20 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // A link-preview card ("unfurled" URL, like WhatsApp/Discord). Stored in the SAME view.images[] array
+  // (shares selection/drag/resize/group/delete) but flagged type:'link'. fields carry the fetched preview:
+  // { url, title, description, image, siteName, favicon, loading? }. Starts with just the url + loading:true
+  // until the unfurl edge function fills in the rest (via updateImage).
+  addLink: (fields, x, y, width, height) => {
+    const id = uid()
+    set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, images: [...(v.images || []), { id, type: 'link', x, y, width, height, rotation: 0, bgColor: null, ...fields }],
+      }),
+    }))
+    return id
+  },
+
   updateImage: (imageId, props) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v, images: (v.images || []).map(img => img.id === imageId ? { ...img, ...props } : img),

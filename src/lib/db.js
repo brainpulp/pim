@@ -188,6 +188,18 @@ export async function uploadMediaFile(file, projectId) {
   } catch (e) { console.warn('Video upload failed:', e?.message || e); return null }
 }
 
+// Fetch a link preview (Open Graph / Twitter Card) via the `unfurl` edge function. The browser can't
+// fetch cross-origin pages (CORS), so this runs server-side. Returns { url, title, description, image,
+// siteName, favicon } or null on failure (caller keeps the raw URL as the title).
+export async function unfurlLink(url) {
+  try {
+    const { data, error } = await supabase.functions.invoke('unfurl', { body: { url } })
+    if (error) throw error
+    if (!data || data.error) return null
+    return data
+  } catch (e) { console.warn('unfurl failed:', e?.message || e); return null }
+}
+
 export async function uploadImageDataUrl(dataUrl, projectId) {
   if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return dataUrl
   try {

@@ -6,7 +6,7 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS, NEW_NODE_STYLE_PROPS } from '../lib/graphStore'
 import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
-import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile } from '../lib/db'
+import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -635,6 +635,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
   const addVideo        = useGraphStore(s => s.addVideo)
+  const addLink         = useGraphStore(s => s.addLink)
   const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
   const copyChildrenInto = useGraphStore(s => s.copyChildrenInto)
   const updateImage     = useGraphStore(s => s.updateImage)
@@ -2723,9 +2724,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // â"€â"€ Paste images â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     const onPaste = e => {
+      if (readOnly) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'))
-      if (!item) return
+      if (!item) {
+        // No image on the clipboard — is it a bare URL? Then unfurl it as a link-preview card.
+        const text = (e.clipboardData?.getData('text/plain') || '').trim()
+        if (/^https?:\/\/\S+$/i.test(text) && !/\s/.test(text)) {
+          e.preventDefault()
+          const rect = svgRef.current?.getBoundingClientRect()
+          const [cx, cy] = zoomTransformRef.current.invert([(rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2])
+          addLinkAt(text, cx, cy)
+        }
+        return
+      }
       const blob = item.getAsFile()
       const reader = new FileReader()
       reader.onload = ev => {
@@ -2748,7 +2760,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('paste', onPaste)
     return () => document.removeEventListener('paste', onPaste)
-  }, [addImage])
+    // NOTE: addLinkAt is declared later in this component — do NOT add it to deps (TDZ crash per CLAUDE.md).
+    // The effect body's closure resolves it at run time, after render, so referencing it there is safe.
+  }, [addImage, readOnly, projectId, updateImage])
 
   // ── Rubber-band rect select ────────────────────────────────────────────────────
   const handleCanvasMouseDown = useCallback((e) => {
@@ -2916,6 +2930,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const W = 320
     addVideo({ videoKind: 'youtube', youtubeId: vidId }, sx, sy, W, Math.round(W * 9 / 16))
   }, [addVideo])
+
+  // Drop a link-preview card at (sx,sy) and unfurl it in the background (WhatsApp/Discord style).
+  const LINK_W = 300, LINK_H = 108
+  const addLinkAt = useCallback((url, sx, sy) => {
+    const clean = url.trim()
+    let host = clean
+    try { host = new URL(clean).hostname.replace(/^www\./, '') } catch { /* keep raw */ }
+    const id = addLink({ url: clean, title: clean, siteName: host, description: '', image: '', favicon: '', loading: true }, sx, sy, LINK_W, LINK_H)
+    unfurlLink(clean).then(meta => {
+      if (meta) updateImage(id, { ...meta, url: meta.url || clean, loading: false, ...(meta.image ? { height: LINK_H + 150 } : {}) })
+      else updateImage(id, { loading: false })
+    })
+    return id
+  }, [addLink, updateImage])
 
   const pasteImageAt = useCallback(async (sx, sy) => {
     try {
@@ -3858,6 +3886,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
                     {item('🎬', 'Add video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
                     {item('▶️', 'Add YouTube…', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
+                    {item('🔗', 'Add link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('🗂️', 'New view', () => { pushUndo(); addView(); close() })}
                     {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
@@ -6418,6 +6447,7 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
+  const isLink = img.type === 'link'
   const hw = width / 2, hh = height / 2
 
   // Crop rect (normalised source rect → local box coords). Defaults to the whole box.
@@ -6499,7 +6529,31 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       )}
       {bgColor && <rect x={cx} y={cy} width={cw} height={ch} fill={bgColor} rx={2}
         mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />}
-      {isVideo ? (
+      {isLink ? (
+        // Link-preview card ("unfurled" URL). pointer-events on only when selected → an unselected
+        // card still selects/drags via the parent <g>; when selected, clicking opens the URL.
+        <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
+          <a href={isSelected ? img.url : undefined} target="_blank" rel="noopener noreferrer"
+            onClick={e => { if (!isSelected) e.preventDefault() }} onMouseDown={e => { if (isSelected) e.stopPropagation() }}
+            title={isSelected ? `Open ${img.url}` : img.url}
+            style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', boxSizing: 'border-box',
+              background: '#161a2e', border: '1px solid #2d3a6a', borderRadius: 10, overflow: 'hidden', textDecoration: 'none',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.45)', pointerEvents: isSelected ? 'auto' : 'none', fontFamily: '-apple-system, sans-serif',
+              cursor: isSelected ? 'pointer' : 'move' }}>
+            {img.image && <div style={{ width: '100%', flex: '1 1 auto', minHeight: 0, background: `#0c0c1a center/cover no-repeat url("${img.image}")` }} />}
+            <div style={{ flex: '0 0 auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#dbe4ff', lineHeight: 1.25, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                {img.loading ? 'Loading preview…' : (img.title || img.url)}
+              </div>
+              {img.description && <div style={{ fontSize: 11, color: '#9aa6c8', lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{img.description}</div>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
+                {img.favicon && <img src={img.favicon} alt="" width={13} height={13} style={{ borderRadius: 2, flexShrink: 0 }} onError={e => { e.currentTarget.style.display = 'none' }} />}
+                <span style={{ fontSize: 10.5, color: '#7c8cff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.siteName || img.url}</span>
+              </div>
+            </div>
+          </a>
+        </foreignObject>
+      ) : isVideo ? (
         // Video body — a <video> (uploaded file) or a YouTube <iframe>, in a foreignObject.
         // pointer-events are on only when selected, so an unselected video still selects/drags via
         // the parent <g> (same idea as 3D nodes); when selected you can use the player controls.
@@ -6532,8 +6586,8 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
-        {/* Video: a top drag-bar to move it (the player controls own the body's pointer events) */}
-        {isVideo && (
+        {/* Video/Link: a top drag-bar to move it (the body's pointer events belong to the player/link) */}
+        {(isVideo || isLink) && (
           <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
             <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
