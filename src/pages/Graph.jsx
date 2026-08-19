@@ -34,6 +34,15 @@ const showDragShield = (cursor = 'grabbing') => {
 }
 const hideDragShield = () => { if (_dragShield) { _dragShield.remove(); _dragShield = null } }
 
+// Extract an 11-char YouTube video id from a URL or bare id, else null.
+const parseYoutubeId = (str) => {
+  const s = String(str || '').trim()
+  const m = s.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/)
+  if (m) return m[1]
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s
+  return null
+}
+
 // Gentle gravity toward the cloud's OWN centroid (not a fixed point) — counteracts the charge
 // repulsion so the layout stays compact instead of scattering disconnected nodes/branches outward
 // every time the simulation restarts. Skips pinned nodes. Robust to pan/zoom (uses live positions).
@@ -2734,7 +2743,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           e.preventDefault()
           const rect = svgRef.current?.getBoundingClientRect()
           const [cx, cy] = zoomTransformRef.current.invert([(rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2])
-          addLinkAt(text, cx, cy)
+          // A YouTube link embeds the player directly; anything else unfurls to a preview card.
+          const ytId = parseYoutubeId(text)
+          if (ytId) dropYoutube(ytId, cx, cy)
+          else addLinkAt(text, cx, cy)
         }
         return
       }
@@ -2918,18 +2930,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [addVideo, updateImage, projectId])
 
   // Parse a YouTube URL/ID and drop a 16:9 YouTube player on the canvas.
-  const addYoutubeAt = useCallback((sx, sy) => {
-    const raw = window.prompt('Paste a YouTube link (or video ID):')
-    if (!raw) return
-    const s = raw.trim()
-    let vidId = null
-    const m = s.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/)
-    if (m) vidId = m[1]
-    else if (/^[A-Za-z0-9_-]{11}$/.test(s)) vidId = s
-    if (!vidId) { alert('Could not find a YouTube video ID in that link.'); return }
+  const dropYoutube = useCallback((vidId, sx, sy) => {
     const W = 320
     addVideo({ videoKind: 'youtube', youtubeId: vidId }, sx, sy, W, Math.round(W * 9 / 16))
   }, [addVideo])
+
+  const addYoutubeAt = useCallback(async (sx, sy) => {
+    // Save a click: if the clipboard already holds a YouTube link, use it directly — no prompt.
+    try {
+      const clip = await navigator.clipboard.readText()
+      const id = parseYoutubeId(clip)
+      if (id) { dropYoutube(id, sx, sy); return }
+    } catch { /* clipboard blocked — fall through to prompt */ }
+    const raw = window.prompt('Paste a YouTube link (or video ID):')
+    if (!raw) return
+    const vidId = parseYoutubeId(raw)
+    if (!vidId) { alert('Could not find a YouTube video ID in that link.'); return }
+    dropYoutube(vidId, sx, sy)
+  }, [dropYoutube])
 
   // Drop a link-preview card at (sx,sy) and unfurl it in the background (WhatsApp/Discord style).
   const LINK_W = 300, LINK_H = 108
