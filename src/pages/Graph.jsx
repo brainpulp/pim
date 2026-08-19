@@ -3307,7 +3307,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setSelectedDrawingId(null); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (readOnly) return
-            if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]')) return
+            if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]') || e.target.closest?.('[data-card]')) return
             const rect = svgRef.current.getBoundingClientRect()
             const [sx, sy] = zoomTransformRef.current.invert([e.clientX - rect.left, e.clientY - rect.top])
             // Conventional: a small "name your node" input at the cursor; create on Enter.
@@ -5196,7 +5196,7 @@ function ListCard({ node, rootLabel, rows, fill, selectedId, width, onSetWidth, 
   }
 
   return (
-    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
+    <foreignObject data-card="true" x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
       <div style={lc.card(accent)}>
         <div style={lc.header(accent)} onMouseDown={onHeaderDown} onClick={e => { e.stopPropagation(); onSelect(node.id) }}
           onDoubleClick={e => e.stopPropagation()} title="Drag to move · click to select">
@@ -5454,7 +5454,7 @@ function KanbanCard({ node, title, columns, propId, propertyDefs = [], allTags =
   }
 
   return (
-    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W * s + 20} height={H * s + 20} style={{ overflow: 'visible' }}>
+    <foreignObject data-card="true" x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W * s + 20} height={H * s + 20} style={{ overflow: 'visible' }}>
       <div style={{ width: W, height: H, transform: `scale(${s})`, transformOrigin: '0 0', position: 'relative' }}
         onMouseEnter={() => setHover(true)} onMouseLeave={() => { setHover(false); setFilterOpen(false) }}>
       <div style={{ ...kb.card, userSelect: 'none' }}>
@@ -5857,7 +5857,7 @@ function StrategyCard({ node, title, items, strategy, zoomRef, scale = 1, fill, 
   }
 
   return (
-    <foreignObject x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W * s + 20} height={H * s + 20} style={{ overflow: 'visible' }}>
+    <foreignObject data-card="true" x={(node.x || 0) - W / 2} y={(node.y || 0) - H / 2} width={W * s + 20} height={H * s + 20} style={{ overflow: 'visible' }}>
       <div style={{ width: W, height: H, transform: `scale(${s})`, transformOrigin: '0 0', position: 'relative' }}
         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
         <div style={{ ...st.card, background: (fill && fill !== 'none' && fill !== 'transparent') ? fill : '#101026' }}>
@@ -6071,7 +6071,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const PADT = 24, PADR = 34, PADB = 26, PADL = 30
   return (
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
-    <foreignObject x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
+    <foreignObject data-card="true" x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
       <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
         onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
