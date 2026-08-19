@@ -1740,20 +1740,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // While a delete-confirm modal is open: Enter confirms, Escape cancels. Capture phase +
   // stopImmediatePropagation so the canvas keydown handler (Enter = create sister) doesn't also fire.
   useEffect(() => {
-    if (!confirmDelete && !confirmDeleteNodes) return
+    if (!confirmDelete && !confirmDeleteNodes && !confirmDeleteImage && !confirmDeleteImages) return
     const onKey = e => {
       if (e.key === 'Enter') {
         e.preventDefault(); e.stopImmediatePropagation()
         if (confirmDelete) { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }
         else if (confirmDeleteNodes) { pushUndo(); confirmDeleteNodes.forEach(id => deleteNode(id)); setSelectedNodeIds(new Set()); setSelected(null); setConfirmDeleteNodes(null) }
+        else if (confirmDeleteImage) { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }
+        else if (confirmDeleteImages) { deleteImages(confirmDeleteImages); setSelectedImageIds(new Set()); setDrilledImageId(null); setConfirmDeleteImages(null) }
       } else if (e.key === 'Escape') {
         e.preventDefault(); e.stopImmediatePropagation()
-        setConfirmDelete(null); setConfirmDeleteNodes(null)
+        setConfirmDelete(null); setConfirmDeleteNodes(null); setConfirmDeleteImage(null); setConfirmDeleteImages(null)
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [confirmDelete, confirmDeleteNodes, pushUndo, deleteNode])
+  }, [confirmDelete, confirmDeleteNodes, confirmDeleteImage, confirmDeleteImages, pushUndo, deleteNode, deleteImage, deleteImages])
 
   // Read a saved viewport: localStorage first (instant, survives quick reloads), then the
   // DB-persisted pan on the view (cross-device backup).
@@ -2397,20 +2399,42 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, setNodeViewProp])
 
-  const handleFrameResizeMouseDown = useCallback((e, nodeId) => {
+  // Resize a frame by dragging a corner; the OPPOSITE corner stays pinned (Miro/Tinkercad style),
+  // so the frame grows toward the cursor instead of scaling symmetrically about its center. `corner`
+  // is one of tl|tr|bl|br (default br). Because a frame's geometry is center + halfW/halfH, pinning a
+  // corner means the center must move — we update the live sim node AND persist the anchor on release.
+  const handleFrameResizeMouseDown = useCallback((e, nodeId, corner = 'br') => {
     e.stopPropagation(); e.preventDefault()
     const simNode = simNodesRef.current.find(n => n.id === nodeId)
     if (!simNode) return
+    const { views: vs, activeViewId: av } = useGraphStore.getState()
+    const vp = vs.find(v => v.id === av)?.nodeProps?.[nodeId] || {}
+    const fr = NODE_R * (vp.scale || 1)
+    const { halfW: defHW, halfH: defHH } = shapeDims('frame', fr)
+    const halfW0 = vp.frameHalfW ?? defHW, halfH0 = vp.frameHalfH ?? defHH
+    const sgnX = corner.includes('l') ? -1 : 1   // which corner is being dragged
+    const sgnY = corner.includes('t') ? -1 : 1
+    // Pivot = the opposite corner, fixed in world coords for the whole drag.
+    const pivotX = (simNode.x || 0) - sgnX * halfW0
+    const pivotY = (simNode.y || 0) - sgnY * halfH0
     const onMove = me => {
-      const [sx, sy] = clientToSim(me.clientX, me.clientY)
-      const newHW = Math.max(80, Math.abs(sx - (simNode.x || 0)))
-      const newHH = Math.max(60, Math.abs(sy - (simNode.y || 0)))
+      const [mx, my] = clientToSim(me.clientX, me.clientY)
+      const newHW = Math.max(80, Math.abs(mx - pivotX) / 2)
+      const newHH = Math.max(60, Math.abs(my - pivotY) / 2)
+      const newCx = pivotX + sgnX * newHW, newCy = pivotY + sgnY * newHH
+      simNode.x = newCx; simNode.y = newCy; simNode.fx = newCx; simNode.fy = newCy
       setNodeViewProp(nodeId, 'frameHalfW', newHW)
       setNodeViewProp(nodeId, 'frameHalfH', newHH)
+      scheduleRender()
     }
-    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp)
+      hideDragShield()
+      setAnchor(nodeId, simNode.x, simNode.y)   // persist the new center so the pinned corner sticks
+    }
+    showDragShield('nwse-resize')
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setNodeViewProp])
+  }, [clientToSim, setNodeViewProp, setAnchor, scheduleRender])
 
   const handleRelease = useCallback((nodeId) => {
     releaseAnchor(nodeId)
@@ -4349,24 +4373,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
         })()}
 
-        {/* Delete multiple selected nodes confirm */}
-        {confirmDeleteNodes && (
-          <div style={confirmStyle} onClick={() => setConfirmDeleteNodes(null)}>
-            <div style={confirmBox} onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
-                Delete <strong>{confirmDeleteNodes.length}</strong> node{confirmDeleteNodes.length === 1 ? '' : 's'} from <strong>all views</strong>?
-              </div>
-              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-                <button style={confirmCancelBtn} onClick={() => setConfirmDeleteNodes(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => {
-                  pushUndo()
-                  confirmDeleteNodes.forEach(id => deleteNode(id))
-                  setSelectedNodeIds(new Set()); setSelected(null); setConfirmDeleteNodes(null)
-                }}>Delete</button>
+        {/* Delete multiple selected nodes confirm — anchored over the item(s), not screen-centered. */}
+        {confirmDeleteNodes && (() => {
+          const pts = confirmDeleteNodes.map(id => simNodesRef.current.find(n => n.id === id)).filter(Boolean)
+          const W = svgRef.current?.clientWidth || 800, Hh = svgRef.current?.clientHeight || 600
+          const avgX = pts.length ? pts.reduce((a, n) => a + (n.x || 0), 0) / pts.length : 0
+          const avgY = pts.length ? pts.reduce((a, n) => a + (n.y || 0), 0) / pts.length : 0
+          const rawX = pts.length ? T.x + avgX * T.k : W / 2
+          const rawY = pts.length ? T.y + avgY * T.k : Hh / 2
+          const px = Math.max(150, Math.min(W - 150, rawX))
+          const below = rawY < 150
+          return (
+            <div style={confirmStyle} onClick={() => setConfirmDeleteNodes(null)}>
+              <div style={{ ...confirmBox, position: 'absolute', left: px, top: rawY, transform: below ? 'translate(-50%, 28px)' : 'translate(-50%, calc(-100% - 28px))' }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
+                  Delete <strong>{confirmDeleteNodes.length}</strong> item{confirmDeleteNodes.length === 1 ? '' : 's'} from <strong>all views</strong>?
+                </div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={confirmCancelBtn} onClick={() => setConfirmDeleteNodes(null)}>Cancel</button>
+                  <button style={confirmOkBtn} onClick={() => {
+                    pushUndo()
+                    confirmDeleteNodes.forEach(id => deleteNode(id))
+                    setSelectedNodeIds(new Set()); setSelected(null); setConfirmDeleteNodes(null)
+                  }}>Delete</button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {/* Node search / spotlight (Cmd/Ctrl+K or "/") */}
         {searchOpen && (() => {
@@ -4414,39 +4448,56 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
         })()}
 
-        {/* Delete image confirm */}
-        {confirmDeleteImage && (
-          <div style={confirmStyle} onClick={() => setConfirmDeleteImage(null)}>
-            <div style={confirmBox} onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
-                Delete this image?
-              </div>
-              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-                <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImage(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }}>Delete</button>
+        {/* Delete image confirm — anchored over the photo/video itself. */}
+        {confirmDeleteImage && (() => {
+          const im = (activeView?.images || []).find(i => i.id === confirmDeleteImage)
+          const W = svgRef.current?.clientWidth || 800, Hh = svgRef.current?.clientHeight || 600
+          const rawX = im ? T.x + (im.x || 0) * T.k : W / 2
+          const rawY = im ? T.y + (im.y || 0) * T.k : Hh / 2
+          const px = Math.max(150, Math.min(W - 150, rawX))
+          const below = rawY < 150
+          const label = im?.type === 'video' ? 'video' : 'photo'
+          return (
+            <div style={confirmStyle} onClick={() => setConfirmDeleteImage(null)}>
+              <div style={{ ...confirmBox, position: 'absolute', left: px, top: rawY, transform: below ? 'translate(-50%, 28px)' : 'translate(-50%, calc(-100% - 28px))' }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>Delete this {label}?</div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImage(null)}>Cancel</button>
+                  <button style={confirmOkBtn} onClick={() => { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }}>Delete</button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
-        {/* Delete images confirm (multi-select) */}
-        {confirmDeleteImages && (
-          <div style={confirmStyle} onClick={() => setConfirmDeleteImages(null)}>
-            <div style={confirmBox} onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
-                Delete {confirmDeleteImages.length} image{confirmDeleteImages.length > 1 ? 's' : ''}?
-              </div>
-              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-                <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImages(null)}>Cancel</button>
-                <button style={confirmOkBtn} onClick={() => {
-                  deleteImages(confirmDeleteImages)
-                  setSelectedImageIds(new Set()); setDrilledImageId(null)
-                  setConfirmDeleteImages(null)
-                }}>Delete</button>
+        {/* Delete images confirm (multi-select) — anchored over the selection's center. */}
+        {confirmDeleteImages && (() => {
+          const sel = confirmDeleteImages.map(id => (activeView?.images || []).find(i => i.id === id)).filter(Boolean)
+          const W = svgRef.current?.clientWidth || 800, Hh = svgRef.current?.clientHeight || 600
+          const avgX = sel.length ? sel.reduce((a, i) => a + (i.x || 0), 0) / sel.length : 0
+          const avgY = sel.length ? sel.reduce((a, i) => a + (i.y || 0), 0) / sel.length : 0
+          const rawX = sel.length ? T.x + avgX * T.k : W / 2
+          const rawY = sel.length ? T.y + avgY * T.k : Hh / 2
+          const px = Math.max(150, Math.min(W - 150, rawX))
+          const below = rawY < 150
+          return (
+            <div style={confirmStyle} onClick={() => setConfirmDeleteImages(null)}>
+              <div style={{ ...confirmBox, position: 'absolute', left: px, top: rawY, transform: below ? 'translate(-50%, 28px)' : 'translate(-50%, calc(-100% - 28px))' }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
+                  Delete {confirmDeleteImages.length} item{confirmDeleteImages.length > 1 ? 's' : ''}?
+                </div>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                  <button style={confirmCancelBtn} onClick={() => setConfirmDeleteImages(null)}>Cancel</button>
+                  <button style={confirmOkBtn} onClick={() => {
+                    deleteImages(confirmDeleteImages)
+                    setSelectedImageIds(new Set()); setDrilledImageId(null)
+                    setConfirmDeleteImages(null)
+                  }}>Delete</button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {/* Save status */}
         {!isPresenting && <div style={{ position:'absolute', top:10, left:12, pointerEvents:'none' }}>
@@ -6755,6 +6806,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
 function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
+  const [hover, setHover] = useState(false)
   const inputRef = useRef()
 
   useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
@@ -6776,6 +6828,8 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
       data-frame="true"
       onMouseDown={e => onMouseDown(e, node.id)}
       onClick={e => e.stopPropagation()}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
       style={{ cursor: 'move' }}
     >
@@ -6846,13 +6900,15 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
         </g>
       )}
 
-      {/* 4 corner resize handles */}
-      {isSelected && [[-1,-1,'nwse-resize'],[ 1,-1,'nesw-resize'],[-1,1,'nesw-resize'],[ 1,1,'nwse-resize']].map(([sx, sy, cur]) => (
-        <g key={`${sx}${sy}`} transform={`translate(${sx * halfW},${sy * halfH})`}
-          onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id) }}
+      {/* Corner resize handles — pivot on the opposite corner. All 4 when selected; when merely
+          hovered (not selected), just the bottom-right one so you can resize without selecting. */}
+      {(isSelected ? [[-1,-1,'tl','nwse-resize'],[1,-1,'tr','nesw-resize'],[-1,1,'bl','nesw-resize'],[1,1,'br','nwse-resize']]
+                   : (hover && !isPresenting ? [[1,1,'br','nwse-resize']] : [])).map(([sx, sy, corner, cur]) => (
+        <g key={corner} transform={`translate(${sx * halfW},${sy * halfH})`}
+          onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }}
           style={{ cursor: cur }}>
-          <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none' }}>⤡</text>
+          <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} opacity={isSelected ? 1 : 0.85} />
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none', pointerEvents: 'none' }}>⤡</text>
         </g>
       ))}
     </g>
