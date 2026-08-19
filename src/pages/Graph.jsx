@@ -3005,14 +3005,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // upload the file to Storage in the background, then swap to the durable public URL.
       const blobUrl = URL.createObjectURL(file)
       const el = document.createElement('video')
-      const finish = (ar) => {
+      const finish = (ar, playable) => {
         const MAX = 320
         const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
         const vid = addVideo({ videoKind: 'file', src: blobUrl }, sx, sy, w, h)
         uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(vid, { src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+        if (!playable) {
+          const ext = (file.name.split('.').pop() || '').toUpperCase()
+          alert(`Heads up: browsers can’t play ${ext ? '.' + ext : 'this'} video files (only MP4/H.264, WebM, or Ogg). It uploaded, but it won’t play here — re-export or convert it to MP4 and add that instead.`)
+        }
       }
-      el.onloadedmetadata = () => finish((el.videoWidth / el.videoHeight) || (16 / 9))
-      el.onerror = () => finish(16 / 9)
+      // The browser actually tries to decode: loadedmetadata = playable; error = unsupported (e.g. AVI/WMV/MKV).
+      el.onloadedmetadata = () => finish((el.videoWidth / el.videoHeight) || (16 / 9), true)
+      el.onerror = () => finish(16 / 9, false)
+      el.preload = 'metadata'
       el.src = blobUrl
     }
     input.click()
@@ -3411,7 +3417,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : (drillRoot || null))); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
-                      ['Grid', () => { addTableToCenter(); setShowAddMenu(false) }],
+                      ['Table', () => { addTableToCenter(); setShowAddMenu(false) }],
                       ['View', () => { addView(); setShowAddMenu(false) }],
                     ].map(([label, action]) => (
                       <button key={label} onClick={action}
@@ -3971,7 +3977,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('▦', 'New grid here', () => {
+                    {item('▦', 'New table here', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addTableNode(sx, sy)
@@ -6583,9 +6589,11 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 // (autoplay/loop/mute/controls/hide-related/start/end/speed). Extracted so it can use refs/effects.
 function VideoEmbed({ img }) {
   const ref = useRef(null)
+  const [err, setErr] = useState(false)
   const speed = img.speed || 1
   const start = img.start || 0
   const end = (img.end && img.end > start) ? img.end : 0
+  useEffect(() => { setErr(false) }, [img.src])
 
   // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
   useEffect(() => {
@@ -6620,7 +6628,21 @@ function VideoEmbed({ img }) {
     return <iframe ref={ref} src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
   }
-  return <video ref={ref} src={img.src} playsInline preload="metadata"
+  if (err) {
+    // Unsupported container (e.g. AVI/WMV/MKV) — browsers can't decode it. Say so instead of a black box.
+    const ext = (img.src || '').split('?')[0].split('.').pop()
+    const fmt = ext && ext.length <= 5 ? '.' + ext.toUpperCase() : 'This format'
+    return (
+      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 12, boxSizing: 'border-box', background: '#161a2e', color: '#c5d0ff', textAlign: 'center', fontFamily: '-apple-system, sans-serif' }}>
+        <div style={{ fontSize: 22 }}>🎞️</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{fmt} can’t play in browsers</div>
+        <div style={{ fontSize: 11, color: '#8fa0d8', lineHeight: 1.35 }}>Convert it to MP4 (H.264), WebM, or Ogg and re-add it.</div>
+        <a href={img.src} target="_blank" rel="noopener noreferrer" onMouseDown={e => e.stopPropagation()}
+          style={{ fontSize: 11, color: '#7c8cff', marginTop: 2 }}>Download original</a>
+      </div>
+    )
+  }
+  return <video ref={ref} src={img.src} playsInline preload="metadata" onError={() => setErr(true)}
     controls={img.controls !== false} autoPlay={!!img.autoplay} loop={!!img.loop && !end} muted={!!img.muted}
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
@@ -6628,6 +6650,10 @@ function VideoEmbed({ img }) {
 function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
+  // Video player is "pass-through" (canvas pan/zoom work over it) until the user activates it. A
+  // YouTube iframe otherwise swallows the scroll wheel so the canvas can't zoom over it (Miro-style).
+  const [videoActive, setVideoActive] = useState(false)
+  useEffect(() => { if (!isSelected) setVideoActive(false) }, [isSelected])
   const isLink = img.type === 'link'
   const hw = width / 2, hh = height / 2
 
@@ -6735,11 +6761,11 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           </a>
         </foreignObject>
       ) : isVideo ? (
-        // Video body — a <video> (uploaded file) or a YouTube <iframe>, in a foreignObject.
-        // pointer-events are on only when selected, so an unselected video still selects/drags via
-        // the parent <g> (same idea as 3D nodes); when selected you can use the player controls.
+        // Video body. The player captures events (so you can scrub/click controls) ONLY once activated;
+        // until then it's pass-through so canvas pan/zoom work over it (a YouTube iframe would otherwise
+        // eat the scroll wheel). Activate with the ▶ button when selected.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
-          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: isSelected ? 'auto' : 'none' }}>
+          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && videoActive) ? 'auto' : 'none' }}>
             <VideoEmbed img={img} />
           </div>
         </foreignObject>
@@ -6769,6 +6795,20 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
             <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
+          </g>
+        )}
+        {/* Video: activate the player (until then the canvas pans/zooms over it). Centered ▶ when idle;
+            a small "done" chip (bottom-left) while active to release it back to the canvas. */}
+        {isVideo && !videoActive && (
+          <g onMouseDown={e => { e.stopPropagation(); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
+            <rect x={-38} y={-13} width={76} height={26} rx={13} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.5} />
+            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ Use player</text>
+          </g>
+        )}
+        {isVideo && videoActive && (
+          <g transform={`translate(${vL + 20},${vB - 12})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(false) }} style={{ cursor: 'pointer' }}>
+            <rect x={-20} y={-9} width={40} height={18} rx={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
+            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>✓ done</text>
           </g>
         )}
         {/* Four square corner resize handles — pivot on the opposite corner (Miro style) */}
