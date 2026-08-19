@@ -43,6 +43,21 @@ const parseYoutubeId = (str) => {
   return null
 }
 
+// Build a YouTube embed URL honoring per-video options. Uses youtube-nocookie.com for privacy.
+// Note: pre-roll ADS cannot be removed by embed params — only related videos / annotations / branding
+// can be suppressed (hideRelated → rel=0 + iv_load_policy=3 + modestbranding=1). Autoplay in-browser
+// only works when muted, so autoplay implies mute unless the user turned sound on explicitly.
+const youtubeEmbedUrl = (img) => {
+  const p = new URLSearchParams()
+  if (img.autoplay) p.set('autoplay', '1')
+  if (img.muted) p.set('mute', '1')
+  if (img.loop) { p.set('loop', '1'); p.set('playlist', img.youtubeId) }
+  p.set('controls', img.controls === false ? '0' : '1')
+  if (img.hideRelated) { p.set('rel', '0'); p.set('modestbranding', '1'); p.set('iv_load_policy', '3') }
+  p.set('playsinline', '1')
+  return `https://www.youtube-nocookie.com/embed/${img.youtubeId}?${p.toString()}`
+}
+
 // Gentle gravity toward the cloud's OWN centroid (not a fixed point) — counteracts the charge
 // repulsion so the layout stays compact instead of scattering disconnected nodes/branches outward
 // every time the simulation restarts. Skips pinned nodes. Robust to pan/zoom (uses live positions).
@@ -387,8 +402,8 @@ function distributeImages(images, selectedIds, axis) {
 }
 
 function ImageToolbar({ images, selectedImageIds, anchor,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onCrop, onDelete }) {
-  const [sub, setSub] = useState(null) // null | 'align'
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onDelete }) {
+  const [sub, setSub] = useState(null) // null | 'align' | 'video'
 
   if (selectedImageIds.size === 0 || !anchor) return null
   const sel = images.filter(i => selectedImageIds.has(i.id))
@@ -398,6 +413,8 @@ function ImageToolbar({ images, selectedImageIds, anchor,
   const isSingle = count === 1
   const blur = sel[0]?.blur || 0
   const edgeBlur = sel[0]?.edgeBlur || 0
+  const vid = isSingle && sel[0]?.type === 'video' ? sel[0] : null
+  const isYT = vid?.videoKind === 'youtube'
 
   // Text menu row — matches the canvas right-click menu styling.
   const row = (label, onClick, opts = {}) => (
@@ -419,6 +436,17 @@ function ImageToolbar({ images, selectedImageIds, anchor,
       <span style={{ fontSize: '0.75rem', color: value > 0 ? '#88b4e8' : '#7080a0', width: 16, textAlign: 'center' }}>{value}</span>
       {stepBtn('+', () => set(Math.min(max, value + 1)))}
       {value > 0 && stepBtn('×', () => set(0), '#f87171')}
+    </div>
+  )
+  // A checkbox-style toggle row for on/off video options.
+  const toggleRow = (label, on, onToggle, hint) => (
+    <div onClick={() => onToggle(!on)}
+      onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+      title={hint || ''}
+      style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+      <span>{label}</span>
+      <span style={{ color: on ? '#6ee7a8' : '#5a6683', fontWeight: 700 }}>{on ? '✓' : '○'}</span>
     </div>
   )
 
@@ -444,15 +472,23 @@ function ImageToolbar({ images, selectedImageIds, anchor,
         {row('Align bottom', () => onAlign('bottom'))}
         {count >= 3 && row('Distribute horizontally', () => onDistribute('H'))}
         {count >= 3 && row('Distribute vertically', () => onDistribute('V'))}
+      </>) : sub === 'video' && vid ? (<>
+        {row('‹ Video options', () => setSub(null), { color: '#8090b8' })}
+        {toggleRow('Autoplay', !!vid.autoplay, v => onSetVideoOpt(vid.id, { autoplay: v, ...(v && vid.muted === undefined ? { muted: true } : {}) }), 'Plays on its own — great for slides. Browsers only autoplay muted video.')}
+        {toggleRow('Loop', !!vid.loop, v => onSetVideoOpt(vid.id, { loop: v }))}
+        {toggleRow('Muted', !!vid.muted, v => onSetVideoOpt(vid.id, { muted: v }), 'Turn off to allow sound (autoplay may not fire with sound on).')}
+        {toggleRow('Show controls', vid.controls !== false, v => onSetVideoOpt(vid.id, { controls: v }))}
+        {isYT && toggleRow('Hide related & branding', !!vid.hideRelated, v => onSetVideoOpt(vid.id, { hideRelated: v }), 'Suppresses end-screen related videos, annotations, and the YouTube logo. (Pre-roll ads can’t be removed via embedding.)')}
       </>) : (<>
         {isSingle && row('Bring forward', () => onReorderImage(sel[0].id, 'up'))}
         {isSingle && row('Send backward', () => onReorderImage(sel[0].id, 'down'))}
         {count >= 2 && row('Group', onGroup, { right: 'Ctrl+G' })}
         {hasGroupId && row('Ungroup', onUngroup, { right: '⇧Ctrl+G' })}
         {count >= 2 && row('Align & distribute', () => setSub('align'), { right: '›' })}
-        {isSingle && row('Crop', onCrop)}
-        {isSingle && stepperRow('Blur', blur, onSetBlur, 40)}
-        {isSingle && stepperRow('Edge blur', edgeBlur, onSetEdgeBlur, 40)}
+        {vid && row('Video options', () => setSub('video'), { right: '›' })}
+        {isSingle && !vid && row('Crop', onCrop)}
+        {isSingle && !vid && stepperRow('Blur', blur, onSetBlur, 40)}
+        {isSingle && !vid && stepperRow('Edge blur', edgeBlur, onSetEdgeBlur, 40)}
         {row('Delete', onDelete, { color: '#f87171' })}
       </>)}
     </div>
@@ -4245,6 +4281,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onReorderImage={(id, dir) => reorderImage(id, dir)}
             onSetBlur={v => selectedImageIds.forEach(id => updateImage(id, { blur: v }))}
             onSetEdgeBlur={v => selectedImageIds.forEach(id => updateImage(id, { edgeBlur: v }))}
+            onSetVideoOpt={(id, patch) => updateImage(id, patch)}
             onCrop={() => { const id = photoMenu.imageId || [...selectedImageIds][0]; if (id) { setCropImageId(id); setDrilledImageId(id); setSelectedImageIds(new Set([id])) } setPhotoMenu(null) }}
             onAlign={anchor => {
               const imgs = activeView?.images || []
@@ -6578,9 +6615,12 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
           <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: isSelected ? 'auto' : 'none' }}>
             {img.videoKind === 'youtube'
-              ? <iframe src={`https://www.youtube.com/embed/${img.youtubeId}`} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
+              ? <iframe src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
-              : <video src={src} controls playsInline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />}
+              : <video src={src} playsInline preload="metadata"
+                  controls={img.controls !== false} autoPlay={!!img.autoplay} loop={!!img.loop} muted={!!img.muted}
+                  ref={el => { if (el) el.muted = !!img.muted }}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />}
           </div>
         </foreignObject>
       ) : (<>
