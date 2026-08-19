@@ -54,6 +54,9 @@ const youtubeEmbedUrl = (img) => {
   if (img.loop) { p.set('loop', '1'); p.set('playlist', img.youtubeId) }
   p.set('controls', img.controls === false ? '0' : '1')
   if (img.hideRelated) { p.set('rel', '0'); p.set('modestbranding', '1'); p.set('iv_load_policy', '3') }
+  if (img.start) p.set('start', String(Math.max(0, Math.round(img.start))))
+  if (img.end && img.end > (img.start || 0)) p.set('end', String(Math.round(img.end)))
+  p.set('enablejsapi', '1')   // lets us set playback speed via postMessage
   p.set('playsinline', '1')
   return `https://www.youtube-nocookie.com/embed/${img.youtubeId}?${p.toString()}`
 }
@@ -438,6 +441,28 @@ function ImageToolbar({ images, selectedImageIds, anchor,
       {value > 0 && stepBtn('×', () => set(0), '#f87171')}
     </div>
   )
+  // A number-input row (used for start/end trim seconds). Commits on blur/Enter; blank → 0.
+  const numRow = (label, value, onCommit, placeholder) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}>
+      <span style={{ fontSize: '0.82rem', color: '#c5d0ff', flex: 1 }}>{label}</span>
+      <input type="number" min="0" step="1" defaultValue={value || ''} placeholder={placeholder || '0'}
+        onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
+        onBlur={e => { const n = parseFloat(e.target.value); onCommit(Number.isFinite(n) && n > 0 ? n : 0) }}
+        style={{ width: 58, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 12, padding: '3px 6px', outline: 'none' }} />
+    </div>
+  )
+  // A row of preset playback-speed buttons.
+  const speedRow = (value, onSet) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px' }}>
+      <span style={{ fontSize: '0.82rem', color: '#c5d0ff', flex: 1 }}>Speed</span>
+      {[0.5, 1, 1.5, 2].map(sp => (
+        <button key={sp} onClick={() => onSet(sp)}
+          style={{ padding: '2px 6px', borderRadius: 4, border: '1px solid #2a3358', cursor: 'pointer', fontSize: 11.5,
+            background: (value || 1) === sp ? '#3b4db0' : 'transparent', color: (value || 1) === sp ? '#fff' : '#8fa0d8' }}>{sp}×</button>
+      ))}
+    </div>
+  )
   // A checkbox-style toggle row for on/off video options.
   const toggleRow = (label, on, onToggle, hint) => (
     <div onClick={() => onToggle(!on)}
@@ -479,6 +504,10 @@ function ImageToolbar({ images, selectedImageIds, anchor,
         {toggleRow('Muted', !!vid.muted, v => onSetVideoOpt(vid.id, { muted: v }), 'Turn off to allow sound (autoplay may not fire with sound on).')}
         {toggleRow('Show controls', vid.controls !== false, v => onSetVideoOpt(vid.id, { controls: v }))}
         {isYT && toggleRow('Hide related & branding', !!vid.hideRelated, v => onSetVideoOpt(vid.id, { hideRelated: v }), 'Suppresses end-screen related videos, annotations, and the YouTube logo. (Pre-roll ads can’t be removed via embedding.)')}
+        <div style={{ borderTop: '1px solid #23234a', margin: '4px 8px' }} />
+        {numRow('Start (s)', vid.start, v => onSetVideoOpt(vid.id, { start: v }), '0')}
+        {numRow('End (s)', vid.end, v => onSetVideoOpt(vid.id, { end: v }), 'end')}
+        {speedRow(vid.speed, sp => onSetVideoOpt(vid.id, { speed: sp }))}
       </>) : (<>
         {isSingle && row('Bring forward', () => onReorderImage(sel[0].id, 'up'))}
         {isSingle && row('Send backward', () => onReorderImage(sel[0].id, 'down'))}
@@ -6499,6 +6528,52 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 }
 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Video body — a YouTube <iframe> or an uploaded <video>, honoring the per-video options
+// (autoplay/loop/mute/controls/hide-related/start/end/speed). Extracted so it can use refs/effects.
+function VideoEmbed({ img }) {
+  const ref = useRef(null)
+  const speed = img.speed || 1
+  const start = img.start || 0
+  const end = (img.end && img.end > start) ? img.end : 0
+
+  // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
+  useEffect(() => {
+    if (img.videoKind === 'youtube') return
+    const v = ref.current; if (!v) return
+    v.playbackRate = speed
+    v.muted = !!img.muted
+    const seekStart = () => { if (start) { try { v.currentTime = start } catch { /* not seekable yet */ } } }
+    const onTime = () => {
+      if (end && v.currentTime >= end) {
+        if (img.loop) { try { v.currentTime = start } catch { /* ignore */ } v.play().catch(() => {}) }
+        else v.pause()
+      }
+    }
+    v.addEventListener('loadedmetadata', seekStart)
+    v.addEventListener('timeupdate', onTime)
+    if (v.readyState >= 1) seekStart()
+    return () => { v.removeEventListener('loadedmetadata', seekStart); v.removeEventListener('timeupdate', onTime) }
+  }, [speed, img.muted, start, end, img.loop, img.videoKind, img.src])
+
+  // YouTube: playback speed can't be set by URL param — poke the player via the JS API postMessage
+  // once it's initialized, and again whenever the speed (or a src-changing option) changes.
+  useEffect(() => {
+    if (img.videoKind !== 'youtube') return
+    const f = ref.current; if (!f) return
+    const send = () => { try { f.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [speed] }), '*') } catch { /* ignore */ } }
+    const t1 = setTimeout(send, 1200), t2 = setTimeout(send, 2600)   // cover slow player init
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [speed, img.videoKind, img.youtubeId, img.autoplay, img.muted, img.loop, img.controls, img.hideRelated, img.start, img.end])
+
+  if (img.videoKind === 'youtube') {
+    return <iframe ref={ref} src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
+  }
+  return <video ref={ref} src={img.src} playsInline preload="metadata"
+    controls={img.controls !== false} autoPlay={!!img.autoplay} loop={!!img.loop && !end} muted={!!img.muted}
+    style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
+}
+
 function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
@@ -6614,13 +6689,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
         // the parent <g> (same idea as 3D nodes); when selected you can use the player controls.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
           <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: isSelected ? 'auto' : 'none' }}>
-            {img.videoKind === 'youtube'
-              ? <iframe src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
-              : <video src={src} playsInline preload="metadata"
-                  controls={img.controls !== false} autoPlay={!!img.autoplay} loop={!!img.loop} muted={!!img.muted}
-                  ref={el => { if (el) el.muted = !!img.muted }}
-                  style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />}
+            <VideoEmbed img={img} />
           </div>
         </foreignObject>
       ) : (<>
