@@ -2655,7 +2655,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (!parentNode || !descIds.length) { toggleCollapseNode(nodeId); return }
 
     const { views: vs, activeViewId: av } = useGraphStore.getState()
-    const wasCollapsed = (vs.find(v => v.id === av)?.collapsedNodeIds || []).includes(nodeId)
+    const view = vs.find(v => v.id === av)
+    const wasCollapsed = (view?.collapsedNodeIds || []).includes(nodeId)
+    // Descendants the user (or media-conversion) has ANCHORED must keep their pinned spot through
+    // collapse/expand — only unanchored ones get released back to the force layout.
+    const npMap = view?.nodeProps || {}
+    const anchorOf = (id) => { const p = npMap[id]; return (p && p.fx != null && p.fy != null) ? { x: p.fx, y: p.fy } : null }
+    const restoreOrRelease = (id) => {
+      const sn = simNodesRef.current.find(n => n.id === id); if (!sn) return
+      const a = anchorOf(id)
+      if (a) { sn.x = a.x; sn.y = a.y; sn.fx = a.x; sn.fy = a.y }   // keep the anchor
+      else { sn.fx = null; sn.fy = null }                          // let the force layout take over
+    }
 
     if (!wasCollapsed) {
       // Implode: animate descendants to the parent's position, THEN hide them.
@@ -2671,32 +2682,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const targets = {}
       descIds.forEach(id => { targets[id] = target })
       animateNodesTo(descIds, targets, 320, () => {
-        descIds.forEach(id => {
-          const sn = simNodesRef.current.find(n => n.id === id)
-          if (sn) { sn.fx = null; sn.fy = null }
-        })
+        descIds.forEach(restoreOrRelease)   // preserve anchors; release the rest
         toggleCollapseNode(nodeId)
       })
     } else {
       // Explode: reveal at the parent's CURRENT position, then animate out to each
-      // descendant's remembered offset re-applied around that current position.
+      // descendant's remembered offset re-applied around that current position. Anchored
+      // descendants instead go straight to (and stay at) their pinned spot.
       const px = parentNode.x || 0, py = parentNode.y || 0
       descIds.forEach(id => {
-        const sn = simNodesRef.current.find(n => n.id === id)
-        if (sn) { sn.x = px; sn.y = py; sn.fx = px; sn.fy = py }
+        const sn = simNodesRef.current.find(n => n.id === id); if (!sn) return
+        const a = anchorOf(id)
+        if (a) { sn.x = a.x; sn.y = a.y; sn.fx = a.x; sn.fy = a.y }
+        else { sn.x = px; sn.y = py; sn.fx = px; sn.fy = py }
       })
       toggleCollapseNode(nodeId)
+      const freeIds = descIds.filter(id => !anchorOf(id))   // only unanchored ones fly out
       const targets = {}
-      descIds.forEach(id => {
+      freeIds.forEach(id => {
         const off = collapseOriginsRef.current[id]
         targets[id] = off ? { x: px + off.dx, y: py + off.dy } : { x: px, y: py }
       })
       requestAnimationFrame(() => {
-        animateNodesTo(descIds, targets, 320, () => {
-          descIds.forEach(id => {
-            const sn = simNodesRef.current.find(n => n.id === id)
-            if (sn) { sn.fx = null; sn.fy = null }
-          })
+        animateNodesTo(freeIds, targets, 320, () => {
+          freeIds.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = null; sn.fy = null } })
           simRef.current?.alpha(0.3).restart()
         })
       })
@@ -3975,7 +3984,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && mediaNodeSet.has(n.id)).map(n => {
               const m = storeNodeById[n.id]?.media
               if (!m) return null
-              const mediaImg = { id: n.id, x: n.x, y: n.y, width: m.width, height: m.height, rotation: m.rotation || 0, bgColor: null, ...m, type: m.kind === 'video' ? 'video' : undefined }
+              const mediaImg = { id: n.id, x: n.x, y: n.y, width: m.width, height: m.height, rotation: m.rotation || 0, bgColor: null, ...m, title: storeNodeById[n.id]?.label || m.title, type: m.kind === 'video' ? 'video' : undefined }
               return (
                 <ImageNode key={'media' + n.id} img={mediaImg}
                   isSelected={(selected?.type === 'node' && selected.id === n.id) || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
@@ -6952,12 +6961,21 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
           while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
       {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected)) && (
-        <rect x={-hw} y={-hh} width={width} height={height} fill="transparent" style={{ cursor: 'move' }} />
+        <rect x={-hw} y={-hh} width={width} height={height} fill="transparent" style={{ cursor: 'move' }}>
+          {isVideo && img.title && <title>{img.title}</title>}
+        </rect>
       )}
 
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+        {/* Video name caption (so you can tell which clip it is) — shown below the box when selected. */}
+        {isVideo && img.title && (
+          <text x={0} y={hh + 14} textAnchor="middle" fontSize={11} fill="#c5d0ff"
+            style={{ userSelect: 'none', pointerEvents: 'none' }}>
+            {img.title.length > 40 ? img.title.slice(0, 40) + '…' : img.title}
+          </text>
+        )}
         {/* Attached-to-a-node badge (child of that node — moves & can delete with it) */}
         {img.attachedTo && (
           <g transform={`translate(${vR - 10},${vT + 2})`} style={{ pointerEvents: 'none' }}>
