@@ -3048,6 +3048,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     input.type = 'file'; input.accept = 'video/*'
     input.onchange = () => {
       const file = input.files?.[0]; if (!file) return
+      // Storage bucket caps files at 50 MB; a bigger upload fails silently and leaves a temporary
+      // blob URL that dies on reload. Refuse up front so the video never "works then breaks".
+      if (file.size > 45 * 1024 * 1024) {
+        alert(`That video is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the 45 MB upload limit, so it wouldn’t be saved (it would break on reload). Upload a shorter/smaller clip, or paste a YouTube link instead.`)
+        return
+      }
       // Preview instantly from a local blob URL (a tiny string — never the whole file in state);
       // upload the file to Storage in the background, then swap to the durable public URL.
       const blobUrl = URL.createObjectURL(file)
@@ -6713,11 +6719,11 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 // (autoplay/loop/mute/controls/hide-related/start/end/speed). Extracted so it can use refs/effects.
 function VideoEmbed({ img }) {
   const ref = useRef(null)
-  const [err, setErr] = useState(false)
+  const [errCode, setErrCode] = useState(0)
   const speed = img.speed || 1
   const start = img.start || 0
   const end = (img.end && img.end > start) ? img.end : 0
-  useEffect(() => { setErr(false) }, [img.src])
+  useEffect(() => { setErrCode(0) }, [img.src])
 
   // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
   useEffect(() => {
@@ -6752,21 +6758,29 @@ function VideoEmbed({ img }) {
     return <iframe ref={ref} src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
   }
-  if (err) {
-    // Unsupported container (e.g. AVI/WMV/MKV) — browsers can't decode it. Say so instead of a black box.
-    const ext = (img.src || '').split('?')[0].split('.').pop()
-    const fmt = ext && ext.length <= 5 ? '.' + ext.toUpperCase() : 'This format'
+  if (errCode) {
+    // Say the TRUE reason — don't blame the format for what's really a lost/unpersisted file.
+    const src = img.src || ''
+    const isBlob = src.startsWith('blob:')          // a temporary in-browser URL that didn't survive reload
+    const ext = src.split('?')[0].split('#')[0].split('.').pop()?.toLowerCase()
+    const UNSUPPORTED = ['avi', 'wmv', 'mkv', 'flv', 'mpg', 'mpeg', 'm2ts', 'ts', 'ogv', '3gp', 'rm', 'vob']
+    const badFormat = !isBlob && ext && ext.length <= 5 && UNSUPPORTED.includes(ext)
+    let icon = '⚠️', title, hint
+    if (isBlob) { title = 'This video wasn’t saved'; hint = 'The upload didn’t finish — usually because the file is over the 50 MB limit. Re-add a smaller clip, or paste a YouTube link.' }
+    else if (badFormat) { icon = '🎞️'; title = `.${ext.toUpperCase()} can’t play in browsers`; hint = 'Convert it to MP4 (H.264), WebM, or Ogg and re-add it.' }
+    else { title = 'Couldn’t load this video'; hint = 'It may be too large, still uploading, or unavailable. Try reloading — or use a YouTube link.' }
     return (
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 12, boxSizing: 'border-box', background: '#161a2e', color: '#c5d0ff', textAlign: 'center', fontFamily: '-apple-system, sans-serif' }}>
-        <div style={{ fontSize: 22 }}>🎞️</div>
-        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{fmt} can’t play in browsers</div>
-        <div style={{ fontSize: 11, color: '#8fa0d8', lineHeight: 1.35 }}>Convert it to MP4 (H.264), WebM, or Ogg and re-add it.</div>
-        <a href={img.src} target="_blank" rel="noopener noreferrer" onMouseDown={e => e.stopPropagation()}
-          style={{ fontSize: 11, color: '#7c8cff', marginTop: 2 }}>Download original</a>
+        <div style={{ fontSize: 22 }}>{icon}</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{title}</div>
+        <div style={{ fontSize: 11, color: '#8fa0d8', lineHeight: 1.35 }}>{hint}</div>
+        {!isBlob && <a href={src} target="_blank" rel="noopener noreferrer" onMouseDown={e => e.stopPropagation()}
+          style={{ fontSize: 11, color: '#7c8cff', marginTop: 2 }}>Open original</a>}
       </div>
     )
   }
-  return <video ref={ref} src={img.src} playsInline preload="metadata" onError={() => setErr(true)}
+  return <video ref={ref} src={img.src} playsInline preload="metadata"
+    onError={e => setErrCode(e.currentTarget?.error?.code || 4)}
     controls={img.controls !== false} autoPlay={!!img.autoplay} loop={!!img.loop && !end} muted={!!img.muted}
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
