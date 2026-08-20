@@ -7760,41 +7760,34 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         />
       )}
 
-      {/* Connector handle â€" hover only. Large transparent circle as hit target to bridge gap from node edge. */}
+      {/* Connector handle — hover only. An OUTGOING-ARROW badge (dragging it draws a line to a new
+          child / another node). Offset a little further out so it doesn't overlap the text-width bar. */}
       {isHovered && (
         <g transform={`translate(${bodyHalfW},0) scale(${hz})`}
           onMouseDown={e => { e.stopPropagation(); onConnectorMouseDown(e, node.id) }}
           onMouseEnter={onMouseEnter} style={{ cursor: 'crosshair' }}>
           <title>Drag to another node to connect · drag to empty space for a new child</title>
-          <circle cx={7} cy={0} r={14} fill="transparent" />
-          <circle cx={7} cy={0} r={5} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
+          <circle cx={12} cy={0} r={15} fill="transparent" />
+          <g transform="translate(12,0)" style={{ pointerEvents: 'none' }}>
+            <circle r={8} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
+            <line x1={-4} y1={0} x2={2.5} y2={0} stroke="#fff" strokeWidth={1.6} strokeLinecap="round" />
+            <polyline points="-0.5,-3.4 3.6,0 -0.5,3.4" fill="none" stroke="#fff" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+          </g>
         </g>
       )}
 
-      {/* Scale-BOTH handle (bottom-right) — diagonal arrows; resizes box + text together. */}
+      {/* Single resize handle (bottom-right). Normal drag = resize node + text together.
+          SHIFT-drag = resize the shape only (text keeps its size and reflows). */}
       {isHovered && (
         <g transform={`translate(${bodyHalfW},${bodyHalfH}) scale(${hz})`}
-          onMouseDown={e => { e.stopPropagation(); onScaleMouseDown(e, node.id, scale) }}
+          onMouseDown={e => { e.stopPropagation(); if (e.shiftKey && shape !== '3d' && shape !== 'frame') onBoxScaleMouseDown?.(e, node.id, isAutoSized); else onScaleMouseDown(e, node.id, scale) }}
           onMouseEnter={onMouseEnter}
           style={{ cursor: 'nwse-resize' }}>
-          <title>Resize node + text together</title>
+          <title>Drag to resize node + text · Shift-drag to resize the shape only (text keeps its size)</title>
           <circle r={14} fill="transparent" />
           <circle r={6} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
           <line x1={-3} y1={-3} x2={3} y2={3} stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
           <line x1={0} y1={-3} x2={3} y2={0} stroke="#5b6af0" strokeWidth={1} style={{ pointerEvents: 'none' }} />
-        </g>
-      )}
-
-      {/* Scale-SHAPE-ONLY handle (bottom-left) — square icon; resizes the box but keeps the
-          text size, so the label reflows to a new line length (font only shrinks if forced). */}
-      {isHovered && shape !== '3d' && shape !== 'frame' && (
-        <g transform={`translate(${-bodyHalfW},${bodyHalfH}) scale(${hz})`}
-          onMouseDown={e => { e.stopPropagation(); onBoxScaleMouseDown?.(e, node.id, isAutoSized) }}
-          onMouseEnter={onMouseEnter}
-          style={{ cursor: 'nesw-resize' }}>
-          <title>Resize shape only — text keeps its size and reflows</title>
-          <circle r={14} fill="transparent" />
-          <rect x={-5} y={-5} width={10} height={10} rx={2} fill="#0c0c1a" stroke="#5b6af0" strokeWidth={1.5} style={{ pointerEvents: 'none' }} />
         </g>
       )}
 
