@@ -3214,7 +3214,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       })
 
       const canAttach = dragIds.length === 1   // attach only a single media item to a node
-      let lastCenter = null
+      let lastCenter = null, lastCursor = null
+      const draggedImg = images.find(i => i.id === imageId)
+      // The node this media would attach to: prefer the one under the CURSOR (what the user points at),
+      // then the one under the media's center, then any node the media overlaps (nearest to the cursor).
+      const attachTargetAt = (cursor, center) => {
+        if (cursor) { const c = nodeUnderPoint(cursor.x, cursor.y); if (c) return c }
+        if (center) { const c = nodeUnderPoint(center.x, center.y); if (c) return c }
+        if (center && draggedImg) {
+          const hw = (draggedImg.width || 0) / 2, hh = (draggedImg.height || 0) / 2
+          const ref = cursor || center
+          let best = null, bestD = Infinity
+          for (const n of simNodesRef.current) {
+            const nvp = viewNodePropsRef.current[n.id] || {}
+            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
+            if (Math.abs((n.x || 0) - center.x) > hw + 40 || Math.abs((n.y || 0) - center.y) > hh + 40) continue
+            const d = Math.hypot((n.x || 0) - ref.x, (n.y || 0) - ref.y)
+            if (d < bestD) { bestD = d; best = n.id }
+          }
+          return best
+        }
+        return null
+      }
       const onMove = me => {
         const T2 = zoomTransformRef.current
         const startSx = (startClientX - T2.x) / T2.k
@@ -3227,8 +3248,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })
         // Feedback: highlight the node this media would attach to (drop = becomes its child).
         if (canAttach) {
+          lastCursor = { x: sx, y: sy }
           lastCenter = { x: origins[imageId].x + dx, y: origins[imageId].y + dy }
-          const hit = nodeUnderPoint(lastCenter.x, lastCenter.y)
+          const hit = attachTargetAt(lastCursor, lastCenter)
           if (hit !== dragHoverNodeIdRef.current) { dragHoverNodeIdRef.current = hit; setDragHoverNodeId(hit) }
         }
       }
@@ -3237,7 +3259,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         document.removeEventListener('mouseup', onUp)
         hideDragShield()
         if (canAttach) {
-          const target = lastCenter ? nodeUnderPoint(lastCenter.x, lastCenter.y) : null
+          const target = attachTargetAt(lastCursor, lastCenter)
           if (target) {
             // Promote to a real child NODE of the target (edges/outliner/collapse/shift-drag).
             pushUndo()
