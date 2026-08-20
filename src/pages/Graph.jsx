@@ -3956,7 +3956,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const mediaImg = { id: n.id, x: n.x, y: n.y, width: m.width, height: m.height, rotation: m.rotation || 0, bgColor: null, ...m, type: m.kind === 'video' ? 'video' : undefined }
               return (
                 <ImageNode key={'media' + n.id} img={mediaImg}
-                  isSelected={selected?.type === 'node' && selected.id === n.id}
+                  isSelected={(selected?.type === 'node' && selected.id === n.id) || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
                   isCropping={false}
                   onMouseDown={handleMediaNodeMouseDown} />
               )
@@ -6924,6 +6924,14 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />
       )}
       </>)}
+
+      {/* Transparent hit target for videos/links: their body is pointer-events:none until activated,
+          which otherwise lets clicks (incl. ctrl-click to multi-select) fall through instead of hitting
+          the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
+          while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
+      {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected)) && (
+        <rect x={-hw} y={-hh} width={width} height={height} fill="transparent" style={{ cursor: 'move' }} />
+      )}
 
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
