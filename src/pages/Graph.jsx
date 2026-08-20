@@ -6,6 +6,7 @@ import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS, NEW_NODE_STYLE_PROPS } from '../lib/graphStore'
 import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
 import ViewManager from '../components/ViewManager'
+import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
@@ -4562,6 +4563,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {saveStatus==='error'?'● save failed':saveStatus==='saving'?'● saving…':'● saved'}
           </span>
         </div>}
+
+        {/* AI assistant command bar (Cmd/Ctrl+J or the ✦ button) */}
+        {!readOnly && !isPresenting && (
+          <CommandBar getSelection={() => ({
+            selectedNodeId: selected?.type === 'node' ? selected.id : null,
+            selectedNodeIds: [...selectedNodeIds],
+          })} />
+        )}
 
 
 

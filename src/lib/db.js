@@ -200,6 +200,15 @@ export async function unfurlLink(url) {
   } catch (e) { console.warn('unfurl failed:', e?.message || e); return null }
 }
 
+// One turn of the AI assistant: forward messages+tools+system to the `assistant` edge function
+// (which holds the Anthropic key) and return Claude's raw response. The browser drives the loop.
+export async function callAssistant({ messages, tools, system }) {
+  const { data, error } = await supabase.functions.invoke('assistant', { body: { messages, tools, system } })
+  if (error) throw new Error(error.message || 'assistant call failed')
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
 export async function uploadImageDataUrl(dataUrl, projectId) {
   if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return dataUrl
   try {
