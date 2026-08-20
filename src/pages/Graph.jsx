@@ -1744,7 +1744,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const onKey = e => {
       if (e.key === 'Enter') {
         e.preventDefault(); e.stopImmediatePropagation()
-        if (confirmDelete) { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }
+        if (confirmDelete) { pushUndo(); (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).forEach(i => { if (i.attachedTo === confirmDelete) updateImage(i.id, { attachedTo: null }) }); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }
         else if (confirmDeleteNodes) { pushUndo(); confirmDeleteNodes.forEach(id => deleteNode(id)); setSelectedNodeIds(new Set()); setSelected(null); setConfirmDeleteNodes(null) }
         else if (confirmDeleteImage) { deleteImage(confirmDeleteImage); setSelectedImageIds(new Set()); setConfirmDeleteImage(null) }
         else if (confirmDeleteImages) { deleteImages(confirmDeleteImages); setSelectedImageIds(new Set()); setDrilledImageId(null); setConfirmDeleteImages(null) }
@@ -1755,7 +1755,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [confirmDelete, confirmDeleteNodes, confirmDeleteImage, confirmDeleteImages, pushUndo, deleteNode, deleteImage, deleteImages])
+  }, [confirmDelete, confirmDeleteNodes, confirmDeleteImage, confirmDeleteImages, pushUndo, deleteNode, deleteImage, deleteImages, updateImage])
 
   // Read a saved viewport: localStorage first (instant, survives quick reloads), then the
   // DB-persisted pan on the view (cross-device backup).
@@ -2123,6 +2123,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
     const [startSx, startSy] = clientToSim(e.clientX, e.clientY)
     const startPositions = dragGroup.map(n => ({ node: n, ox: n.fx ?? n.x ?? 0, oy: n.fy ?? n.y ?? 0, wasAnchored: n.fx !== null }))
+    // Media attached to any node in the drag group follows it (group move).
+    const dragIdSet = new Set(dragGroup.map(n => n.id))
+    const dragViewImgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+    const attachedStart = dragViewImgs.filter(im => im.attachedTo && dragIdSet.has(im.attachedTo)).map(im => ({ id: im.id, ox: im.x, oy: im.y }))
     let didDrag = false
     let lastClient = { x: e.clientX, y: e.clientY }
     let panRaf = null
@@ -2138,6 +2142,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
       didDrag = true
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
+      attachedStart.forEach(a => updateImage(a.id, { x: a.ox + ddx, y: a.oy + ddy }))   // attached media follows
 
       // Hover-detect: find node under cursor to highlight as reparent target
       if (!isFrame && !multiDrag) {
@@ -2304,7 +2309,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender])
+  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -3086,6 +3091,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
   }, [addImage])
 
+  // Find the regular node whose box contains a canvas point (for attaching media on drop). Skips
+  // frames/3d containers (those use containedIn) and hidden nodes.
+  const nodeUnderPoint = useCallback((sx, sy) => {
+    for (const n of simNodesRef.current) {
+      const nvp = viewNodePropsRef.current[n.id] || {}
+      if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
+      const nr = NODE_R * (nvp.scale || 1)
+      const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
+      if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) return n.id
+    }
+    return null
+  }, [])
+
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag', arg) => {
     e.preventDefault(); e.stopPropagation()
@@ -3143,6 +3161,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (img) origins[id] = { x: img.x, y: img.y }
       })
 
+      const canAttach = dragIds.length === 1   // attach only a single media item to a node
+      let lastCenter = null
       const onMove = me => {
         const T2 = zoomTransformRef.current
         const startSx = (startClientX - T2.x) / T2.k
@@ -3153,11 +3173,29 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (!origins[id]) return
           updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy })
         })
+        // Feedback: highlight the node this media would attach to (drop = becomes its child).
+        if (canAttach) {
+          lastCenter = { x: origins[imageId].x + dx, y: origins[imageId].y + dy }
+          const hit = nodeUnderPoint(lastCenter.x, lastCenter.y)
+          if (hit !== dragHoverNodeIdRef.current) { dragHoverNodeIdRef.current = hit; setDragHoverNodeId(hit) }
+        }
       }
       const onUp = () => {
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
         hideDragShield()
+        if (canAttach) {
+          const target = lastCenter ? nodeUnderPoint(lastCenter.x, lastCenter.y) : null
+          const wasAttached = images.find(i => i.id === imageId)?.attachedTo || null
+          if (target) {
+            updateImage(imageId, { attachedTo: target })          // becomes a child of that node
+            const tn = simNodesRef.current.find(n => n.id === target)   // pin the node so they stay together
+            if (tn) { tn.fx = tn.x; tn.fy = tn.y; setAnchor(target, tn.x, tn.y) }
+          } else if (wasAttached) {
+            updateImage(imageId, { attachedTo: null })            // dragged off → detach
+          }
+          if (dragHoverNodeIdRef.current !== null) { dragHoverNodeIdRef.current = null; setDragHoverNodeId(null) }
+        }
       }
       showDragShield('move')
       document.addEventListener('mousemove', onMove)
@@ -3252,7 +3290,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       showDragShield('grabbing')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId])
+  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId, nodeUnderPoint, setAnchor])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -4364,15 +4402,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const rawY = dn ? T.y + (dn.y || 0) * T.k : (svgRef.current?.clientHeight || 600) / 2
           const px = Math.max(150, Math.min(W - 150, rawX))
           const below = rawY < 150
+          // Dependents: descendant nodes (child tables/nodes) + attached media (photos/videos).
+          const desc = []; const seen = new Set([confirmDelete]); const q = [confirmDelete]
+          while (q.length) { const c = q.shift(); storeEdges.forEach(ed => { if (ed.source === c && !seen.has(ed.target)) { seen.add(ed.target); desc.push(ed.target); q.push(ed.target) } }) }
+          const idset = new Set([confirmDelete, ...desc])
+          const attached = (activeView?.images || []).filter(i => i.attachedTo && idset.has(i.attachedTo))
+          const depCount = desc.length + attached.length
+          const delOnly = () => { pushUndo(); (activeView?.images || []).forEach(i => { if (i.attachedTo === confirmDelete) updateImage(i.id, { attachedTo: null }) }); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }
+          const delDeep = () => { pushUndo(); if (attached.length) deleteImages(attached.map(m => m.id)); idset.forEach(id => deleteNode(id)); setSelected(null); setConfirmDelete(null) }
           return (
             <div style={confirmStyle} onClick={() => setConfirmDelete(null)}>
               <div style={{ ...confirmBox, position: 'absolute', left: px, top: rawY, transform: below ? 'translate(-50%, 28px)' : 'translate(-50%, calc(-100% - 28px))' }} onClick={e => e.stopPropagation()}>
                 <div style={{ fontSize: '0.88rem', color: '#ccc', marginBottom: 12 }}>
-                  Delete <strong>{dn?.label || 'this node'}</strong> from <strong>all views</strong>?
+                  Delete <strong>{dn?.label || 'this node'}</strong>{depCount > 0 ? <> — it has <strong>{depCount}</strong> child item{depCount === 1 ? '' : 's'}.</> : <> from <strong>all views</strong>?</>}
                 </div>
-                <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                <div style={{ display:'flex', gap:8, justifyContent:'flex-end', flexWrap: 'wrap' }}>
                   <button style={confirmCancelBtn} onClick={() => setConfirmDelete(null)}>Cancel</button>
-                  <button style={confirmOkBtn} onClick={() => { pushUndo(); deleteNode(confirmDelete); setSelected(null); setConfirmDelete(null) }}>Delete</button>
+                  {depCount > 0 ? (<>
+                    <button style={confirmCancelBtn} onClick={delOnly}>Node only</button>
+                    <button style={confirmOkBtn} onClick={delDeep}>Delete with children</button>
+                  </>) : (
+                    <button style={confirmOkBtn} onClick={delOnly}>Delete</button>
+                  )}
                 </div>
               </div>
             </div>
@@ -6790,6 +6841,13 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+        {/* Attached-to-a-node badge (child of that node — moves & can delete with it) */}
+        {img.attachedTo && (
+          <g transform={`translate(${vR - 10},${vT + 2})`} style={{ pointerEvents: 'none' }}>
+            <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1} />
+            <text textAnchor="middle" dominantBaseline="central" fontSize={10} style={{ userSelect: 'none' }}>🔗</text>
+          </g>
+        )}
         {/* Video/Link: a top drag-bar to move it (the body's pointer events belong to the player/link) */}
         {(isVideo || isLink) && (
           <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
