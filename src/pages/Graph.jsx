@@ -525,6 +525,45 @@ function ImageToolbar({ images, selectedImageIds, anchor,
   )
 }
 
+// Frame "stages" (build steps) panel — appears when a frame is selected. Capture the current
+// arrangement as a stage, list/rename/reorder/delete stages, and step through them (preview overlay).
+function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, onRename, onReorder, onPreview, onStep, onExit }) {
+  const sBtn = { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '4px 9px', whiteSpace: 'nowrap' }
+  const sMini = { background: 'transparent', border: 'none', color: '#8fa0d8', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '1px 3px' }
+  return (
+    <div onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
+      style={{ position: 'absolute', left: 12, bottom: 12, zIndex: 40, width: 230, background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 10, boxShadow: '0 10px 34px rgba(0,0,0,0.55)', fontFamily: '-apple-system, sans-serif', color: '#c5d0ff' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid #20233f' }}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>🎬 Frame stages</span>
+        <span style={{ flex: 1 }} />
+        {previewing && <button onClick={onExit} style={sBtn} title="Stop previewing, restore the frame">Exit</button>}
+      </div>
+      <div style={{ maxHeight: 220, overflowY: 'auto', padding: '4px 0' }}>
+        {stages.length === 0 && <div style={{ padding: '8px 12px', fontSize: 12, color: '#8090b8', lineHeight: 1.4 }}>No stages yet. Arrange the frame (hide/move/collapse elements), then <b>Capture</b>.</div>}
+        {stages.map((s, i) => (
+          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '3px 8px', background: activeIdx === i ? '#1e2547' : 'transparent' }}>
+            <span style={{ width: 16, textAlign: 'right', color: '#7c8cff', fontSize: 11, flexShrink: 0 }}>{i + 1}</span>
+            <span style={{ flex: 1, minWidth: 0 }}><EditableText value={s.name} onCommit={n => onRename(i, n)} style={{ fontSize: 12.5, color: '#dbe4ff', cursor: 'pointer', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title="Double-click to rename" /></span>
+            <button title="Preview this stage" onClick={() => onPreview(i)} style={sMini}>▶</button>
+            <button title="Move up" onClick={() => onReorder(i, -1)} style={sMini}>▲</button>
+            <button title="Move down" onClick={() => onReorder(i, 1)} style={sMini}>▼</button>
+            <button title="Delete stage" onClick={() => onDelete(i)} style={{ ...sMini, color: '#f87171' }}>×</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderTop: '1px solid #20233f' }}>
+        <button onClick={onCapture} style={sBtn} title="Snapshot the current arrangement as a new stage">＋ Capture</button>
+        <span style={{ flex: 1 }} />
+        {stages.length > 0 && (<>
+          <button onClick={() => onStep(-1)} style={sMini} title="Previous (←)">◀</button>
+          <span style={{ fontSize: 12, minWidth: 30, textAlign: 'center' }}>{previewing ? activeIdx + 1 : '–'}/{stages.length}</span>
+          <button onClick={() => onStep(1)} style={sMini} title="Next (→)">▶</button>
+        </>)}
+      </div>
+    </div>
+  )
+}
+
 export default function Graph({ projectId, projectName, readOnly = false, sharedData = null }) {
   const svgRef = useRef()
   const simRef = useRef(null)
@@ -659,6 +698,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const loadProjectData   = useGraphStore(s => s.loadProjectData)
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState('saved')
+  // Frame stages ("build steps"): preview overlay is view-only (never touches the store). stagePreview
+  // = { frameId, idx } while stepping; stageOverlay = { vis:{[id]:bool}, collapse:{[id]:bool} } applied
+  // to visibleNodeIds; stageBasePosRef remembers member positions to restore on exit.
+  const [stagePreview, setStagePreview] = useState(null)
+  const [stageOverlay, setStageOverlay] = useState(null)
+  const stageBasePosRef = useRef(null)
   const saveTimer = useRef(null)
   const loadOkRef = useRef(false)   // true only after a successful project load — gates autosave
 
@@ -934,10 +979,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     } else {
       base = new Set(storeNodes.filter(n => viewNodeProps[n.id]?.visible !== false).map(n => n.id))
     }
+    // Frame-stage preview overlay (view-only): a stage can force some member nodes collapsed/expanded
+    // and shown/hidden. Fold its collapse overrides into the effective collapsed set here.
+    const effCollapsed = new Set(collapsedNodeIds)
+    if (stageOverlay?.collapse) {
+      for (const id in stageOverlay.collapse) { if (stageOverlay.collapse[id]) effCollapsed.add(id); else effCollapsed.delete(id) }
+    }
     // Hide the descendants of any collapsed, list-card, OR kanban node (the card renders that subtree itself).
-    if (collapsedNodeIds.length || listNodeIds.length || kanbanNodeIds.length || strategyNodeIds.length) {
+    if (effCollapsed.size || listNodeIds.length || kanbanNodeIds.length || strategyNodeIds.length) {
       const hidden = new Set()
-      const q = [...collapsedNodeIds, ...listNodeIds, ...kanbanNodeIds, ...strategyNodeIds]
+      const q = [...effCollapsed, ...listNodeIds, ...kanbanNodeIds, ...strategyNodeIds]
       while (q.length) {
         const cur = q.shift()
         storeEdges.forEach(e => {
@@ -945,6 +996,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })
       }
       hidden.forEach(id => base.delete(id))
+    }
+    // Stage visibility overrides: show/hide specific members (hiding a member hides its subtree).
+    if (stageOverlay?.vis) {
+      for (const id in stageOverlay.vis) {
+        if (stageOverlay.vis[id]) { base.add(id) }
+        else {
+          base.delete(id)
+          const q = [id]
+          while (q.length) { const cur = q.shift(); storeEdges.forEach(e => { if (e.source === cur && base.has(e.target)) { base.delete(e.target); q.push(e.target) } }) }
+        }
+      }
     }
     if (expandHops !== null) {
       ;[...base].forEach(id => { if (expandHops[id] === undefined) base.delete(id) })
@@ -966,7 +1028,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
     }
     return base
-  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, kanbanNodeIds, strategyNodeIds, propFilter, storePropertyDefs])
+  }, [drillRoot, storeNodes, storeEdges, viewNodeProps, expandHops, collapsedNodeIds, listNodeIds, kanbanNodeIds, strategyNodeIds, propFilter, storePropertyDefs, stageOverlay])
   const visibleNodeIdsRef = useRef(visibleNodeIds)
   visibleNodeIdsRef.current = visibleNodeIds
 
@@ -2717,6 +2779,110 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     simNodesRef.current.forEach(n => { n.fx = null; n.fy = null })
     simRef.current?.alpha(0.5).restart()
   }, [releaseAllAnchors])
+
+  // ── Frame stages (build steps) ──────────────────────────────────────────────
+  // Members = nodes contained in the frame + their subtrees. A stage snapshots each member's
+  // visibility, position, collapse and scale. Preview is a VIEW-ONLY overlay (never mutates the doc).
+  const frameMembers = useCallback((frameId) => {
+    const contained = storeNodes.filter(n => (viewNodePropsRef.current[n.id]?.containedIn) === frameId).map(n => n.id)
+    const ids = new Set(contained); const q = [...contained]
+    while (q.length) { const cur = q.shift(); storeEdges.forEach(e => { if (e.source === cur && !ids.has(e.target)) { ids.add(e.target); q.push(e.target) } }) }
+    return [...ids]
+  }, [storeNodes, storeEdges])
+
+  const getFrameStages = useCallback((frameId) => (viewNodePropsRef.current[frameId]?.stages) || [], [])
+
+  // Snapshot the current live arrangement of a frame's members as a stage object.
+  const snapshotFrame = useCallback((frameId) => {
+    const collapsed = new Set(useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.collapsedNodeIds || [])
+    const snap = {}
+    frameMembers(frameId).forEach(id => {
+      const sn = simNodesRef.current.find(n => n.id === id)
+      const vp = getVP(id)
+      snap[id] = { v: vp.visible !== false, x: sn?.x ?? vp.fx ?? 0, y: sn?.y ?? vp.fy ?? 0, s: vp.scale || 1, c: collapsed.has(id) }
+    })
+    return snap
+  }, [frameMembers, getVP])
+
+  const captureStage = useCallback((frameId) => {
+    const stages = getFrameStages(frameId)
+    setNodeViewProp(frameId, 'stages', [...stages, { id: crypto.randomUUID(), name: `Stage ${stages.length + 1}`, snap: snapshotFrame(frameId) }])
+  }, [getFrameStages, snapshotFrame, setNodeViewProp])
+
+  const updateStage = useCallback((frameId, idx) => {
+    const stages = getFrameStages(frameId)
+    if (!stages[idx]) return
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, snap: snapshotFrame(frameId) } : s))
+  }, [getFrameStages, snapshotFrame, setNodeViewProp])
+
+  const setStages = useCallback((frameId, stages) => setNodeViewProp(frameId, 'stages', stages), [setNodeViewProp])
+
+  // Apply a stage as an overlay: set visibility/collapse overrides + animate member positions. No store writes.
+  const applyStage = useCallback((frameId, idx, animate = true) => {
+    const stage = getFrameStages(frameId)[idx]; if (!stage) return
+    const members = frameMembers(frameId)
+    if (!stageBasePosRef.current) {
+      const pos = {}
+      members.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) pos[id] = { x: sn.x, y: sn.y, fx: sn.fx, fy: sn.fy } })
+      stageBasePosRef.current = { frameId, pos }
+    }
+    const vis = {}, collapse = {}, targets = {}
+    members.forEach(id => { const s = stage.snap[id]; if (!s) return; vis[id] = s.v; collapse[id] = !!s.c; targets[id] = { x: s.x, y: s.y } })
+    setStageOverlay({ vis, collapse })
+    if (animate) animateNodesTo(Object.keys(targets), targets, 340)
+    else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
+    scheduleRender()
+  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender])
+
+  const enterStagePreview = useCallback((frameId, idx = 0) => {
+    if (!getFrameStages(frameId).length) return
+    stageBasePosRef.current = null
+    setStagePreview({ frameId, idx })
+    applyStage(frameId, idx)
+  }, [getFrameStages, applyStage])
+
+  const stepStage = useCallback((dir) => {
+    setStagePreview(prev => {
+      if (!prev) return prev
+      const stages = getFrameStages(prev.frameId)
+      const idx = Math.max(0, Math.min(stages.length - 1, prev.idx + dir))
+      if (idx !== prev.idx) applyStage(prev.frameId, idx)
+      return { ...prev, idx }
+    })
+  }, [getFrameStages, applyStage])
+
+  const exitStagePreview = useCallback(() => {
+    const bp = stageBasePosRef.current
+    setStageOverlay(null)
+    if (bp) {
+      const ids = Object.keys(bp.pos)
+      const targets = {}; ids.forEach(id => targets[id] = { x: bp.pos[id].x, y: bp.pos[id].y })
+      animateNodesTo(ids, targets, 280, () => {
+        ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = bp.pos[id].fx; sn.fy = bp.pos[id].fy } })
+        stageBasePosRef.current = null
+        simRef.current?.alpha(0.2).restart()
+      })
+    }
+    setStagePreview(null)
+  }, [animateNodesTo])
+
+  // Leaving the frame (deselect / select something else) ends the preview and restores the base.
+  useEffect(() => {
+    if (stagePreview && !(selected?.type === 'node' && selected.id === stagePreview.frameId)) exitStagePreview()
+  }, [selected, stagePreview, exitStagePreview])
+
+  // While previewing a frame's stages, ←/→ step through them.
+  useEffect(() => {
+    if (!stagePreview) return
+    const onKey = e => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
+        e.preventDefault(); e.stopImmediatePropagation(); stepStage(e.key === 'ArrowRight' ? 1 : -1)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [stagePreview, stepStage])
 
   useEffect(() => {
     if (depthExpand !== null) setTimeout(zoomExtents, 30)
@@ -4672,6 +4838,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             selectedNodeIds: [...selectedNodeIds],
           })} />
         )}
+
+        {/* Frame stages panel — when a frame is selected */}
+        {!readOnly && !isPresenting && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (() => {
+          const fid = selected.id
+          const stages = getVP(fid).stages || []
+          const previewing = stagePreview?.frameId === fid
+          const activeIdx = previewing ? stagePreview.idx : -1
+          const previewAt = (i) => { if (previewing) { setStagePreview({ frameId: fid, idx: i }); applyStage(fid, i) } else enterStagePreview(fid, i) }
+          return (
+            <FrameStagesPanel
+              stages={stages} activeIdx={activeIdx} previewing={previewing}
+              onCapture={() => captureStage(fid)}
+              onDelete={(i) => { setStages(fid, stages.filter((_, j) => j !== i)); if (previewing) exitStagePreview() }}
+              onRename={(i, name) => setStages(fid, stages.map((s, j) => j === i ? { ...s, name } : s))}
+              onReorder={(i, dir) => { const j = i + dir; if (j < 0 || j >= stages.length) return; const st = [...stages];[st[i], st[j]] = [st[j], st[i]]; setStages(fid, st) }}
+              onPreview={previewAt}
+              onStep={(dir) => { if (!previewing) enterStagePreview(fid, 0); else stepStage(dir) }}
+              onExit={exitStagePreview}
+            />
+          )
+        })()}
 
 
 
