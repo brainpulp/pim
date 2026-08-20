@@ -622,6 +622,40 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : { ...v, drawings: (v.drawings || []).filter(d => d.id !== id) }),
   })),
 
+  // Promote a free image/video (view.images[]) into a real child NODE that carries the media on
+  // `node.media`. It then participates in the graph fully — edges, outliner, collapse, shift-drag —
+  // and is rendered from the media instead of a shape. Removes the images[] entry. Returns the node id.
+  convertImageToNode: (imageId, parentId = null) => {
+    const nid = uid()
+    set(s => {
+      const v0 = s.views.find(v => v.id === s.activeViewId)
+      const img = (v0?.images || []).find(i => i.id === imageId)
+      if (!img) return {}
+      const isVideo = img.type === 'video'
+      const media = isVideo
+        ? { kind: 'video', width: img.width, height: img.height, videoKind: img.videoKind, youtubeId: img.youtubeId, src: img.src,
+            autoplay: img.autoplay, loop: img.loop, muted: img.muted, controls: img.controls, hideRelated: img.hideRelated,
+            start: img.start, end: img.end, speed: img.speed }
+        : { kind: 'image', width: img.width, height: img.height, src: img.src, crop: img.crop, blur: img.blur, edgeBlur: img.edgeBlur, rotation: img.rotation }
+      const label = img.title || (isVideo ? 'video' : 'image')
+      return {
+        nodes: [...s.nodes, { id: nid, label, notes: '', media }],
+        edges: (parentId && s.nodes.some(n => n.id === parentId)) ? [...s.edges, { id: uid(), source: parentId, target: nid }] : s.edges,
+        views: s.views.map(v => v.id !== s.activeViewId ? v : {
+          ...v,
+          images: (v.images || []).filter(i => i.id !== imageId),
+          nodeProps: { ...v.nodeProps, [nid]: { ...DEFAULT_NODE_PROPS, fx: img.x, fy: img.y } },
+        }),
+      }
+    })
+    return nid
+  },
+
+  // Patch a media node's `media` (e.g. width/height on resize, or a video option).
+  updateNodeMedia: (id, patch) => set(s => ({
+    nodes: s.nodes.map(n => (n.id === id && n.media) ? { ...n, media: { ...n.media, ...patch } } : n),
+  })),
+
   deleteImage: (imageId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v, images: (v.images || []).filter(img => img.id !== imageId),

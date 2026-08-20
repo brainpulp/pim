@@ -714,6 +714,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
   const copyChildrenInto = useGraphStore(s => s.copyChildrenInto)
   const updateImage     = useGraphStore(s => s.updateImage)
+  const convertImageToNode = useGraphStore(s => s.convertImageToNode)
+  const updateNodeMedia = useGraphStore(s => s.updateNodeMedia)
   const deleteImage     = useGraphStore(s => s.deleteImage)
   const groupImages     = useGraphStore(s => s.groupImages)
   const ungroupImages   = useGraphStore(s => s.ungroupImages)
@@ -1034,6 +1036,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const strategyNodeSet = useMemo(() => new Set(strategyNodeIds), [strategyNodeIds])
   const allProjectTags = useMemo(() => { const set = new Set(); storeNodes.forEach(n => (n.meta?.tags || []).forEach(t => set.add(t))); return [...set].sort() }, [storeNodes])
   const tableNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.table).map(n => n.id)), [storeNodes])
+  const mediaNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.media).map(n => n.id)), [storeNodes])
+  // Migrate previously-"attached" media (image.attachedTo, the old follow model) into real media nodes,
+  // once per view, so older projects gain the node behavior (outliner/collapse/edges).
+  const migratedViewsRef = useRef(new Set())
+  useEffect(() => {
+    if (loading || readOnly) return
+    const st = useGraphStore.getState()
+    const v = st.views.find(vv => vv.id === st.activeViewId)
+    if (!v || migratedViewsRef.current.has(v.id)) return
+    migratedViewsRef.current.add(v.id)
+    const nodeIds = new Set(st.nodes.map(n => n.id))
+    const toConvert = (v.images || []).filter(i => i.attachedTo && nodeIds.has(i.attachedTo))
+    toConvert.forEach(i => convertImageToNode(i.id, i.attachedTo))
+  }, [loading, readOnly, activeViewId, convertImageToNode])
   const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
   const nodeLabelById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.label])), [storeNodes])
   const childrenOrdered = useMemo(() => { const m = {}; storeEdges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [storeEdges])
@@ -2442,6 +2458,31 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
   }, [clientToSim, setNodeViewProp, setAnchor, scheduleRender])
 
+  // Media node (a node carrying `node.media`): drag = full node behavior (move/shift-drag/reparent);
+  // resize = scale the media keeping aspect, pinning the opposite corner. Rendered via ImageNode.
+  const handleMediaNodeMouseDown = useCallback((e, nodeId, mode = 'drag', arg) => {
+    if (mode === 'drag') { handleNodeMouseDown(e, nodeId); return }
+    if (mode !== 'resize') return
+    e.stopPropagation(); e.preventDefault()
+    const simNode = simNodesRef.current.find(n => n.id === nodeId); if (!simNode) return
+    const media = storeNodes.find(n => n.id === nodeId)?.media; if (!media) return
+    const corner = arg || 'br'
+    const sgnX = corner.includes('l') ? -1 : 1, sgnY = corner.includes('t') ? -1 : 1
+    const w0 = media.width || 200, h0 = media.height || 150, ar = w0 / h0 || 1
+    const pivotX = (simNode.x || 0) - sgnX * w0 / 2, pivotY = (simNode.y || 0) - sgnY * h0 / 2
+    const onMove = me => {
+      const [mx, my] = clientToSim(me.clientX, me.clientY)
+      const nw = Math.max(60, Math.abs(mx - pivotX)), nh = nw / ar
+      const ncx = pivotX + sgnX * nw / 2, ncy = pivotY + sgnY * nh / 2
+      simNode.x = ncx; simNode.y = ncy; simNode.fx = ncx; simNode.fy = ncy
+      updateNodeMedia(nodeId, { width: Math.round(nw), height: Math.round(nh) })
+      scheduleRender()
+    }
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); hideDragShield(); setAnchor(nodeId, simNode.x, simNode.y) }
+    showDragShield('nwse-resize')
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+  }, [handleNodeMouseDown, clientToSim, updateNodeMedia, scheduleRender, setAnchor, storeNodes])
+
   const handleRelease = useCallback((nodeId) => {
     releaseAnchor(nodeId)
     const s = simNodesRef.current.find(n => n.id === nodeId)
@@ -3014,7 +3055,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const finish = (ar, playable) => {
         const MAX = 320
         const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
-        const vid = addVideo({ videoKind: 'file', src: blobUrl }, sx, sy, w, h)
+        const title = file.name.replace(/\.[^/.]+$/, '')   // filename → title (for the outliner when made a child)
+        const vid = addVideo({ videoKind: 'file', src: blobUrl, title }, sx, sy, w, h)
         uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(vid, { src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
         if (!playable) {
           const ext = (file.name.split('.').pop() || '').toUpperCase()
@@ -3033,8 +3075,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Parse a YouTube URL/ID and drop a 16:9 YouTube player on the canvas.
   const dropYoutube = useCallback((vidId, sx, sy) => {
     const W = 320
-    addVideo({ videoKind: 'youtube', youtubeId: vidId }, sx, sy, W, Math.round(W * 9 / 16))
-  }, [addVideo])
+    const id = addVideo({ videoKind: 'youtube', youtubeId: vidId }, sx, sy, W, Math.round(W * 9 / 16))
+    // Fetch the real video title (oembed, CORS-enabled) so an outliner child reads "🎬 Title".
+    fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${vidId}&format=json`)
+      .then(r => r.ok ? r.json() : null).then(d => { if (d?.title) updateImage(id, { title: d.title }) }).catch(() => {})
+  }, [addVideo, updateImage])
 
   const addYoutubeAt = useCallback(async (sx, sy) => {
     // Save a click: if the clipboard already holds a YouTube link, use it directly — no prompt.
@@ -3187,13 +3232,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         hideDragShield()
         if (canAttach) {
           const target = lastCenter ? nodeUnderPoint(lastCenter.x, lastCenter.y) : null
-          const wasAttached = images.find(i => i.id === imageId)?.attachedTo || null
           if (target) {
-            updateImage(imageId, { attachedTo: target })          // becomes a child of that node
-            const tn = simNodesRef.current.find(n => n.id === target)   // pin the node so they stay together
-            if (tn) { tn.fx = tn.x; tn.fy = tn.y; setAnchor(target, tn.x, tn.y) }
-          } else if (wasAttached) {
-            updateImage(imageId, { attachedTo: null })            // dragged off → detach
+            // Promote to a real child NODE of the target (edges/outliner/collapse/shift-drag).
+            pushUndo()
+            const nid = convertImageToNode(imageId, target)
+            const tn = simNodesRef.current.find(n => n.id === target)
+            if (tn) { tn.fx = tn.x; tn.fy = tn.y; setAnchor(target, tn.x, tn.y) }   // keep parent put
+            setSelectedImageIds(new Set()); setSelected({ id: nid, type: 'node' })
+            scheduleRender()
           }
           if (dragHoverNodeIdRef.current !== null) { dragHoverNodeIdRef.current = null; setDragHoverNodeId(null) }
         }
@@ -3291,7 +3337,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       showDragShield('grabbing')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId, nodeUnderPoint, setAnchor])
+  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId, nodeUnderPoint, setAnchor, convertImageToNode, pushUndo, scheduleRender])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -3312,12 +3358,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const sr = NODE_R * (svp.scale||1), tr = NODE_R * (tvp.scale||1)
     const sFontSize = Math.max(9, Math.round(12 * (svp.scale||1)))
     const tFontSize = Math.max(9, Math.round(12 * (tvp.scale||1)))
-    const { halfW: swW, halfH: swH } = shapeDims(svp.shape || 'circle', sr, sLabel, sFontSize, svp.labelWidth)
-    const { halfW: twW, halfH: twH } = shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize, tvp.labelWidth)
+    const sMedia = storeNodeById[s.id]?.media, tMedia = storeNodeById[t.id]?.media
+    const sShape = sMedia ? 'rect' : (svp.shape || 'circle')
+    const tShape = tMedia ? 'rect' : (tvp.shape || 'circle')
+    const { halfW: swW, halfH: swH } = sMedia ? { halfW: sMedia.width / 2, halfH: sMedia.height / 2 } : shapeDims(svp.shape || 'circle', sr, sLabel, sFontSize, svp.labelWidth)
+    const { halfW: twW, halfH: twH } = tMedia ? { halfW: tMedia.width / 2, halfH: tMedia.height / 2 } : shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize, tvp.labelWidth)
     const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
     const ux = dx/dist, uy = dy/dist
-    const sd = clipDist(svp.shape||'circle', swW, swH, ux, uy)
-    const td = clipDist(tvp.shape||'circle', twW, twH, ux, uy)
+    const sd = clipDist(sShape, swW, swH, ux, uy)
+    const td = clipDist(tShape, twW, twH, ux, uy)
     const x1 = s.x + ux*(sd - 5), y1 = s.y + uy*(sd - 5)
     const ALEN = 10, AW = 5
     const tipX = t.x - ux*(td - 5), tipY = t.y - uy*(td - 5)
@@ -3683,7 +3732,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             )}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id)).map(n => {
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id) && !mediaNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
               const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
               return (
@@ -3889,6 +3938,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onToggleDecision={id => toggleStrategyDecision(n.id, id)}
                   onSetScale={k => setNodeViewProp(n.id, 'strategyScale', k)}
                   onExit={() => toggleStrategyNode(n.id)} />
+              )
+            })}
+
+            {/* Media nodes — a node carrying `node.media` is a first-class child rendered as its
+                photo/video (via ImageNode), but with node behavior: edges, outliner, collapse,
+                shift-drag. Drag = move the node; resize scales the media. */}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && mediaNodeSet.has(n.id)).map(n => {
+              const m = storeNodeById[n.id]?.media
+              if (!m) return null
+              const mediaImg = { id: n.id, x: n.x, y: n.y, width: m.width, height: m.height, rotation: m.rotation || 0, bgColor: null, ...m, type: m.kind === 'video' ? 'video' : undefined }
+              return (
+                <ImageNode key={'media' + n.id} img={mediaImg}
+                  isSelected={selected?.type === 'node' && selected.id === n.id}
+                  isCropping={false}
+                  onMouseDown={handleMediaNodeMouseDown} />
               )
             })}
 
