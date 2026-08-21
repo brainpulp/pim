@@ -7177,7 +7177,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
         <rect x={-hw} y={-hh} width={width} height={height} fill="transparent"
           onDoubleClick={isVideo ? (e => { e.stopPropagation(); setVideoActive(true) }) : undefined}
           style={{ cursor: 'move' }}>
-          {isVideo && <title>{img.title ? `${img.title} — double-click to play` : 'Double-click to play'}</title>}
+          {isVideo && <title>{img.title ? `${img.title} — double-click to play/pause` : 'Double-click to play/pause'}</title>}
         </rect>
       )}
 
@@ -7211,7 +7211,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
         {isVideo && !videoActive && (
           <g transform={`translate(0,${vB - 16})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
             <rect x={-52} y={-9} width={104} height={18} rx={9} fill="#0c0c1acc" />
-            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9.5} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ double-click to play</text>
+            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9.5} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ double-click to play/pause</text>
           </g>
         )}
         {isVideo && videoActive && (
