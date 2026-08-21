@@ -1112,6 +1112,32 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const toConvert = (v.images || []).filter(i => i.attachedTo && nodeIds.has(i.attachedTo))
     toConvert.forEach(i => convertImageToNode(i.id, i.attachedTo))
   }, [loading, readOnly, activeViewId, convertImageToNode])
+  // Backfill YouTube titles so the outliner shows the real video title instead of a bare "video".
+  // oembed is CORS-enabled, so we can fetch it straight from the browser. Tried once per id per session.
+  const ytTitleTriedRef = useRef(new Set())
+  useEffect(() => {
+    if (loading || readOnly) return
+    const s = useGraphStore.getState()
+    const fetchTitle = (id, ytId, apply) => {
+      if (ytTitleTriedRef.current.has(id)) return
+      ytTitleTriedRef.current.add(id)
+      fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d?.title) apply(d.title) })
+        .catch(() => {})
+    }
+    s.nodes.forEach(n => {
+      if (n.media?.kind === 'video' && n.media?.videoKind === 'youtube' && n.media?.youtubeId) {
+        const lbl = (n.label || '').trim().toLowerCase()
+        if (lbl === '' || lbl === 'video') fetchTitle('node:' + n.id, n.media.youtubeId, t => updateLabel(n.id, t))
+      }
+    })
+    const v = s.views.find(vv => vv.id === s.activeViewId)
+    ;(v?.images || []).forEach(img => {
+      if (img.type === 'video' && img.videoKind === 'youtube' && img.youtubeId && !img.title)
+        fetchTitle('img:' + img.id, img.youtubeId, t => updateImage(img.id, { title: t }))
+    })
+  }, [loading, readOnly, storeNodes, activeViewId, updateLabel, updateImage])
   const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
   const nodeLabelById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.label])), [storeNodes])
   const childrenOrdered = useMemo(() => { const m = {}; storeEdges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [storeEdges])
@@ -7148,8 +7174,10 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
           while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
       {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected)) && (
-        <rect x={-hw} y={-hh} width={width} height={height} fill="transparent" style={{ cursor: 'move' }}>
-          {isVideo && img.title && <title>{img.title}</title>}
+        <rect x={-hw} y={-hh} width={width} height={height} fill="transparent"
+          onDoubleClick={isVideo ? (e => { e.stopPropagation(); setVideoActive(true) }) : undefined}
+          style={{ cursor: 'move' }}>
+          {isVideo && <title>{img.title ? `${img.title} — double-click to play` : 'Double-click to play'}</title>}
         </rect>
       )}
 
@@ -7177,18 +7205,19 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
           </g>
         )}
-        {/* Video: activate the player (until then the canvas pans/zooms over it). Centered ▶ when idle;
-            a small "done" chip (bottom-left) while active to release it back to the canvas. */}
+        {/* Video: the body pans/zooms with the canvas until you "arm" the player. Double-clicking the
+            video activates it (handled on the hit rect); when idle we show only a low-key play glyph so
+            it isn't a big clunky button. Once active, a small ✕ (top-right) releases it to the canvas. */}
         {isVideo && !videoActive && (
-          <g onMouseDown={e => { e.stopPropagation(); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
-            <rect x={-38} y={-13} width={76} height={26} rx={13} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.5} />
-            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ Use player</text>
+          <g transform={`translate(0,${vB - 16})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
+            <rect x={-52} y={-9} width={104} height={18} rx={9} fill="#0c0c1acc" />
+            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9.5} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ double-click to play</text>
           </g>
         )}
         {isVideo && videoActive && (
-          <g transform={`translate(${vL + 20},${vB - 12})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(false) }} style={{ cursor: 'pointer' }}>
-            <rect x={-20} y={-9} width={40} height={18} rx={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
-            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>✓ done</text>
+          <g transform={`translate(${vR - 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(false) }} style={{ cursor: 'pointer' }}>
+            <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
+            <text x={0} y={0.5} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>✕</text>
           </g>
         )}
         {/* Four square corner resize handles — pivot on the opposite corner (Miro style) */}
