@@ -540,16 +540,22 @@ function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, 
       </div>
       <div style={{ maxHeight: 220, overflowY: 'auto', padding: '4px 0' }}>
         {stages.length === 0 && <div style={{ padding: '8px 12px', fontSize: 12, color: '#8090b8', lineHeight: 1.4 }}>No stages yet. Arrange the frame (hide/move/collapse elements), then <b>Capture</b>.</div>}
-        {stages.map((s, i) => (
+        {stages.map((s, i) => {
+          const count = Object.keys(s.snap || {}).length
+          return (
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '3px 8px', background: activeIdx === i ? '#1e2547' : 'transparent' }}>
             <span style={{ width: 16, textAlign: 'right', color: '#7c8cff', fontSize: 11, flexShrink: 0 }}>{i + 1}</span>
-            <span style={{ flex: 1, minWidth: 0 }}><EditableText value={s.name} onCommit={n => onRename(i, n)} style={{ fontSize: 12.5, color: '#dbe4ff', cursor: 'pointer', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title="Double-click to rename" /></span>
+            <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 5 }}>
+              <EditableText value={s.name} onCommit={n => onRename(i, n)} style={{ fontSize: 12.5, color: '#dbe4ff', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title="Double-click to rename" />
+              <span style={{ fontSize: 10.5, color: count ? '#8090b8' : '#f0a05a', flexShrink: 0 }} title={count ? `${count} elements captured` : 'Empty — nothing was inside the frame when captured'}>{count || '∅'}</span>
+            </span>
             <button title="Preview this stage" onClick={() => onPreview(i)} style={sMini}>▶</button>
             <button title="Move up" onClick={() => onReorder(i, -1)} style={sMini}>▲</button>
             <button title="Move down" onClick={() => onReorder(i, 1)} style={sMini}>▼</button>
             <button title="Delete stage" onClick={() => onDelete(i)} style={{ ...sMini, color: '#f87171' }}>×</button>
           </div>
-        ))}
+          )
+        })}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderTop: '1px solid #20233f' }}>
         <button onClick={onCapture} style={sBtn} title="Snapshot the current arrangement as a new stage">＋ Capture</button>
@@ -2810,8 +2816,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Members = nodes contained in the frame + their subtrees. A stage snapshots each member's
   // visibility, position, collapse and scale. Preview is a VIEW-ONLY overlay (never mutates the doc).
   const frameMembers = useCallback((frameId) => {
-    const contained = storeNodes.filter(n => (viewNodePropsRef.current[n.id]?.containedIn) === frameId).map(n => n.id)
-    const ids = new Set(contained); const q = [...contained]
+    const ids = new Set()
+    // (a) explicit containment — nodes dragged into the frame get containedIn set.
+    storeNodes.forEach(n => { if ((viewNodePropsRef.current[n.id]?.containedIn) === frameId) ids.add(n.id) })
+    // (b) geometric containment — anything whose center currently sits inside the frame's box counts,
+    // even if containedIn was never set (e.g. nodes created/connected in place rather than dragged in).
+    // Without this, a frame the user visually filled but never "dropped into" captures nothing.
+    const fvp = { ...DEFAULT_NODE_PROPS, ...(viewNodePropsRef.current[frameId] || {}) }
+    const fsn = simNodesRef.current.find(n => n.id === frameId)
+    const fx = fsn?.x ?? fvp.fx ?? 0, fy = fsn?.y ?? fvp.fy ?? 0
+    const fr = NODE_R * (fvp.scale || 1)
+    const { halfW: defHW, halfH: defHH } = shapeDims('frame', fr)
+    const hw = fvp.frameHalfW ?? defHW, hh = fvp.frameHalfH ?? defHH
+    simNodesRef.current.forEach(n => {
+      if (n.id === frameId || typeof n.x !== 'number') return
+      const nvp = viewNodePropsRef.current[n.id] || {}
+      if (nvp.shape === 'frame') return   // don't swallow other frames
+      if (n.x >= fx - hw && n.x <= fx + hw && n.y >= fy - hh && n.y <= fy + hh) ids.add(n.id)
+    })
+    // (c) expand to full subtrees so a captured parent brings its descendants along.
+    const q = [...ids]
     while (q.length) { const cur = q.shift(); storeEdges.forEach(e => { if (e.source === cur && !ids.has(e.target)) { ids.add(e.target); q.push(e.target) } }) }
     return [...ids]
   }, [storeNodes, storeEdges])
