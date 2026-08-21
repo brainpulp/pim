@@ -1288,7 +1288,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // View props with encodings applied (color/size from properties) while organizing.
   // Purely visual — the manual fillColor/scale stay underneath and return when Done.
   const resolveVP = useCallback((nodeId) => {
-    const base = getVP(nodeId)
+    let base = getVP(nodeId)
+    // Frame-stage preview can override a member's scale (a stage captures each member's size).
+    if (stageOverlay?.scale && stageOverlay.scale[nodeId] != null) base = { ...base, scale: stageOverlay.scale[nodeId] }
     if (!organize) return base
     const props = propsById[nodeId]
     if (!props) return base
@@ -1298,7 +1300,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const sc = encodedScaleFor(props, organize.sizeBy, sizeDomain)
     if (sc != null) out = { ...out, scale: sc }
     return out
-  }, [getVP, organize, propsById, storePropertyDefs, sizeDomain])
+  }, [getVP, organize, propsById, storePropertyDefs, sizeDomain, stageOverlay])
 
   const scheduleRender = useCallback(() => {
     if (frameRef.current) return
@@ -2882,9 +2884,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Freeze the force sim while previewing so pinned stage positions actually hold (an unanchored
     // member would otherwise be shoved back to its force-layout spot the instant the tween ends).
     simRef.current?.alphaTarget(0).alpha(0).stop()
-    const vis = {}, collapse = {}, targets = {}
-    ids.forEach(id => { const s = stage.snap[id]; if (!s) return; vis[id] = s.v; collapse[id] = !!s.c; targets[id] = { x: s.x, y: s.y } })
-    setStageOverlay({ vis, collapse })
+    const vis = {}, collapse = {}, scale = {}, targets = {}
+    ids.forEach(id => { const s = stage.snap[id]; if (!s) return; vis[id] = s.v; collapse[id] = !!s.c; if (s.s != null) scale[id] = s.s; targets[id] = { x: s.x, y: s.y } })
+    setStageOverlay({ vis, collapse, scale })
     if (animate) animateNodesTo(Object.keys(targets), targets, 340)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()
