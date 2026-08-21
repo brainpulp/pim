@@ -2870,14 +2870,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Apply a stage as an overlay: set visibility/collapse overrides + animate member positions. No store writes.
   const applyStage = useCallback((frameId, idx, animate = true) => {
     const stage = getFrameStages(frameId)[idx]; if (!stage) return
-    const members = frameMembers(frameId)
+    // Act on the UNION of what's currently inside the frame AND everything the stage captured — so a
+    // node that a previous stage moved out of the frame box still animates back, and stages captured
+    // before the geometric-containment fix still drive whatever they did record.
+    const ids = [...new Set([...frameMembers(frameId), ...Object.keys(stage.snap || {})])]
     if (!stageBasePosRef.current) {
       const pos = {}
-      members.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) pos[id] = { x: sn.x, y: sn.y, fx: sn.fx, fy: sn.fy } })
+      ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) pos[id] = { x: sn.x, y: sn.y, fx: sn.fx, fy: sn.fy } })
       stageBasePosRef.current = { frameId, pos }
     }
+    // Freeze the force sim while previewing so pinned stage positions actually hold (an unanchored
+    // member would otherwise be shoved back to its force-layout spot the instant the tween ends).
+    simRef.current?.alphaTarget(0).alpha(0).stop()
     const vis = {}, collapse = {}, targets = {}
-    members.forEach(id => { const s = stage.snap[id]; if (!s) return; vis[id] = s.v; collapse[id] = !!s.c; targets[id] = { x: s.x, y: s.y } })
+    ids.forEach(id => { const s = stage.snap[id]; if (!s) return; vis[id] = s.v; collapse[id] = !!s.c; targets[id] = { x: s.x, y: s.y } })
     setStageOverlay({ vis, collapse })
     if (animate) animateNodesTo(Object.keys(targets), targets, 340)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
