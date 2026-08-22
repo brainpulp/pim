@@ -4836,8 +4836,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   </>
                 ) : (
                   <>
-                    {item('✚', 'New node here', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
-                    {item('▭', 'New frame here', () => {
+                    <div style={{ fontSize: 9.5, letterSpacing: 0.5, color: '#7c8cff', padding: '3px 10px 2px', textTransform: 'uppercase' }}>Insert</div>
+                    {item('▭', 'Frame', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addNode('Frame', drillRoot || null, sx, sy)
@@ -4846,7 +4846,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('▦', 'New table here', () => {
+                    {item('✚', 'Node', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
+                    {item('▦', 'Table', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addTableNode(sx, sy)
@@ -4855,7 +4856,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('🗂️', 'New board here', () => {
+                    {item('🗂️', 'Board', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addKanbanNode(sx, sy)
@@ -4864,23 +4865,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('🖼️', 'Add image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
+                    {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
+                    {item('🎬', 'Video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
+                    {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
+                    {item('⬭', 'Container', () => {
+                      pushUndo()
+                      const { sx, sy } = contextMenu
+                      const id = addNode('Container', drillRoot || null, sx, sy)
+                      setNodeViewProp(id, 'shape', 'container'); setNodeViewProp(id, 'containerShape', 'rect')
+                      setSelected({ id, type: 'node' })
+                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                      close()
+                    })}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
-                    {item('🎬', 'Add video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
                     {item('▶️', 'Add YouTube…', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
                     {item('🔗', 'Add link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
-                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
-                    {item('🗂️', 'New view', () => { pushUndo(); addView(); close() })}
                     {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
-                    {item('🗂️', showViews ? 'Hide Views panel' : 'Show Views panel', () => { setShowViews(v => !v); close() })}
                     {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
                     {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
-                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('⊙', 'Release all anchors', () => { handleReleaseAll(); close() })}
                     {item(hideFrameOutlines ? '⊞' : '⊟', hideFrameOutlines ? 'Show frame outlines' : 'Hide frame outlines', () => { setHideFrameOutlines(v => !v); close() })}
                     {item('⤳', showFlowchart ? 'Hide flowchart' : 'Flowchart (Mermaid)', () => { setShowFlowchart(v => !v); close() })}
-                    {item('⤓', 'Export…', () => { setShowExport(true); close() })}
                   </>
                 )}
               </div>
