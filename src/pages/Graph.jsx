@@ -583,12 +583,11 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
   const stripRef = useRef(null)
   useEffect(() => { if (!recordPulse) return; setPulse(true); const t = setTimeout(() => setPulse(false), 700); return () => clearTimeout(t) }, [recordPulse])
 
-  const H = 56
-  const padX = 92, padR = 150   // room for the left label and the right controls
-  const trackW = Math.max(60, rect.width - padX - padR)
+  const H = 46
+  const padL = 14, padR = 128   // left inset for the first marker; right room for the controls
+  const pitch = 38               // fixed spacing — markers grow LEFT→RIGHT like typing a word
   const n = stages.length
-  const step = n > 1 ? trackW / (n - 1) : 0
-  const markerX = (i) => padX + (n > 1 ? i * step : trackW / 2)
+  const markerX = (i) => padL + i * pitch
 
   const startDrag = (e, i) => {
     e.stopPropagation(); e.preventDefault()
@@ -597,7 +596,7 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
     const onUp = (ev) => {
       window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp)
       const dropX = ev.clientX - rect.left
-      const to = Math.max(0, Math.min(n - 1, Math.round((dropX - padX) / (step || 1))))
+      const to = Math.max(0, Math.min(n - 1, Math.round((dropX - padL) / pitch)))
       const moved = Math.abs(ev.clientX - startX) > 6
       setDrag(null)
       if (moved && to !== i) onReorder(i, to)
@@ -608,19 +607,13 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
 
   const dot = '#5b6af0', dotOn = '#8ea2ff'
   return (
-    <div ref={stripRef} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
+    <div ref={stripRef} title={frameName ? `Stages · ${frameName}` : 'Stages'} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
       style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width, height: H, zIndex: 60,
-        background: '#12122aee', border: '1px solid #2d3a6a', borderRadius: 12, backdropFilter: 'blur(6px)',
-        boxShadow: '0 10px 34px rgba(0,0,0,0.55)', fontFamily: '-apple-system, sans-serif', color: '#c5d0ff',
-        display: 'flex', alignItems: 'center', userSelect: 'none' }}>
-      {/* Left label */}
-      <div style={{ position: 'absolute', left: 12, top: 0, height: H, display: 'flex', alignItems: 'center', gap: 6, maxWidth: padX - 16, overflow: 'hidden' }}>
-        <span style={{ fontSize: 15 }}>🎬</span>
-        <span style={{ fontSize: 11.5, color: '#9fb0e8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{frameName || 'Frame'}</span>
-      </div>
-
-      {/* Track line */}
-      <div style={{ position: 'absolute', left: markerX(0), right: rect.width - markerX(n - 1), top: H / 2 - 1, height: 2, background: '#2f3a68', borderRadius: 2 }} />
+        background: '#12122aee', border: '1px solid #2d3a6a', borderRadius: 10, backdropFilter: 'blur(6px)',
+        boxShadow: '0 8px 26px rgba(0,0,0,0.55)', fontFamily: '-apple-system, sans-serif', color: '#c5d0ff',
+        overflow: 'visible', userSelect: 'none' }}>
+      {/* Track line — from the first marker to the last (left-aligned run) */}
+      {n > 1 && <div style={{ position: 'absolute', left: markerX(0), width: markerX(n - 1) - markerX(0), top: H / 2 - 1, height: 2, background: '#2f3a68', borderRadius: 2 }} />}
 
       {/* Markers */}
       {stages.map((s, i) => {
@@ -628,35 +621,32 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
         const on = i === currentIdx
         const timed = s.advance && typeof s.advance === 'object' && s.advance.after > 0
         return (
-          <div key={s.id} style={{ position: 'absolute', left: cx, top: 0, height: H, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+          <div key={s.id} style={{ position: 'absolute', left: cx, top: 0, height: H, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: drag && drag.from === i ? 3 : 1 }}>
             {editingIdx === i ? (
               <input autoFocus defaultValue={s.name}
                 onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { onRename(i, e.currentTarget.value); setEditingIdx(null) } else if (e.key === 'Escape') setEditingIdx(null) }}
                 onBlur={e => { onRename(i, e.currentTarget.value); setEditingIdx(null) }}
-                style={{ width: 84, fontSize: 11, textAlign: 'center', background: '#0c0c1a', color: '#dbe4ff', border: '1px solid #3a4a8a', borderRadius: 5, padding: '2px 4px' }} />
-            ) : (
+                style={{ width: 78, fontSize: 11, textAlign: 'center', background: '#0c0c1a', color: '#dbe4ff', border: '1px solid #3a4a8a', borderRadius: 5, padding: '2px 4px' }} />
+            ) : (<>
               <div onMouseDown={e => startDrag(e, i)} onDoubleClick={e => { e.stopPropagation(); setEditingIdx(i) }}
-                title={`${s.name} — click to edit, double-click to rename, drag to reorder`}
-                style={{ cursor: 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                <div style={{ width: on ? 18 : 14, height: on ? 18 : 14, borderRadius: '50%', background: on ? dotOn : '#12122a', border: `2px solid ${on ? dotOn : dot}`, boxShadow: on ? `0 0 0 3px ${dot}44` : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all .12s' }}>
-                  {on && pulse ? <span style={{ fontSize: 9, color: '#0c0c1a' }}>●</span> : <span style={{ fontSize: 9, color: on ? '#0c0c1a' : '#9aa8d8', fontWeight: 700 }}>{i + 1}</span>}
-                </div>
-                <span style={{ fontSize: 9.5, color: on ? '#c5d0ff' : '#7c8cff', maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                title={`${s.name} — click to edit · double-click to rename · drag to reorder`}
+                style={{ cursor: 'grab', width: on ? 20 : 15, height: on ? 20 : 15, borderRadius: '50%', background: on ? dotOn : '#12122a', border: `2px solid ${on ? dotOn : dot}`, boxShadow: on ? `0 0 0 3px ${dot}44` : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all .12s' }}>
+                {on && pulse ? <span style={{ fontSize: 10, color: '#0c0c1a' }}>●</span> : <span style={{ fontSize: 9, color: on ? '#0c0c1a' : '#9aa8d8', fontWeight: 700 }}>{i + 1}</span>}
               </div>
-            )}
-            {/* Advance-trigger badge (skip on stage 1 — it's the start pose) */}
-            {i > 0 && editingIdx !== i && (
-              <button onClick={e => { e.stopPropagation(); setAdvOpen(advOpen === i ? null : i) }}
-                title="How this stage begins (click vs timed)"
-                style={{ position: 'absolute', top: 2, right: -6, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 9.5, color: timed ? '#f6ad55' : '#7c8cff', padding: 0 }}>
-                {timed ? `⏱${s.advance.after}s` : 'click'}
-              </button>
-            )}
-            {/* Delete (hover) */}
-            {n > 1 && editingIdx !== i && (
-              <button onClick={e => { e.stopPropagation(); onDelete(i) }} title="Delete stage"
-                style={{ position: 'absolute', top: 2, left: -8, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 11, color: '#f87171', padding: 0, opacity: 0.75 }}>×</button>
-            )}
+              {/* Advance-trigger badge below the dot (skip stage 1 — the start pose) */}
+              {i > 0 && (
+                <button onClick={e => { e.stopPropagation(); setAdvOpen(advOpen === i ? null : i) }}
+                  title="How this stage begins (click vs timed)"
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 8.5, lineHeight: 1, color: timed ? '#f6ad55' : '#8ea2ff', padding: 0 }}>
+                  {timed ? `⏱${s.advance.after}s` : 'click'}
+                </button>
+              )}
+              {/* Delete — small × above the dot */}
+              {n > 1 && (
+                <button onClick={e => { e.stopPropagation(); onDelete(i) }} title="Delete stage"
+                  style={{ position: 'absolute', top: 1, right: -7, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 10, color: '#f87171', padding: 0, opacity: 0.7 }}>×</button>
+              )}
+            </>)}
             {/* Advance popover */}
             {advOpen === i && (
               <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H - 4, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 8, padding: 8, display: 'flex', flexDirection: 'column', gap: 6, width: 148, boxShadow: '0 8px 24px rgba(0,0,0,.6)' }}>
@@ -2970,11 +2960,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (nvp.shape === 'frame') return   // don't swallow other frames
       if (n.x >= fx - hw && n.x <= fx + hw && n.y >= fy - hh && n.y <= fy + hh) ids.add(n.id)
     })
-    // (c) expand to full subtrees so a captured parent brings its descendants along.
-    const q = [...ids]
-    while (q.length) { const cur = q.shift(); storeEdges.forEach(e => { if (e.source === cur && !ids.has(e.target)) { ids.add(e.target); q.push(e.target) } }) }
+    // NOTE: members are ONLY the nodes physically inside the frame (containment + geometry). We do NOT
+    // walk subtrees — a child that lives outside the frame is someone else's business, and pulling it in
+    // let a stage move/collapse far-away nodes ("stages messing with other nodes"). In-frame descendants
+    // are already caught geometrically; a collapsed in-frame parent hides its subtree via visibleNodeIds.
     return [...ids]
-  }, [storeNodes, storeEdges])
+  }, [storeNodes])
 
   const getFrameStages = useCallback((frameId) => (viewNodePropsRef.current[frameId]?.stages) || [], [])
 
@@ -5202,7 +5193,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         {!readOnly && !isPresenting && timelineFrameId == null && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (
           <button onClick={() => enterTimeline(selected.id)}
             style={{ position: 'absolute', left: 12, bottom: 64, zIndex: 40, background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 9, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 7 }}>
-            🎬 Edit builds{(getVP(selected.id).stages?.length) ? ` · ${getVP(selected.id).stages.length}` : ''}
+            🎬 Stages{(getVP(selected.id).stages?.length) ? ` · ${getVP(selected.id).stages.length}` : ''}
           </button>
         )}
 
@@ -5214,14 +5205,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const fr = NODE_R * (fvp.scale || 1)
           const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
           const halfW = fvp.frameHalfW ?? dHW, halfH = fvp.frameHalfH ?? dHH
-          const vpW = svgRef.current?.clientWidth || window.innerWidth
-          const vpH = svgRef.current?.clientHeight || window.innerHeight
-          const sxCenter = T.x + (fnode.x || 0) * T.k
-          const sBottom = T.y + ((fnode.y || 0) + halfH) * T.k
-          const stripH = 56
-          const width = Math.max(360, Math.min(2 * halfW * T.k, vpW - 24))
-          const left = Math.max(12, Math.min(vpW - width - 12, sxCenter - width / 2))
-          const top = Math.max(12, Math.min(vpH - stripH - 12, sBottom + 14))
+          // Pin the strip ALONG the frame's bottom edge — width = frame width, tracking pan/zoom. It sits
+          // just below the border. (You edit stages zoomed into the frame, so no viewport clamping.)
+          const left = T.x + ((fnode.x || 0) - halfW) * T.k
+          const width = 2 * halfW * T.k
+          const top = T.y + ((fnode.y || 0) + halfH) * T.k + 6
           const stages = fvp.stages || []
           return (
             <FrameTimeline
