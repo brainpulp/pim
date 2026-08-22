@@ -575,7 +575,7 @@ function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, 
 // rename, × to delete; the badge sets each stage's advance trigger (click vs timed). Editing the frame's
 // contents auto-records into the current stage (parent wires that up), so there's no Capture button.
 function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPulse,
-  onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onPlay, onStop, onNext, onExit, onRefit }) {
+  onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onSetSpeed, onPlay, onStop, onNext, onExit, onRefit }) {
   const [editingIdx, setEditingIdx] = useState(null)
   const [advOpen, setAdvOpen] = useState(null)
   const [drag, setDrag] = useState(null)   // { from, x } while dragging a marker
@@ -650,17 +650,31 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
             {/* Advance popover — with a click-away backdrop so it always dismisses */}
             {advOpen === i && (<>
               <div onMouseDown={e => { e.stopPropagation(); setAdvOpen(null) }} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
-              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H + 2, left: '50%', transform: 'translateX(-50%)', zIndex: 71, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 8, width: 190, boxShadow: '0 12px 30px rgba(0,0,0,.65)' }}>
+              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H + 2, left: '50%', transform: 'translateX(-50%)', zIndex: 71, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 8, width: 214, boxShadow: '0 12px 30px rgba(0,0,0,.65)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: 11, color: '#9fb0e8' }}>Stage {i + 1} begins</span>
                   <button onClick={() => setAdvOpen(null)} title="Close" style={{ background: 'transparent', border: 'none', color: '#8ea2ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>✕</button>
                 </div>
                 <button onClick={() => { onSetAdvance(i, 'click'); setAdvOpen(null) }}
-                  style={{ textAlign: 'left', fontSize: 12, color: !timed ? '#dbe4ff' : '#9fb0e8', background: !timed ? '#1e2547' : '#12122a', border: `1px solid ${!timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '8px 10px', cursor: 'pointer' }}>▸ On click / Next</button>
+                  style={{ textAlign: 'left', fontSize: 12, color: !timed ? '#dbe4ff' : '#9fb0e8', background: !timed ? '#1e2547' : '#12122a', border: `1px solid ${!timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '8px 10px', cursor: 'pointer' }}>▸ On click / key</button>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: timed ? '#1e2547' : '#12122a', border: `1px solid ${timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '6px 8px' }}>
                   <span style={{ fontSize: 12, color: timed ? '#f6ad55' : '#9fb0e8', flex: 1 }}>⏱ After {timed ? s.advance.after : 1}s</span>
                   <button onClick={() => onSetAdvance(i, { after: Math.max(0.5, (timed ? s.advance.after : 1) - 0.5) })} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 15 }}>−</button>
                   <button onClick={() => onSetAdvance(i, { after: (timed ? s.advance.after : 1) + 0.5 })} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 15 }}>+</button>
+                </div>
+                {/* Transition speed — how fast the move/morph INTO this stage plays */}
+                <div style={{ borderTop: '1px solid #20233f', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>Transition speed</span>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {[['Instant', 0], ['Fast', 180], ['Normal', 340], ['Slow', 700], ['Slower', 1200]].map(([label, ms]) => {
+                      const cur = s.dur != null ? s.dur : 340
+                      const on = cur === ms
+                      return (
+                        <button key={label} onClick={() => onSetSpeed(i, ms === 340 ? undefined : ms)}
+                          style={{ fontSize: 10.5, padding: '3px 7px', borderRadius: 6, cursor: 'pointer', color: on ? '#dbe4ff' : '#9fb0e8', background: on ? '#1e2547' : '#12122a', border: `1px solid ${on ? '#5b6af0' : '#2d3a6a'}` }}>{label}</button>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
             </>)}
@@ -3049,7 +3063,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       targets[id] = { x: s.x, y: s.y }
     })
     setStageOverlay({ vis, collapse, scale, style })
-    if (animate) animateNodesTo(Object.keys(targets), targets, 340)
+    const dur = stage.dur != null ? stage.dur : 340
+    if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()
   }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender, flagShapeMorphs])
@@ -3199,7 +3214,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     flagShapeMorphs(snap)
     applyStagePose(snap)
     const targets = {}; Object.entries(snap).forEach(([id, s]) => { targets[id] = { x: s.x, y: s.y } })
-    if (animate) animateNodesTo(Object.keys(targets), targets, 300)
+    const dur = stage.dur != null ? stage.dur : 300
+    if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()
   }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs])
@@ -3284,6 +3300,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, advance } : s))
   }, [getFrameStages, setNodeViewProp])
 
+  // Per-stage transition duration (ms) — how fast the move/morph INTO this stage plays. undefined = default.
+  const setTimelineStageSpeed = useCallback((idx, dur) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, dur } : s))
+  }, [getFrameStages, setNodeViewProp])
+
   // Auto-record: while editing (not playing), any change to the frame's members is snapshotted into the
   // current stage after a short debounce. Self-correcting: if the live arrangement already equals the
   // stored stage (e.g. right after we posed it), the snapshot matches and we skip the write.
@@ -3344,7 +3367,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const onKey = e => {
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); exitTimeline(); return }
-      if (e.key === 'ArrowRight' || (e.key === ' ' && timelinePlaying)) {
+      if (e.key === 'ArrowRight' || ((e.key === ' ' || e.key === 'Enter') && timelinePlaying)) {
         e.preventDefault(); e.stopImmediatePropagation()
         if (timelinePlaying) timelinePlayNext()
         else setTimelineStageIdx(i => { const n = Math.min(getFrameStages(timelineFrameId).length - 1, i + 1); gotoTimelineStage(n); return i })
@@ -5258,7 +5281,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               rect={{ left, top, width }} frameName={storeNodeById[timelineFrameId]?.label}
               stages={stages} currentIdx={timelineStageIdx} playing={timelinePlaying} recordPulse={timelineRecordPulse}
               onGoto={gotoTimelineStage} onAdd={addTimelineStage} onDelete={deleteTimelineStage}
-              onRename={renameTimelineStage} onReorder={reorderTimelineStage} onSetAdvance={setTimelineStageAdvance}
+              onRename={renameTimelineStage} onReorder={reorderTimelineStage} onSetAdvance={setTimelineStageAdvance} onSetSpeed={setTimelineStageSpeed}
               onPlay={startTimelinePlay} onStop={stopTimelinePlay} onNext={timelinePlayNext}
               onExit={exitTimeline} onRefit={() => { const fn = simNodesRef.current.find(n => n.id === timelineFrameId); if (fn) zoomToFrame(fn, true) }}
             />
