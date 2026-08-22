@@ -2757,12 +2757,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // collapse/expand — only unanchored ones get released back to the force layout.
     const npMap = view?.nodeProps || {}
     const anchorOf = (id) => { const p = npMap[id]; return (p && p.fx != null && p.fy != null) ? { x: p.fx, y: p.fy } : null }
-    const restoreOrRelease = (id) => {
-      const sn = simNodesRef.current.find(n => n.id === id); if (!sn) return
-      const a = anchorOf(id)
-      if (a) { sn.x = a.x; sn.y = a.y; sn.fx = a.x; sn.fy = a.y }   // keep the anchor
-      else { sn.fx = null; sn.fy = null }                          // let the force layout take over
-    }
 
     if (!wasCollapsed) {
       // Implode: animate descendants to the parent's position, THEN hide them.
@@ -2778,7 +2772,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const targets = {}
       descIds.forEach(id => { targets[id] = target })
       animateNodesTo(descIds, targets, 320, () => {
-        descIds.forEach(restoreOrRelease)   // preserve anchors; release the rest
+        // Keep the descendants pinned AT the parent while they fade out. Restoring them to their
+        // spread-out (or anchored) spots here makes them briefly reappear during the 0.38s opacity
+        // fade — which looks like the node "collapses and reopens on its own". Their true anchor
+        // lives in the store (viewProps.fx/fy), so the expand path still restores anchored ones.
+        descIds.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = parentX0; sn.y = parentY0; sn.fx = parentX0; sn.fy = parentY0 } })
         toggleCollapseNode(nodeId)
       })
     } else {
