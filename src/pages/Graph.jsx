@@ -636,9 +636,9 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
               {/* Advance-trigger badge below the dot (skip stage 1 — the start pose) */}
               {i > 0 && (
                 <button onClick={e => { e.stopPropagation(); setAdvOpen(advOpen === i ? null : i) }}
-                  title="How this stage begins (click vs timed)"
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 8.5, lineHeight: 1, color: timed ? '#f6ad55' : '#8ea2ff', padding: 0 }}>
-                  {timed ? `⏱${s.advance.after}s` : 'click'}
+                  title="How this stage begins — click to change"
+                  style={{ background: timed ? '#2a2036' : '#171c3f', border: `1px solid ${advOpen === i ? '#8ea2ff' : (timed ? '#6b4a1a' : '#2d3a6a')}`, borderRadius: 8, padding: '1px 7px', fontSize: 9.5, lineHeight: 1.5, color: timed ? '#f6ad55' : '#9fb0e8', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  {timed ? `⏱ ${s.advance.after}s` : '▸ click'}
                 </button>
               )}
               {/* Delete — small × above the dot */}
@@ -647,19 +647,23 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
                   style={{ position: 'absolute', top: 1, right: -7, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 10, color: '#f87171', padding: 0, opacity: 0.7 }}>×</button>
               )}
             </>)}
-            {/* Advance popover */}
-            {advOpen === i && (
-              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H - 4, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 8, padding: 8, display: 'flex', flexDirection: 'column', gap: 6, width: 148, boxShadow: '0 8px 24px rgba(0,0,0,.6)' }}>
-                <div style={{ fontSize: 10.5, color: '#9fb0e8' }}>This stage begins:</div>
+            {/* Advance popover — with a click-away backdrop so it always dismisses */}
+            {advOpen === i && (<>
+              <div onMouseDown={e => { e.stopPropagation(); setAdvOpen(null) }} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
+              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H + 2, left: '50%', transform: 'translateX(-50%)', zIndex: 71, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 8, width: 190, boxShadow: '0 12px 30px rgba(0,0,0,.65)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>Stage {i + 1} begins</span>
+                  <button onClick={() => setAdvOpen(null)} title="Close" style={{ background: 'transparent', border: 'none', color: '#8ea2ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>✕</button>
+                </div>
                 <button onClick={() => { onSetAdvance(i, 'click'); setAdvOpen(null) }}
-                  style={{ textAlign: 'left', fontSize: 11.5, color: !timed ? '#c5d0ff' : '#8090b8', background: !timed ? '#1e2547' : 'transparent', border: '1px solid #2d3a6a', borderRadius: 6, padding: '4px 7px', cursor: 'pointer' }}>On click / Next</button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <button onClick={() => onSetAdvance(i, { after: Math.max(0.5, (timed ? s.advance.after : 1) - 0.5) })} style={{ width: 22, height: 22, borderRadius: 5, border: '1px solid #2d3a6a', background: '#12122a', color: '#c5d0ff', cursor: 'pointer' }}>−</button>
-                  <span style={{ fontSize: 11.5, minWidth: 52, textAlign: 'center', color: timed ? '#f6ad55' : '#8090b8' }}>After {timed ? s.advance.after : 1}s</span>
-                  <button onClick={() => onSetAdvance(i, { after: (timed ? s.advance.after : 1) + 0.5 })} style={{ width: 22, height: 22, borderRadius: 5, border: '1px solid #2d3a6a', background: '#12122a', color: '#c5d0ff', cursor: 'pointer' }}>+</button>
+                  style={{ textAlign: 'left', fontSize: 12, color: !timed ? '#dbe4ff' : '#9fb0e8', background: !timed ? '#1e2547' : '#12122a', border: `1px solid ${!timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '8px 10px', cursor: 'pointer' }}>▸ On click / Next</button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: timed ? '#1e2547' : '#12122a', border: `1px solid ${timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '6px 8px' }}>
+                  <span style={{ fontSize: 12, color: timed ? '#f6ad55' : '#9fb0e8', flex: 1 }}>⏱ After {timed ? s.advance.after : 1}s</span>
+                  <button onClick={() => onSetAdvance(i, { after: Math.max(0.5, (timed ? s.advance.after : 1) - 0.5) })} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 15 }}>−</button>
+                  <button onClick={() => onSetAdvance(i, { after: (timed ? s.advance.after : 1) + 0.5 })} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 15 }}>+</button>
                 </div>
               </div>
-            )}
+            </>)}
           </div>
         )
       })}
@@ -1123,7 +1127,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (stageOverlay?.collapse) {
       for (const id in stageOverlay.collapse) { if (stageOverlay.collapse[id]) effCollapsed.add(id); else effCollapsed.delete(id) }
     }
-    // Hide the descendants of any collapsed, list-card, OR kanban node (the card renders that subtree itself).
+    // Stage visibility overrides: show/hide specific members (hiding a member hides its subtree).
+    // NB: this runs BEFORE the card/collapse subtree-hiding below, so a stage can never re-reveal the
+    // children a list/kanban/strategy card is standing in for (that regressed to "nodes + card at once").
+    if (stageOverlay?.vis) {
+      for (const id in stageOverlay.vis) {
+        if (stageOverlay.vis[id]) { base.add(id) }
+        else {
+          base.delete(id)
+          const q = [id]
+          while (q.length) { const cur = q.shift(); storeEdges.forEach(e => { if (e.source === cur && base.has(e.target)) { base.delete(e.target); q.push(e.target) } }) }
+        }
+      }
+    }
+    // Hide the descendants of any collapsed, list-card, kanban, OR strategy node (the card renders that
+    // subtree itself). Runs LAST so these always win over a stage's show overrides.
     if (effCollapsed.size || listNodeIds.length || kanbanNodeIds.length || strategyNodeIds.length) {
       const hidden = new Set()
       const q = [...effCollapsed, ...listNodeIds, ...kanbanNodeIds, ...strategyNodeIds]
@@ -1134,17 +1152,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })
       }
       hidden.forEach(id => base.delete(id))
-    }
-    // Stage visibility overrides: show/hide specific members (hiding a member hides its subtree).
-    if (stageOverlay?.vis) {
-      for (const id in stageOverlay.vis) {
-        if (stageOverlay.vis[id]) { base.add(id) }
-        else {
-          base.delete(id)
-          const q = [id]
-          while (q.length) { const cur = q.shift(); storeEdges.forEach(e => { if (e.source === cur && base.has(e.target)) { base.delete(e.target); q.push(e.target) } }) }
-        }
-      }
     }
     if (expandHops !== null) {
       ;[...base].forEach(id => { if (expandHops[id] === undefined) base.delete(id) })
