@@ -570,6 +570,130 @@ function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, 
   )
 }
 
+// On-frame "builds" timeline — a screen-space strip pinned under the frame (clamped to the viewport so
+// it's always usable at any zoom). Markers = stages: click to edit, drag to reorder, double-click to
+// rename, × to delete; the badge sets each stage's advance trigger (click vs timed). Editing the frame's
+// contents auto-records into the current stage (parent wires that up), so there's no Capture button.
+function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPulse,
+  onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onPlay, onStop, onNext, onExit, onRefit }) {
+  const [editingIdx, setEditingIdx] = useState(null)
+  const [advOpen, setAdvOpen] = useState(null)
+  const [drag, setDrag] = useState(null)   // { from, x } while dragging a marker
+  const [pulse, setPulse] = useState(false)
+  const stripRef = useRef(null)
+  useEffect(() => { if (!recordPulse) return; setPulse(true); const t = setTimeout(() => setPulse(false), 700); return () => clearTimeout(t) }, [recordPulse])
+
+  const H = 56
+  const padX = 92, padR = 150   // room for the left label and the right controls
+  const trackW = Math.max(60, rect.width - padX - padR)
+  const n = stages.length
+  const step = n > 1 ? trackW / (n - 1) : 0
+  const markerX = (i) => padX + (n > 1 ? i * step : trackW / 2)
+
+  const startDrag = (e, i) => {
+    e.stopPropagation(); e.preventDefault()
+    const startX = e.clientX
+    const onMove = (ev) => setDrag({ from: i, x: ev.clientX - rect.left })
+    const onUp = (ev) => {
+      window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp)
+      const dropX = ev.clientX - rect.left
+      const to = Math.max(0, Math.min(n - 1, Math.round((dropX - padX) / (step || 1))))
+      const moved = Math.abs(ev.clientX - startX) > 6
+      setDrag(null)
+      if (moved && to !== i) onReorder(i, to)
+      else onGoto(i)   // treat as a click
+    }
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+  }
+
+  const dot = '#5b6af0', dotOn = '#8ea2ff'
+  return (
+    <div ref={stripRef} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
+      style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width, height: H, zIndex: 60,
+        background: '#12122aee', border: '1px solid #2d3a6a', borderRadius: 12, backdropFilter: 'blur(6px)',
+        boxShadow: '0 10px 34px rgba(0,0,0,0.55)', fontFamily: '-apple-system, sans-serif', color: '#c5d0ff',
+        display: 'flex', alignItems: 'center', userSelect: 'none' }}>
+      {/* Left label */}
+      <div style={{ position: 'absolute', left: 12, top: 0, height: H, display: 'flex', alignItems: 'center', gap: 6, maxWidth: padX - 16, overflow: 'hidden' }}>
+        <span style={{ fontSize: 15 }}>🎬</span>
+        <span style={{ fontSize: 11.5, color: '#9fb0e8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{frameName || 'Frame'}</span>
+      </div>
+
+      {/* Track line */}
+      <div style={{ position: 'absolute', left: markerX(0), right: rect.width - markerX(n - 1), top: H / 2 - 1, height: 2, background: '#2f3a68', borderRadius: 2 }} />
+
+      {/* Markers */}
+      {stages.map((s, i) => {
+        const cx = drag && drag.from === i ? drag.x : markerX(i)
+        const on = i === currentIdx
+        const timed = s.advance && typeof s.advance === 'object' && s.advance.after > 0
+        return (
+          <div key={s.id} style={{ position: 'absolute', left: cx, top: 0, height: H, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+            {editingIdx === i ? (
+              <input autoFocus defaultValue={s.name}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { onRename(i, e.currentTarget.value); setEditingIdx(null) } else if (e.key === 'Escape') setEditingIdx(null) }}
+                onBlur={e => { onRename(i, e.currentTarget.value); setEditingIdx(null) }}
+                style={{ width: 84, fontSize: 11, textAlign: 'center', background: '#0c0c1a', color: '#dbe4ff', border: '1px solid #3a4a8a', borderRadius: 5, padding: '2px 4px' }} />
+            ) : (
+              <div onMouseDown={e => startDrag(e, i)} onDoubleClick={e => { e.stopPropagation(); setEditingIdx(i) }}
+                title={`${s.name} — click to edit, double-click to rename, drag to reorder`}
+                style={{ cursor: 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <div style={{ width: on ? 18 : 14, height: on ? 18 : 14, borderRadius: '50%', background: on ? dotOn : '#12122a', border: `2px solid ${on ? dotOn : dot}`, boxShadow: on ? `0 0 0 3px ${dot}44` : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all .12s' }}>
+                  {on && pulse ? <span style={{ fontSize: 9, color: '#0c0c1a' }}>●</span> : <span style={{ fontSize: 9, color: on ? '#0c0c1a' : '#9aa8d8', fontWeight: 700 }}>{i + 1}</span>}
+                </div>
+                <span style={{ fontSize: 9.5, color: on ? '#c5d0ff' : '#7c8cff', maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+              </div>
+            )}
+            {/* Advance-trigger badge (skip on stage 1 — it's the start pose) */}
+            {i > 0 && editingIdx !== i && (
+              <button onClick={e => { e.stopPropagation(); setAdvOpen(advOpen === i ? null : i) }}
+                title="How this stage begins (click vs timed)"
+                style={{ position: 'absolute', top: 2, right: -6, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 9.5, color: timed ? '#f6ad55' : '#7c8cff', padding: 0 }}>
+                {timed ? `⏱${s.advance.after}s` : 'click'}
+              </button>
+            )}
+            {/* Delete (hover) */}
+            {n > 1 && editingIdx !== i && (
+              <button onClick={e => { e.stopPropagation(); onDelete(i) }} title="Delete stage"
+                style={{ position: 'absolute', top: 2, left: -8, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 11, color: '#f87171', padding: 0, opacity: 0.75 }}>×</button>
+            )}
+            {/* Advance popover */}
+            {advOpen === i && (
+              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H - 4, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 8, padding: 8, display: 'flex', flexDirection: 'column', gap: 6, width: 148, boxShadow: '0 8px 24px rgba(0,0,0,.6)' }}>
+                <div style={{ fontSize: 10.5, color: '#9fb0e8' }}>This stage begins:</div>
+                <button onClick={() => { onSetAdvance(i, 'click'); setAdvOpen(null) }}
+                  style={{ textAlign: 'left', fontSize: 11.5, color: !timed ? '#c5d0ff' : '#8090b8', background: !timed ? '#1e2547' : 'transparent', border: '1px solid #2d3a6a', borderRadius: 6, padding: '4px 7px', cursor: 'pointer' }}>On click / Next</button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <button onClick={() => onSetAdvance(i, { after: Math.max(0.5, (timed ? s.advance.after : 1) - 0.5) })} style={{ width: 22, height: 22, borderRadius: 5, border: '1px solid #2d3a6a', background: '#12122a', color: '#c5d0ff', cursor: 'pointer' }}>−</button>
+                  <span style={{ fontSize: 11.5, minWidth: 52, textAlign: 'center', color: timed ? '#f6ad55' : '#8090b8' }}>After {timed ? s.advance.after : 1}s</span>
+                  <button onClick={() => onSetAdvance(i, { after: (timed ? s.advance.after : 1) + 0.5 })} style={{ width: 22, height: 22, borderRadius: 5, border: '1px solid #2d3a6a', background: '#12122a', color: '#c5d0ff', cursor: 'pointer' }}>+</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* + add stage, just past the last marker */}
+      <button onClick={e => { e.stopPropagation(); onAdd() }} title="Add a stage (clones the current pose)"
+        style={{ position: 'absolute', left: markerX(n - 1) + 30, top: H / 2 - 13, width: 26, height: 26, borderRadius: '50%', border: '1.5px dashed #3a4a8a', background: '#12122a', color: '#8ea2ff', cursor: 'pointer', fontSize: 15, lineHeight: '22px' }}>+</button>
+
+      {/* Right controls */}
+      <div style={{ position: 'absolute', right: 10, top: 0, height: H, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {!playing ? (
+          <button onClick={e => { e.stopPropagation(); onPlay() }} title="Play the builds" style={ctrlBtn}>▶</button>
+        ) : (<>
+          <button onClick={e => { e.stopPropagation(); onNext() }} title="Next (→ / space)" style={ctrlBtn}>⏭</button>
+          <button onClick={e => { e.stopPropagation(); onStop() }} title="Stop playing" style={ctrlBtn}>⏹</button>
+        </>)}
+        <button onClick={e => { e.stopPropagation(); onRefit() }} title="Re-fit the frame" style={ctrlBtn}>⛶</button>
+        <button onClick={e => { e.stopPropagation(); onExit() }} title="Done (Esc)" style={{ ...ctrlBtn, color: '#f0a0a0' }}>✕</button>
+      </div>
+    </div>
+  )
+}
+const ctrlBtn = { width: 28, height: 28, borderRadius: 7, border: '1px solid #2d3a6a', background: '#1a1f4a', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+
 export default function Graph({ projectId, projectName, readOnly = false, sharedData = null }) {
   const svgRef = useRef()
   const simRef = useRef(null)
@@ -710,6 +834,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [stagePreview, setStagePreview] = useState(null)
   const [stageOverlay, setStageOverlay] = useState(null)
   const stageBasePosRef = useRef(null)
+  // On-frame timeline ("builds") editor: keyframe model — the canvas shows the current stage and edits
+  // auto-record into it. timelineFrameId = the frame being authored; timelineStageIdx = current stage;
+  // timelinePlaying = running the builds (non-destructive overlay). Decoupled from node selection so the
+  // strip stays up while you drag members around.
+  const [timelineFrameId, setTimelineFrameId] = useState(null)
+  const [timelineStageIdx, setTimelineStageIdx] = useState(0)
+  const [timelinePlaying, setTimelinePlaying] = useState(false)
+  const [timelineRecordPulse, setTimelineRecordPulse] = useState(0)   // bump → "●recorded" flash on marker
+  const timelinePlayTimerRef = useRef(null)
+  const timelineFrameIdRef = useRef(null)
+  useEffect(() => { timelineFrameIdRef.current = timelineFrameId }, [timelineFrameId])
   const saveTimer = useRef(null)
   const loadOkRef = useRef(false)   // true only after a successful project load — gates autosave
 
@@ -787,6 +922,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addNodeTag      = useGraphStore(s => s.addNodeTag)
   const removeNodeTag   = useGraphStore(s => s.removeNodeTag)
   const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
+  const applyStagePose  = useGraphStore(s => s.applyStagePose)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
   const setViewPan      = useGraphStore(s => s.setViewPan)
   const setSlideBgColor = useGraphStore(s => s.setSlideBgColor)
@@ -3025,6 +3161,173 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [storeEdges, focusNode, scheduleRender])
 
+  // ── On-frame timeline ("builds") — keyframe editor ──────────────────────────
+  // Pose the LIVE document to a stage (keyframe editing): anchors, visibility, scale, collapse are
+  // written to the store atomically, and the sim nodes glide to match. This is what makes selecting a
+  // stage actually move the frame's contents, so editing = editing that stage.
+  const applyStageToDoc = useCallback((frameId, idx, animate = true) => {
+    const stage = getFrameStages(frameId)[idx]; if (!stage) return
+    const snap = stage.snap || {}
+    applyStagePose(snap)
+    const targets = {}; Object.entries(snap).forEach(([id, s]) => { targets[id] = { x: s.x, y: s.y } })
+    if (animate) animateNodesTo(Object.keys(targets), targets, 300)
+    else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
+    scheduleRender()
+  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender])
+
+  const writeStageSnap = useCallback((frameId, idx, snap) => {
+    const stages = getFrameStages(frameId)
+    if (!stages[idx]) return
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, snap } : s))
+  }, [getFrameStages, setNodeViewProp])
+
+  // Enter timeline mode on a frame: fit it to the viewport, seed a first stage if none, pose stage 0.
+  const enterTimeline = useCallback((frameId) => {
+    if (stagePreview) exitStagePreview()
+    const fnode = simNodesRef.current.find(n => n.id === frameId)
+    let stages = getFrameStages(frameId)
+    if (!stages.length) {
+      const first = { id: crypto.randomUUID(), name: 'Stage 1', snap: snapshotFrame(frameId), advance: 'click' }
+      setNodeViewProp(frameId, 'stages', [first])
+      stages = [first]
+    }
+    setTimelineFrameId(frameId)
+    setTimelineStageIdx(0)
+    setTimelinePlaying(false)
+    if (fnode) zoomToFrame(fnode, true)
+  }, [stagePreview, exitStagePreview, getFrameStages, snapshotFrame, setNodeViewProp, zoomToFrame])
+
+  const exitTimeline = useCallback(() => {
+    if (timelinePlayTimerRef.current) { clearTimeout(timelinePlayTimerRef.current); timelinePlayTimerRef.current = null }
+    setStageOverlay(null)
+    stageBasePosRef.current = null
+    setTimelinePlaying(false)
+    setTimelineFrameId(null)
+  }, [])
+
+  // Go to (and edit) a stage: pose the doc to it. `record` first flushes the current arrangement into
+  // the stage we're leaving, so an un-saved tweak isn't lost when jumping away quickly.
+  const gotoTimelineStage = useCallback((idx) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    if (idx < 0 || idx >= stages.length) return
+    setTimelineStageIdx(idx)
+    applyStageToDoc(frameId, idx, true)
+  }, [getFrameStages, applyStageToDoc])
+
+  const addTimelineStage = useCallback(() => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    // New stage clones the CURRENT pose (so you start from where you are, then tweak) — keyframe style.
+    const next = { id: crypto.randomUUID(), name: `Stage ${stages.length + 1}`, snap: snapshotFrame(frameId), advance: 'click' }
+    setNodeViewProp(frameId, 'stages', [...stages, next])
+    setTimelineStageIdx(stages.length)
+  }, [getFrameStages, snapshotFrame, setNodeViewProp])
+
+  const deleteTimelineStage = useCallback((idx) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    if (stages.length <= 1) return   // keep at least one
+    const next = stages.filter((_, i) => i !== idx)
+    setNodeViewProp(frameId, 'stages', next)
+    setTimelineStageIdx(i => { const n = Math.max(0, Math.min(next.length - 1, i > idx ? i - 1 : i)); return n })
+  }, [getFrameStages, setNodeViewProp])
+
+  const reorderTimelineStage = useCallback((from, to) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    if (to < 0 || to >= stages.length || from === to) return
+    const next = [...stages]; const [moved] = next.splice(from, 1); next.splice(to, 0, moved)
+    setNodeViewProp(frameId, 'stages', next)
+    setTimelineStageIdx(to)
+  }, [getFrameStages, setNodeViewProp])
+
+  const renameTimelineStage = useCallback((idx, name) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, name } : s))
+  }, [getFrameStages, setNodeViewProp])
+
+  // Advance trigger: 'click' (wait for Next) or { after: seconds } (auto-play). Only used in Play mode.
+  const setTimelineStageAdvance = useCallback((idx, advance) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, advance } : s))
+  }, [getFrameStages, setNodeViewProp])
+
+  // Auto-record: while editing (not playing), any change to the frame's members is snapshotted into the
+  // current stage after a short debounce. Self-correcting: if the live arrangement already equals the
+  // stored stage (e.g. right after we posed it), the snapshot matches and we skip the write.
+  useEffect(() => {
+    if (timelineFrameId == null || timelinePlaying) return
+    const frameId = timelineFrameId, idx = timelineStageIdx
+    const t = setTimeout(() => {
+      const stages = getFrameStages(frameId)
+      if (!stages[idx]) return
+      const snap = snapshotFrame(frameId)
+      if (JSON.stringify(snap) === JSON.stringify(stages[idx].snap)) return   // nothing actually changed
+      writeStageSnap(frameId, idx, snap)
+      setTimelineRecordPulse(p => p + 1)
+    }, 500)
+    return () => clearTimeout(t)
+  }, [viewNodeProps, collapsedNodeIds, timelineFrameId, timelineStageIdx, timelinePlaying, getFrameStages, snapshotFrame, writeStageSnap])
+
+  // Play the builds non-destructively via the overlay, honoring each stage's advance trigger. Timed
+  // stages auto-advance; 'click' stages wait for Next (→ / space / the strip's ▶).
+  const timelinePlayStep = useCallback((idx) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId)
+    if (idx < 0 || idx >= stages.length) { return }
+    setTimelineStageIdx(idx)
+    applyStage(frameId, idx)   // overlay-based, non-destructive
+    if (timelinePlayTimerRef.current) { clearTimeout(timelinePlayTimerRef.current); timelinePlayTimerRef.current = null }
+    const nextIdx = idx + 1
+    const next = stages[nextIdx]
+    if (next && next.advance && typeof next.advance === 'object' && next.advance.after > 0) {
+      timelinePlayTimerRef.current = setTimeout(() => timelinePlayStep(nextIdx), next.advance.after * 1000 + 320)
+    }
+  }, [getFrameStages, applyStage])
+
+  const startTimelinePlay = useCallback(() => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    stageBasePosRef.current = null
+    setTimelinePlaying(true)
+    timelinePlayStep(0)
+  }, [timelinePlayStep])
+
+  const stopTimelinePlay = useCallback(() => {
+    if (timelinePlayTimerRef.current) { clearTimeout(timelinePlayTimerRef.current); timelinePlayTimerRef.current = null }
+    setTimelinePlaying(false)
+    exitStagePreview()   // clears overlay + restores base positions
+    // Re-pose the doc to whatever stage we ended on so edit mode resumes cleanly.
+    const frameId = timelineFrameIdRef.current
+    if (frameId != null) setTimeout(() => applyStageToDoc(frameId, timelineStageIdx, false), 300)
+  }, [exitStagePreview, applyStageToDoc, timelineStageIdx])
+
+  const timelinePlayNext = useCallback(() => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    setTimelineStageIdx(i => { const n = Math.min(getFrameStages(frameId).length - 1, i + 1); timelinePlayStep(n); return n })
+  }, [getFrameStages, timelinePlayStep])
+
+  // Keyboard: in timeline mode, ←/→ (and space in play mode) walk stages.
+  useEffect(() => {
+    if (timelineFrameId == null) return
+    const onKey = e => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); exitTimeline(); return }
+      if (e.key === 'ArrowRight' || (e.key === ' ' && timelinePlaying)) {
+        e.preventDefault(); e.stopImmediatePropagation()
+        if (timelinePlaying) timelinePlayNext()
+        else setTimelineStageIdx(i => { const n = Math.min(getFrameStages(timelineFrameId).length - 1, i + 1); gotoTimelineStage(n); return i })
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault(); e.stopImmediatePropagation()
+        if (!timelinePlaying) setTimelineStageIdx(i => { const n = Math.max(0, i - 1); gotoTimelineStage(n); return i })
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [timelineFrameId, timelinePlaying, timelinePlayNext, gotoTimelineStage, getFrameStages, exitTimeline])
+
   // Read the shared selection (from the docked outliner / command palette) → select that node here and
   // zoom to it (framing one generation of children). Guarded so a selection that ORIGINATED on this
   // canvas doesn't re-zoom. `focusNodeAndChildren` is declared just above, so referencing it is safe.
@@ -4895,23 +5198,39 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           })} />
         )}
 
-        {/* Frame stages panel — when a frame is selected */}
-        {!readOnly && !isPresenting && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (() => {
-          const fid = selected.id
-          const stages = getVP(fid).stages || []
-          const previewing = stagePreview?.frameId === fid
-          const activeIdx = previewing ? stagePreview.idx : -1
-          const previewAt = (i) => { if (previewing) { setStagePreview({ frameId: fid, idx: i }); applyStage(fid, i) } else enterStagePreview(fid, i) }
+        {/* "Edit builds" entry chip — shown when a frame is selected and we're not already editing it. */}
+        {!readOnly && !isPresenting && timelineFrameId == null && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (
+          <button onClick={() => enterTimeline(selected.id)}
+            style={{ position: 'absolute', left: 12, bottom: 64, zIndex: 40, background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 9, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 7 }}>
+            🎬 Edit builds{(getVP(selected.id).stages?.length) ? ` · ${getVP(selected.id).stages.length}` : ''}
+          </button>
+        )}
+
+        {/* On-frame timeline strip — screen-space, pinned under the frame and clamped to the viewport. */}
+        {!readOnly && !isPresenting && timelineFrameId != null && (() => {
+          const fnode = simNodesRef.current.find(n => n.id === timelineFrameId)
+          if (!fnode) return null
+          const fvp = getVP(timelineFrameId)
+          const fr = NODE_R * (fvp.scale || 1)
+          const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
+          const halfW = fvp.frameHalfW ?? dHW, halfH = fvp.frameHalfH ?? dHH
+          const vpW = svgRef.current?.clientWidth || window.innerWidth
+          const vpH = svgRef.current?.clientHeight || window.innerHeight
+          const sxCenter = T.x + (fnode.x || 0) * T.k
+          const sBottom = T.y + ((fnode.y || 0) + halfH) * T.k
+          const stripH = 56
+          const width = Math.max(360, Math.min(2 * halfW * T.k, vpW - 24))
+          const left = Math.max(12, Math.min(vpW - width - 12, sxCenter - width / 2))
+          const top = Math.max(12, Math.min(vpH - stripH - 12, sBottom + 14))
+          const stages = fvp.stages || []
           return (
-            <FrameStagesPanel
-              stages={stages} activeIdx={activeIdx} previewing={previewing}
-              onCapture={() => captureStage(fid)}
-              onDelete={(i) => { setStages(fid, stages.filter((_, j) => j !== i)); if (previewing) exitStagePreview() }}
-              onRename={(i, name) => setStages(fid, stages.map((s, j) => j === i ? { ...s, name } : s))}
-              onReorder={(i, dir) => { const j = i + dir; if (j < 0 || j >= stages.length) return; const st = [...stages];[st[i], st[j]] = [st[j], st[i]]; setStages(fid, st) }}
-              onPreview={previewAt}
-              onStep={(dir) => { if (!previewing) enterStagePreview(fid, 0); else stepStage(dir) }}
-              onExit={exitStagePreview}
+            <FrameTimeline
+              rect={{ left, top, width }} frameName={storeNodeById[timelineFrameId]?.label}
+              stages={stages} currentIdx={timelineStageIdx} playing={timelinePlaying} recordPulse={timelineRecordPulse}
+              onGoto={gotoTimelineStage} onAdd={addTimelineStage} onDelete={deleteTimelineStage}
+              onRename={renameTimelineStage} onReorder={reorderTimelineStage} onSetAdvance={setTimelineStageAdvance}
+              onPlay={startTimelinePlay} onStop={stopTimelinePlay} onNext={timelinePlayNext}
+              onExit={exitTimeline} onRefit={() => { const fn = simNodesRef.current.find(n => n.id === timelineFrameId); if (fn) zoomToFrame(fn, true) }}
             />
           )
         })()}

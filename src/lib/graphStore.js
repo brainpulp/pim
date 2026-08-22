@@ -861,6 +861,26 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id === s.activeViewId ? { ...v, collapsedNodeIds: [...new Set(ids)] } : v),
   })),
 
+  // Pose the live document to a frame-stage snapshot (keyframe editing): for each captured member set
+  // its anchor (fx/fy), visibility, scale and collapse state, all in ONE atomic update (no per-prop
+  // style-propagation side effects). `snap` = { [nodeId]: { v, x, y, s, c } }.
+  applyStagePose: (snap) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const nodeProps = { ...v.nodeProps }
+      const collapsed = new Set(v.collapsedNodeIds || [])
+      Object.entries(snap || {}).forEach(([id, sn]) => {
+        const cur = { ...(nodeProps[id] || {}) }
+        cur.fx = sn.x; cur.fy = sn.y
+        cur.visible = sn.v !== false
+        if (sn.s != null) cur.scale = sn.s
+        nodeProps[id] = cur
+        if (sn.c) collapsed.add(id); else collapsed.delete(id)
+      })
+      return { ...v, nodeProps, collapsedNodeIds: [...collapsed] }
+    }),
+  })),
+
   // "Show children as list" — render a node's whole subtree as one nested list card (per active view).
   // Its descendants are hidden from the canvas (like collapse); the card draws them as editable rows.
   // Toggling on also clears any plain-collapse state on that node (the two states are exclusive).
