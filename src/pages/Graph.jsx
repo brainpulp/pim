@@ -835,6 +835,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const timelinePlayTimerRef = useRef(null)
   const timelineFrameIdRef = useRef(null)
   useEffect(() => { timelineFrameIdRef.current = timelineFrameId }, [timelineFrameId])
+  // Shape-morph pops: SVG can't tween element types, so when a stage changes a member's shape we bump a
+  // per-node nonce → NodeShape replays a scale-pop. lastShownShapeRef tracks the on-screen shape so we
+  // only pop on an actual change between consecutive stages (not every apply).
+  const [shapeMorph, setShapeMorph] = useState({})
+  const morphCounterRef = useRef(0)
+  const lastShownShapeRef = useRef({})
   const saveTimer = useRef(null)
   const loadOkRef = useRef(false)   // true only after a successful project load — gates autosave
 
@@ -2999,6 +3005,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const setStages = useCallback((frameId, stages) => setNodeViewProp(frameId, 'stages', stages), [setNodeViewProp])
 
+  // Compare a stage's shapes to what's currently shown; bump the morph nonce for any that changed so
+  // NodeShape replays a scale-pop. Call this right before applying a stage (edit or play).
+  const flagShapeMorphs = useCallback((snap) => {
+    const changed = {}
+    Object.entries(snap || {}).forEach(([id, s]) => {
+      if (s.shp === undefined) return
+      const prev = lastShownShapeRef.current[id] ?? getVP(id).shape
+      if (s.shp !== prev) changed[id] = ++morphCounterRef.current
+      lastShownShapeRef.current[id] = s.shp
+    })
+    if (Object.keys(changed).length) setShapeMorph(m => ({ ...m, ...changed }))
+  }, [getVP])
+
   // Apply a stage as an overlay: set visibility/collapse overrides + animate member positions. No store writes.
   const applyStage = useCallback((frameId, idx, animate = true) => {
     const stage = getFrameStages(frameId)[idx]; if (!stage) return
@@ -3014,6 +3033,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Freeze the force sim while previewing so pinned stage positions actually hold (an unanchored
     // member would otherwise be shoved back to its force-layout spot the instant the tween ends).
     simRef.current?.alphaTarget(0).alpha(0).stop()
+    flagShapeMorphs(stage.snap)
     const vis = {}, collapse = {}, scale = {}, style = {}, targets = {}
     ids.forEach(id => {
       const s = stage.snap[id]; if (!s) return
@@ -3025,7 +3045,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (animate) animateNodesTo(Object.keys(targets), targets, 340)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()
-  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender])
+  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender, flagShapeMorphs])
 
   const enterStagePreview = useCallback((frameId, idx = 0) => {
     if (!getFrameStages(frameId).length) return
@@ -3169,12 +3189,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const applyStageToDoc = useCallback((frameId, idx, animate = true) => {
     const stage = getFrameStages(frameId)[idx]; if (!stage) return
     const snap = stage.snap || {}
+    flagShapeMorphs(snap)
     applyStagePose(snap)
     const targets = {}; Object.entries(snap).forEach(([id, s]) => { targets[id] = { x: s.x, y: s.y } })
     if (animate) animateNodesTo(Object.keys(targets), targets, 300)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()
-  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender])
+  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs])
 
   const writeStageSnap = useCallback((frameId, idx, snap) => {
     const stages = getFrameStages(frameId)
@@ -4302,6 +4323,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <g key={n.id} style={{ opacity: fo * dim, transition: 'opacity 0.38s ease', pointerEvents: fo === 0 ? 'none' : undefined }}>
               <NodeShape node={n}
                 modelThumb={getVP(n.id).model3dRotate === 'always' ? null : (liveThumbsRef.current[n.id] || storeNodes.find(s => s.id === n.id)?.modelThumb)}
+                morphNonce={shapeMorph[n.id] || 0}
                 imageUrl={storeNodes.find(s => s.id === n.id)?.imageUrl || ''}
                 viewProps={resolveVP(n.id)}
                 isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
@@ -5216,10 +5238,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
           const halfW = fvp.frameHalfW ?? dHW, halfH = fvp.frameHalfH ?? dHH
           // Pin the strip ALONG the frame's bottom edge — width = frame width, tracking pan/zoom. It sits
-          // just below the border. (You edit stages zoomed into the frame, so no viewport clamping.)
-          const left = T.x + ((fnode.x || 0) - halfW) * T.k
+          // just below the border. Positions are viewport-relative (position:fixed), so we add the SVG's
+          // on-screen offset (the canvas starts to the right of the sidebar). (No viewport clamping — you
+          // edit stages zoomed into the frame.)
+          const box = svgRef.current?.getBoundingClientRect() || { left: 0, top: 0 }
+          const left = box.left + T.x + ((fnode.x || 0) - halfW) * T.k
           const width = 2 * halfW * T.k
-          const top = T.y + ((fnode.y || 0) + halfH) * T.k + 6
+          const top = box.top + T.y + ((fnode.y || 0) + halfH) * T.k + 6
           const stages = fvp.stages || []
           return (
             <FrameTimeline
@@ -7763,7 +7788,7 @@ function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isAct
 
 // â"€â"€â"€ NodeShape â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, zoomK, propertyDefs, nodeProps, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb }) {
+function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoEdit, onAutoEditDone, keepEdit, onKeepEditDone, onMouseDown, onConnectorMouseDown, onScaleMouseDown, onBoxScaleMouseDown, zoomK, propertyDefs, nodeProps, onSetLabelWidth, onResetLabelWidth, onDelete, onLabelChange, onTab, onCreateSister, onShowNotePopup, onEmojiDragStart, onRemoveEmoji, onEmojiResizeStart, onImageDragStart, onImageResizeStart, onImageCropDragStart, onRemoveNodeImage, hasChildren, isCollapsed, onToggleCollapse, onMouseEnter, onMouseLeave, modelThumb, morphNonce }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [croppingImgId, setCroppingImgId] = useState(null)
@@ -7957,6 +7982,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             </filter>
           </defs>
         )}
+        <g key={`morph-${morphNonce || 0}`} style={morphNonce ? { animation: 'pim-shape-morph 0.42s ease' } : undefined}>
         <g style={viewProps.spin ? { animation: `pim-spin ${viewProps.spin}s linear infinite`, transformOrigin: 'center', transformBox: 'fill-box' } : undefined}>
         <g filter={hasShadow ? `url(#${shadowFilterId})` : undefined}>
         {viewProps.borderFx ? (
@@ -7985,6 +8011,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
           <ShapeBody shape={shape} halfW={bodyHalfW} halfH={bodyHalfH} r={bodyR} fill={fill}
             stroke={viewProps.strokeColor || "none"} strokeWidth={viewProps.strokeColor ? (viewProps.strokeWidth || 1.5) : 0} strokeDash={viewProps.strokeDash} />
         )}
+        </g>
         </g>
         </g>
 
