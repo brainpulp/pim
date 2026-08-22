@@ -814,6 +814,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const presentingSlideIdxRef = useRef(null)
   const slideNavFocusRef = useRef(false)   // true when the slide sidebar was the last thing clicked → arrows scrub slides
   const slideCursorRef = useRef(0)         // which slide the arrow-scrub cursor is on (edit mode, not presenting)
+  const presentStageIdxRef = useRef(0)     // which build/stage of the current slide is showing while presenting
+  const [presentStageIdx, setPresentStageIdx] = useState(0)   // reactive mirror for the footer counter
+  const setPresentStage = (i) => { presentStageIdxRef.current = i; setPresentStageIdx(i) }
   const [sidebarWidth, setSidebarWidth] = useState(220)
   const liveThumbsRef = useRef({}) // nodeId → latest PNG data URL; updated immediately on capture
   const [fullscreen3dId, setFullscreen3dId] = useState(null)
@@ -2124,16 +2127,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         }
         if (fullscreen3dId) { setFullscreen3dId(null); return }
         if (selectedNodeIds.size > 0) { setSelectedNodeIds(new Set()); return }
-        if (presentingSlideIdx !== null) { setPresentingSlideIdx(null); return }
+        if (presentingSlideIdx !== null) { exitPresentation(); return }
         setSelected(null); setSelectedImageIds(new Set()); setConfirmDelete(null); setConfirmDeleteNodes(null); return
       }
 
-      // Presentation mode arrow navigation
+      // Presentation mode — TWO key sets:
+      //   BUILDS (stages):  → / Space / Enter = next build, ← = previous build (crossing slides at the ends)
+      //   SLIDES (jump):    ↓ / PageDown = next slide, ↑ / PageUp = previous slide (skips remaining builds)
       if (presentingSlideIdx !== null) {
-        if (e.key === 'ArrowLeft') { e.preventDefault(); navigateSlide(-1); return }
-        if (e.key === 'ArrowRight') { e.preventDefault(); navigateSlide(1); return }
-        if (e.key === 'ArrowUp') { e.preventDefault(); if (slideSimNodes.length > 0) { setPresentingSlideIdx(0); zoomToFrame(slideSimNodes[0]) } return }
-        if (e.key === 'ArrowDown') { e.preventDefault(); if (slideSimNodes.length > 0) { const last = slideSimNodes.length - 1; setPresentingSlideIdx(last); zoomToFrame(slideSimNodes[last]) } return }
+        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); advanceBuild(1); return }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); advanceBuild(-1); return }
+        if (e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); jumpSlide(1); return }
+        if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); jumpSlide(-1); return }
         return
       }
 
@@ -4013,7 +4018,44 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setTimeout(() => simRef.current?.restart(), 700)
   }
 
-  const exitPresentation = () => { setPresentingSlideIdx(null) }
+  // ── Presentation with frame "builds" ────────────────────────────────────────
+  // A slide is a frame; its stages are builds played within it. Two key sets: ←/→ (+ space/enter) walk
+  // BUILDS (crossing slide boundaries at the ends); ↑/↓ (PageUp/Down) jump SLIDES directly. When you land
+  // on a slide going FORWARD it resets to its first build; going BACKWARD it shows its last (fully built).
+  const restoreOverlayInstant = () => {
+    const bp = stageBasePosRef.current
+    if (bp) {
+      Object.keys(bp.pos).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = bp.pos[id].x; sn.y = bp.pos[id].y; sn.fx = bp.pos[id].fx; sn.fy = bp.pos[id].fy } })
+      stageBasePosRef.current = null
+    }
+    setStageOverlay(null)
+  }
+  const slideStages = (idx) => { const f = slideSimNodes[idx]; return f ? (getVP(f.id).stages || []) : [] }
+  const presentSlide = (idx, direction) => {
+    if (idx < 0 || idx >= slideSimNodes.length) return
+    restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
+    setPresentingSlideIdx(idx)
+    simRef.current?.stop()
+    zoomToFrame(slideSimNodes[idx])
+    const stages = slideStages(idx)
+    const sIdx = stages.length ? (direction === 'back' ? stages.length - 1 : 0) : 0
+    setPresentStage(sIdx)
+    if (stages.length) setTimeout(() => applyStage(slideSimNodes[idx].id, sIdx), 60)
+  }
+  const advanceBuild = (dir) => {
+    const cur = presentingSlideIdxRef.current ?? 0
+    const frame = slideSimNodes[cur]; if (!frame) return
+    const stages = slideStages(cur)
+    if (!stages.length) { presentSlide(cur + dir, dir > 0 ? 'fwd' : 'back'); return }
+    const next = presentStageIdxRef.current + dir
+    if (next >= stages.length) { presentSlide(cur + 1, 'fwd'); return }
+    if (next < 0) { presentSlide(cur - 1, 'back'); return }
+    setPresentStage(next)
+    applyStage(frame.id, next)
+  }
+  const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
+
+  const exitPresentation = () => { restoreOverlayInstant(); setPresentingSlideIdx(null); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
 
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
@@ -5357,11 +5399,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <div style={{ position:'absolute', bottom:24, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
               background:'rgba(10,10,24,0.88)', border:'1px solid #2d3a6a', borderRadius:10,
               padding:'8px 18px', display:'flex', gap:14, alignItems:'center', boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}>
-              <button style={canvasBtnStyle} onClick={() => navigateSlide(-1)}>← Prev</button>
-              <span style={{ color:'#88b4e8', fontSize:'0.85rem', minWidth:60, textAlign:'center' }}>
-                {(presentingSlideIdx ?? 0) + 1} / {slideSimNodes.length}
+              <button style={canvasBtnStyle} onClick={() => advanceBuild(-1)} title="Previous build (←)">← Prev</button>
+              <span style={{ color:'#88b4e8', fontSize:'0.85rem', minWidth:60, textAlign:'center', lineHeight:1.25 }}>
+                <div>Slide {(presentingSlideIdx ?? 0) + 1} / {slideSimNodes.length}</div>
+                {(() => { const st = slideSimNodes[presentingSlideIdx ?? 0]; const ns = st ? (getVP(st.id).stages || []).length : 0; return ns > 1 ? <div style={{ fontSize:'0.68rem', color:'#7c8cff' }}>build {presentStageIdx + 1} / {ns}</div> : null })()}
               </span>
-              <button style={canvasBtnStyle} onClick={() => navigateSlide(1)}>Next →</button>
+              <button style={canvasBtnStyle} onClick={() => advanceBuild(1)} title="Next build (→ / Space)">Next →</button>
+              <span style={{ color:'#5a6a9a', fontSize:'0.62rem', maxWidth:120, lineHeight:1.2 }}>↑↓ jump slides</span>
             </div>
           </div>
         )}
@@ -5389,6 +5433,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           getVP={getVP}
           zoomToFrame={zoomToFrame}
           setPresentingSlideIdx={setPresentingSlideIdx}
+          onPresent={(idx) => presentSlide(idx, 'fwd')}
           removeSlide={removeSlide}
           addSlide={addSlide}
           reorderSlides={reorderSlides}
@@ -5498,7 +5543,7 @@ function ThreeDWrapper({ children, onFocus }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const [dragIdx, setDragIdx] = useState(null)
@@ -5575,7 +5620,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
           <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
         </div>
         <button style={{ ...canvasBtnStyle, fontSize:'0.7rem', padding:'2px 6px' }}
-          onClick={() => { if (slideSimNodes.length) { setPresentingSlideIdx(0); zoomToFrame(slideSimNodes[0]) } }}
+          onClick={() => { if (slideSimNodes.length) (onPresent ? onPresent(0) : (setPresentingSlideIdx(0), zoomToFrame(slideSimNodes[0]))) }}
           disabled={!slideSimNodes.length}>▶ Present</button>
       </div>
 
@@ -5736,7 +5781,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
               ))}
             </div>
             <div style={{ borderTop:'1px solid #1e2a3a', margin:'4px 0' }} />
-            <div onClick={() => { const idx = slideSimNodes.findIndex(s => s.id === slideMenu.frameId); if (idx >= 0) { setPresentingSlideIdx(idx); zoomToFrame(slideSimNodes[idx]) } setSlideMenu(null) }}
+            <div onClick={() => { const idx = slideSimNodes.findIndex(s => s.id === slideMenu.frameId); if (idx >= 0) { onPresent ? onPresent(idx) : (setPresentingSlideIdx(idx), zoomToFrame(slideSimNodes[idx])) } setSlideMenu(null) }}
               onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
               style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Present from here</div>
             <div onClick={() => { removeSlide(slideMenu.frameId); setSlideMenu(null) }}
