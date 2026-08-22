@@ -940,6 +940,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addNodeTag      = useGraphStore(s => s.addNodeTag)
   const removeNodeTag   = useGraphStore(s => s.removeNodeTag)
   const toggleCollapseNode = useGraphStore(s => s.toggleCollapseNode)
+  const rerouteContainerLinks = useGraphStore(s => s.rerouteContainerLinks)
   const applyStagePose  = useGraphStore(s => s.applyStagePose)
   const setViewBgColor  = useGraphStore(s => s.setViewBgColor)
   const setViewPan      = useGraphStore(s => s.setViewPan)
@@ -991,21 +992,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const gs = useGraphStore.getState()
     const kids = gs.edges.filter(e => e.source === nodeId).map(e => e.target)
     const cn = simNodesRef.current.find(n => n.id === nodeId)
-    // Size to enclose the children (fallback to default if none placed yet).
-    let hw = NODE_R * 2.4, hh = NODE_R * 2.4
-    if (cn && kids.length) {
-      let maxdx = 0, maxdy = 0
-      kids.forEach(kid => { const sn = simNodesRef.current.find(n => n.id === kid); if (sn) { maxdx = Math.max(maxdx, Math.abs((sn.x || 0) - (cn.x || 0))); maxdy = Math.max(maxdy, Math.abs((sn.y || 0) - (cn.y || 0))) } })
-      hw = Math.max(hw, maxdx + NODE_R * 1.6); hh = Math.max(hh, maxdy + NODE_R * 1.6)
-    }
+    const cx = cn?.x || 0, cy = cn?.y || 0
+    // Box sized to comfortably hold the kids in a grid inside.
+    const cols = Math.max(1, Math.ceil(Math.sqrt(kids.length)))
+    const rows = Math.max(1, Math.ceil(kids.length / cols))
+    const cell = NODE_R * 2.6
+    const hw = Math.max(NODE_R * 2.4, (cols * cell) / 2 + NODE_R)
+    const hh = Math.max(NODE_R * 2.4, (rows * cell) / 2 + NODE_R * 1.4)
     pushUndo()
     setNodeViewProp(nodeId, 'shape', 'container')
     setNodeViewProp(nodeId, 'containerShape', 'rect')
     setNodeViewProp(nodeId, 'frameHalfW', hw)
     setNodeViewProp(nodeId, 'frameHalfH', hh)
-    if (cn) setAnchor(nodeId, cn.x || 0, cn.y || 0)
-    kids.forEach(kid => setContainedIn(kid, nodeId))
-  }, [pushUndo, setNodeViewProp, setAnchor, setContainedIn])
+    setNodeViewProp(nodeId, 'containerLinks', 'grandmother')   // links go to the grandmother by default
+    setNodeViewProp(nodeId, 'containerDragOut', 'springback')  // pulling a node out springs it back in
+    setAnchor(nodeId, cx, cy)
+    // Place every kid INSIDE the box (grid), mark contained, and let them float from there.
+    kids.forEach((kid, i) => {
+      setContainedIn(kid, nodeId)
+      const col = i % cols, row = Math.floor(i / cols)
+      const px = cx - (cols - 1) * cell / 2 + col * cell
+      const py = cy - (rows - 1) * cell / 2 + row * cell + NODE_R * 0.4
+      const sn = simNodesRef.current.find(n => n.id === kid)
+      if (sn) { sn.x = px; sn.y = py; sn.fx = null; sn.fy = null }
+      releaseAnchor(kid)
+    })
+    rerouteContainerLinks(nodeId, 'grandmother')
+    simRef.current?.alpha(0.5).restart()
+    scheduleRender()
+  }, [pushUndo, setNodeViewProp, setAnchor, setContainedIn, releaseAnchor, rerouteContainerLinks, scheduleRender])
 
   // Create a table node at the current viewport center (sidebar "+" menu path — no right-click needed).
   const addTableToCenter = useCallback(() => {
@@ -2625,8 +2640,31 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
           // Only record undo when the container actually changes (not on every plain move)
           const curContainer = viewNodePropsRef.current[nodeId]?.containedIn ?? null
-          if (newContainerId !== curContainer) pushUndo()
-          setContainedIn(nodeId, newContainerId)
+          const curCvp = curContainer ? (viewNodePropsRef.current[curContainer] || {}) : null
+          // Pulled OUT of a container to empty space: honor the container's drag-out mode.
+          if (curContainer && newContainerId === null && curCvp?.shape === 'container') {
+            const mode = curCvp.containerDragOut || 'springback'
+            if (mode === 'springback') {
+              // Snap the node back inside the box — it can't leave except into another container.
+              const cn = simNodesRef.current.find(n => n.id === curContainer)
+              const fr = NODE_R * (curCvp.scale || 1)
+              const { halfW: dHW, halfH: dHH } = shapeDims('container', fr)
+              const hw = (curCvp.frameHalfW ?? dHW) - NODE_R, hh = (curCvp.frameHalfH ?? dHH) - NODE_R
+              const nx = Math.max((cn?.x || 0) - hw, Math.min((cn?.x || 0) + hw, dropX))
+              const ny = Math.max((cn?.y || 0) - hh, Math.min((cn?.y || 0) + hh, dropY))
+              simNode.x = nx; simNode.y = ny; simNode.fx = null; simNode.fy = null
+              releaseAnchor(nodeId)
+              simRef.current?.alpha(0.4).restart()
+            } else {
+              // Release as standalone: leave the container and cut its incoming links (becomes a root).
+              pushUndo()
+              setContainedIn(nodeId, null)
+              useGraphStore.getState().edges.filter(e => e.target === nodeId).forEach(e => removeEdge(e.id))
+            }
+          } else {
+            if (newContainerId !== curContainer) pushUndo()
+            setContainedIn(nodeId, newContainerId)
+          }
         }
       }
       document.removeEventListener('mousemove', onMove)
@@ -2634,7 +2672,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage])
+  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage, removeEdge, pushUndo])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -5372,6 +5410,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             🎬 Stages{(getVP(selected.id).stages?.length) ? ` · ${getVP(selected.id).stages.length}` : ''}
           </button>
         )}
+
+        {/* Container options — shown when a container node is selected. */}
+        {!readOnly && !isPresenting && selected?.type === 'node' && getVP(selected.id).shape === 'container' && (() => {
+          const cid = selected.id, cvp = getVP(cid)
+          const links = cvp.containerLinks || 'grandmother'
+          const dragOut = cvp.containerDragOut || 'springback'
+          const cshape = cvp.containerShape || 'rect'
+          const seg = (label, active, onClick) => (
+            <button onClick={onClick} style={{ flex: 1, background: active ? '#1e2547' : '#12122a', border: `1px solid ${active ? '#5b6af0' : '#2d3a6a'}`, color: active ? '#dbe4ff' : '#9fb0e8', borderRadius: 6, padding: '4px 6px', cursor: 'pointer', fontSize: 11 }}>{label}</button>
+          )
+          return (
+            <div onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
+              style={{ position: 'absolute', left: 12, bottom: 64, zIndex: 40, width: 210, background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,0.55)', padding: 10, fontFamily: '-apple-system, sans-serif', color: '#c5d0ff', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>⬭ Container</div>
+              <div><div style={{ fontSize: 10.5, color: '#9fb0e8', marginBottom: 3 }}>Shape</div>
+                <div style={{ display: 'flex', gap: 5 }}>{seg('○ Circle', cshape === 'circle', () => setNodeViewProp(cid, 'containerShape', 'circle'))}{seg('▢ Rect', cshape === 'rect', () => setNodeViewProp(cid, 'containerShape', 'rect'))}</div></div>
+              <div><div style={{ fontSize: 10.5, color: '#9fb0e8', marginBottom: 3 }}>Child links point to</div>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  {seg('Grandmother', links === 'grandmother', () => { setNodeViewProp(cid, 'containerLinks', 'grandmother'); rerouteContainerLinks(cid, 'grandmother') })}
+                  {seg('Container', links === 'container', () => { setNodeViewProp(cid, 'containerLinks', 'container'); rerouteContainerLinks(cid, 'container') })}
+                </div></div>
+              <div><div style={{ fontSize: 10.5, color: '#9fb0e8', marginBottom: 3 }}>When a node is pulled out</div>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  {seg('Spring back', dragOut === 'springback', () => setNodeViewProp(cid, 'containerDragOut', 'springback'))}
+                  {seg('Release', dragOut === 'release', () => setNodeViewProp(cid, 'containerDragOut', 'release'))}
+                </div></div>
+            </div>
+          )
+        })()}
 
         {/* On-frame timeline strip — screen-space, pinned under the frame and clamped to the viewport. */}
         {!readOnly && !isPresenting && timelineFrameId != null && (() => {

@@ -475,6 +475,32 @@ const useGraphStore = create((set, get) => ({
     views: patchViewNode(s.views, s.activeViewId, nodeId, { containedIn: containerId }),
   })),
 
+  // Reroute a container's contained-children links: 'grandmother' makes each child a child of the
+  // container's OWN parent (skipping the container in the tree); 'container' points them back at the
+  // container. Membership stays in containedIn (spatial); this only rewrites the logical edges.
+  rerouteContainerLinks: (containerId, mode) => set(s => {
+    const gm = s.edges.find(e => e.target === containerId)?.source || null   // the container's parent
+    const kids = s.nodes.filter(n => {
+      const vp = s.views.find(v => v.id === s.activeViewId)?.nodeProps?.[n.id]
+      return vp?.containedIn === containerId
+    }).map(n => n.id)
+    let edges = s.edges
+    const hasEdge = (src, tgt) => edges.some(e => e.source === src && e.target === tgt)
+    const rid = () => (crypto?.randomUUID ? crypto.randomUUID() : 'e' + edges.length + Math.floor(performance.now()))
+    kids.forEach(kid => {
+      if (mode === 'grandmother') {
+        if (gm && gm !== kid) {   // only reroute when there's actually a grandmother to point at
+          edges = edges.filter(e => !(e.source === containerId && e.target === kid))   // drop container→kid
+          if (!hasEdge(gm, kid)) edges = [...edges, { id: rid(), source: gm, target: kid }]
+        }
+      } else {
+        if (gm) edges = edges.filter(e => !(e.source === gm && e.target === kid))     // drop grandmother→kid
+        if (containerId !== kid && !hasEdge(containerId, kid)) edges = [...edges, { id: rid(), source: containerId, target: kid }]
+      }
+    })
+    return { edges }
+  }),
+
   setAnchor: (id, fx, fy) => set(s => ({
     views: patchViewNode(s.views, s.activeViewId, id, { fx, fy }),
   })),
