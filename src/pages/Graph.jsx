@@ -1415,8 +1415,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Purely visual — the manual fillColor/scale stay underneath and return when Done.
   const resolveVP = useCallback((nodeId) => {
     let base = getVP(nodeId)
-    // Frame-stage preview can override a member's scale (a stage captures each member's size).
+    // Frame-stage preview can override a member's scale and style (a stage captures size + look).
     if (stageOverlay?.scale && stageOverlay.scale[nodeId] != null) base = { ...base, scale: stageOverlay.scale[nodeId] }
+    if (stageOverlay?.style && stageOverlay.style[nodeId]) {
+      const st = stageOverlay.style[nodeId]
+      base = { ...base, ...(st.fill !== undefined ? { fillColor: st.fill } : {}), ...(st.stroke !== undefined ? { strokeColor: st.stroke } : {}), ...(st.shape !== undefined ? { shape: st.shape } : {}) }
+    }
     if (!organize) return base
     const props = propsById[nodeId]
     if (!props) return base
@@ -2976,7 +2980,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     frameMembers(frameId).forEach(id => {
       const sn = simNodesRef.current.find(n => n.id === id)
       const vp = getVP(id)
-      snap[id] = { v: vp.visible !== false, x: sn?.x ?? vp.fx ?? 0, y: sn?.y ?? vp.fy ?? 0, s: vp.scale || 1, c: collapsed.has(id) }
+      snap[id] = { v: vp.visible !== false, x: sn?.x ?? vp.fx ?? 0, y: sn?.y ?? vp.fy ?? 0, s: vp.scale || 1, c: collapsed.has(id),
+        fill: vp.fillColor, stroke: vp.strokeColor, shp: vp.shape }
     })
     return snap
   }, [frameMembers, getVP])
@@ -3009,9 +3014,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Freeze the force sim while previewing so pinned stage positions actually hold (an unanchored
     // member would otherwise be shoved back to its force-layout spot the instant the tween ends).
     simRef.current?.alphaTarget(0).alpha(0).stop()
-    const vis = {}, collapse = {}, scale = {}, targets = {}
-    ids.forEach(id => { const s = stage.snap[id]; if (!s) return; vis[id] = s.v; collapse[id] = !!s.c; if (s.s != null) scale[id] = s.s; targets[id] = { x: s.x, y: s.y } })
-    setStageOverlay({ vis, collapse, scale })
+    const vis = {}, collapse = {}, scale = {}, style = {}, targets = {}
+    ids.forEach(id => {
+      const s = stage.snap[id]; if (!s) return
+      vis[id] = s.v; collapse[id] = !!s.c; if (s.s != null) scale[id] = s.s
+      if (s.fill !== undefined || s.stroke !== undefined || s.shp !== undefined) style[id] = { fill: s.fill, stroke: s.stroke, shape: s.shp }
+      targets[id] = { x: s.x, y: s.y }
+    })
+    setStageOverlay({ vis, collapse, scale, style })
     if (animate) animateNodesTo(Object.keys(targets), targets, 340)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()

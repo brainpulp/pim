@@ -874,6 +874,9 @@ const useGraphStore = create((set, get) => ({
         cur.fx = sn.x; cur.fy = sn.y
         cur.visible = sn.v !== false
         if (sn.s != null) cur.scale = sn.s
+        if (sn.fill !== undefined) cur.fillColor = sn.fill
+        if (sn.stroke !== undefined) cur.strokeColor = sn.stroke
+        if (sn.shp !== undefined) cur.shape = sn.shp
         nodeProps[id] = cur
         if (sn.c) collapsed.add(id); else collapsed.delete(id)
       })
