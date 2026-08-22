@@ -1020,7 +1020,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     rerouteContainerLinks(nodeId, 'grandmother')
     simRef.current?.alpha(0.5).restart()
     scheduleRender()
-  }, [pushUndo, setNodeViewProp, setAnchor, setContainedIn, releaseAnchor, rerouteContainerLinks, scheduleRender])
+  }, [pushUndo, setNodeViewProp, setAnchor, setContainedIn, releaseAnchor, rerouteContainerLinks]) // eslint-disable-line -- scheduleRender declared later (TDZ)
 
   // Create a table node at the current viewport center (sidebar "+" menu path — no right-click needed).
   const addTableToCenter = useCallback(() => {
