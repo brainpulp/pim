@@ -172,6 +172,7 @@ function shapeDims(shape, r, label, fontSize, widthOverride) {
     case '3d':        return { halfW: r * 2.5, halfH: r * 2.5 }
     case 'image':     return { halfW: r * 2.2, halfH: r * 1.6 }
     case 'frame':     return { halfW: r * 4.5, halfH: r * 3.5 }
+    case 'container': return { halfW: r * 2.4, halfH: r * 2.4 }
     case 'ellipse':   return { halfW: r * 1.45, halfH: r * 0.9 }
     case 'roundrect': return { halfW: r * 1.5,  halfH: r * 0.85 }
     case 'rect':      return { halfW: r * 1.5,  halfH: r * 0.85 }
@@ -971,6 +972,41 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }, 0)
   }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line
 
+  // Blank container at viewport center — toss nodes into it afterwards.
+  const addContainerToCenter = useCallback(() => {
+    if (!svgRef.current) return
+    const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
+    const gs = useGraphStore.getState()
+    const dr = gs.views.find(v => v.id === gs.activeViewId)?.drillRoot
+    const id = addNode('Container', dr || null, cx, cy)
+    setNodeViewProp(id, 'shape', 'container')
+    setNodeViewProp(id, 'containerShape', 'rect')
+    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy } scheduleRender() }, 0)
+  }, [addNode, setNodeViewProp]) // eslint-disable-line
+
+  // Turn an existing node into a container: its direct children become its contents (floating inside),
+  // the node is sized to wrap them, and it's anchored so the group holds together. Links from the
+  // children stay as they are (drawn to the outside, hidden inside) — reroute-to-grandmother comes later.
+  const makeContainer = useCallback((nodeId) => {
+    const gs = useGraphStore.getState()
+    const kids = gs.edges.filter(e => e.source === nodeId).map(e => e.target)
+    const cn = simNodesRef.current.find(n => n.id === nodeId)
+    // Size to enclose the children (fallback to default if none placed yet).
+    let hw = NODE_R * 2.4, hh = NODE_R * 2.4
+    if (cn && kids.length) {
+      let maxdx = 0, maxdy = 0
+      kids.forEach(kid => { const sn = simNodesRef.current.find(n => n.id === kid); if (sn) { maxdx = Math.max(maxdx, Math.abs((sn.x || 0) - (cn.x || 0))); maxdy = Math.max(maxdy, Math.abs((sn.y || 0) - (cn.y || 0))) } })
+      hw = Math.max(hw, maxdx + NODE_R * 1.6); hh = Math.max(hh, maxdy + NODE_R * 1.6)
+    }
+    pushUndo()
+    setNodeViewProp(nodeId, 'shape', 'container')
+    setNodeViewProp(nodeId, 'containerShape', 'rect')
+    setNodeViewProp(nodeId, 'frameHalfW', hw)
+    setNodeViewProp(nodeId, 'frameHalfH', hh)
+    if (cn) setAnchor(nodeId, cn.x || 0, cn.y || 0)
+    kids.forEach(kid => setContainedIn(kid, nodeId))
+  }, [pushUndo, setNodeViewProp, setAnchor, setContainedIn])
+
   // Create a table node at the current viewport center (sidebar "+" menu path — no right-click needed).
   const addTableToCenter = useCallback(() => {
     if (!svgRef.current) return
@@ -1169,6 +1205,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })
       }
       hidden.forEach(id => base.delete(id))
+    }
+    // A collapsed CONTAINER also hides whatever it physically holds (containment, not just edges) —
+    // covers nodes tossed in that keep their link to a parent outside the container.
+    if (effCollapsed.size) {
+      effCollapsed.forEach(cid => {
+        if (viewNodeProps[cid]?.shape !== 'container') return
+        storeNodes.forEach(nn => { if (viewNodeProps[nn.id]?.containedIn === cid) base.delete(nn.id) })
+      })
     }
     if (expandHops !== null) {
       ;[...base].forEach(id => { if (expandHops[id] === undefined) base.delete(id) })
@@ -1563,7 +1607,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!frame) continue
         const fvp = vp[containerId] || {}
         const fr = NODE_R * (fvp.scale || 1)
-        const { halfW: defHW, halfH: defHH } = shapeDims(fvp.shape === '3d' ? '3d' : 'frame', fr)
+        const baseShape = fvp.shape === '3d' ? '3d' : (fvp.shape === 'container' ? 'container' : 'frame')
+        const { halfW: defHW, halfH: defHH } = shapeDims(baseShape, fr)
         const halfW = fvp.shape === '3d' ? defHW : (fvp.frameHalfW ?? defHW)
         const halfH = fvp.shape === '3d' ? defHH : (fvp.frameHalfH ?? defHH)
         const cx = frame.x || 0, cy = frame.y || 0
@@ -2369,7 +2414,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (!simNode) return
     simRef.current.alphaTarget(0.3).restart()
 
-    const isFrame = (viewNodePropsRef.current[nodeId] || {}).shape === 'frame'
+    const _dragShape = (viewNodePropsRef.current[nodeId] || {}).shape
+    const isFrame = _dragShape === 'frame' || _dragShape === 'container'   // both drag their contained nodes along
 
     // Collect drag group
     let dragGroup = [simNode]
@@ -2522,7 +2568,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           for (const n of simNodesRef.current) {
             if (n.id === nodeId) continue
             const nvp = viewNodePropsRef.current[n.id] || {}
-            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
+            if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.shape === 'container' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
             const nr = NODE_R * (nvp.scale || 1)
             const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
             const sp = startPositions.find(p => p.node.id === nodeId)
@@ -2565,10 +2611,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const dropY = sp ? sp.oy + ddy : sy
           let newContainerId = null
           for (const fn of simNodesRef.current) {
+            if (fn.id === nodeId) continue
             const fvp = viewNodePropsRef.current[fn.id] || {}
-            if ((fvp.shape !== 'frame' && fvp.shape !== '3d') || fvp.visible === false) continue
+            if ((fvp.shape !== 'frame' && fvp.shape !== '3d' && fvp.shape !== 'container') || fvp.visible === false) continue
             const fr = NODE_R * (fvp.scale || 1)
-            const { halfW, halfH } = shapeDims(fvp.shape === '3d' ? '3d' : 'frame', fr)
+            const base = fvp.shape === '3d' ? '3d' : (fvp.shape === 'container' ? 'container' : 'frame')
+            const { halfW: dHW, halfH: dHH } = shapeDims(base, fr)
+            const halfW = fvp.shape === '3d' ? dHW : (fvp.frameHalfW ?? dHW)
+            const halfH = fvp.shape === '3d' ? dHH : (fvp.frameHalfH ?? dHH)
             if (Math.abs(dropX - (fn.x || 0)) < halfW && Math.abs(dropY - (fn.y || 0)) < halfH) {
               newContainerId = fn.id; break
             }
@@ -3969,6 +4019,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const s = e.source, t = e.target
     if (!s || !t || s.x == null) return null
     if (!mountedRef.current.has(s.id) || !mountedRef.current.has(t.id)) return null
+    // Hide the link between a container and a node it holds — containment implies it, so drawing the
+    // line just clutters the inside of the box. (Links that cross the boundary to the outside stay.)
+    const svp0 = viewNodeProps[s.id] || {}, tvp0 = viewNodeProps[t.id] || {}
+    if ((svp0.shape === 'container' && tvp0.containedIn === s.id) || (tvp0.shape === 'container' && svp0.containedIn === t.id)) return null
     const edgeOpacity = Math.min(nodeOpacityRef.current[s.id] ?? 1, nodeOpacityRef.current[t.id] ?? 1)   // fade with endpoints
     const isSel = selected?.id === e.id && selected?.type === 'edge'
     const svp = getVP(s.id), tvp = getVP(t.id)
@@ -4161,6 +4215,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ['Node' + (hasSelected ? ' (linked)' : ''), () => { pushUndo(); setPendingEditId(addNode('New node', hasSelected ? selected.id : (drillRoot || null))); setShowAddMenu(false) }],
                       ['Root node', () => { pushUndo(); setPendingEditId(addNode('New node', null)); setShowAddMenu(false) }],
                       ['Frame', () => { pushUndo(); addFrameToCenter(); setShowAddMenu(false) }],
+                      ['Container', () => { pushUndo(); addContainerToCenter(); setShowAddMenu(false) }],
                       ['Table', () => { addTableToCenter(); setShowAddMenu(false) }],
                       ['View', () => { addView(); setShowAddMenu(false) }],
                     ].map(([label, action]) => (
@@ -4250,6 +4305,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onLabelChange={updateLabel}
                 onToggleSlide={id => slideIds.includes(id) ? removeSlide(id) : addSlide(id)}
                 hideOutline={hideFrameOutlines || autoHideFrames}
+              />
+            ))}
+
+            {/* 1b. Containers — real tree nodes rendered as a big circle/rect holding their contents. */}
+            {!organize && simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'container').map(n => (
+              <ContainerNode key={n.id} node={n}
+                viewProps={getVP(n.id)}
+                isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
+                isCollapsed={collapsedSet.has(n.id)}
+                memberCount={simNodesRef.current.filter(m => getVP(m.id).containedIn === n.id).length}
+                onMouseDown={handleNodeMouseDown}
+                onResizeMouseDown={handleFrameResizeMouseDown}
+                onDelete={id => setConfirmDelete(id)}
+                onLabelChange={updateLabel}
+                onToggleCollapse={() => handleToggleCollapseAnimated(n.id)}
+                onSetContainerShape={s => setNodeViewProp(n.id, 'containerShape', s)}
               />
             ))}
 
@@ -4388,7 +4459,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             )}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id) && !mediaNodeSet.has(n.id)).map(n => {
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && getVP(n.id).shape !== 'container' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id) && !mediaNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
               const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
               return (
@@ -5013,6 +5084,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               isKanban={kanbanNodeSet.has(hn.id)}
               onToggleStrategy={() => { toggleStrategyNode(hn.id); close() }}
               isStrategy={strategyNodeSet.has(hn.id)}
+              onMakeContainer={vp.shape === 'container' ? null : () => { makeContainer(hn.id); close() }}
               onGroupBoard={gb => { pushUndo(); const bx = (hn.x || 0) + 160, by = (hn.y || 0); const id = addGroupedBoard(hn.id, gb, bx, by); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = bx; sn.y = by; sn.fx = bx; sn.fy = by } scheduleRender() }, 0); close() }}
               hasChildrenForList={storeEdges.some(e => e.source === hn.id)}
               childrenEffect={vp.childrenEffect}
@@ -7811,6 +7883,99 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
   )
 }
 
+// ─── ContainerNode ── a real tree node drawn as a big circle/rect that holds its contents ──
+// Title sits OUTSIDE, just above the shape. Collapses to a small node-like pill (contents hidden by
+// containment in visibleNodeIds). Dragging it carries its contained nodes along (handled in the drag
+// handler, same path as frames).
+function ContainerNode({ node, viewProps, isSelected, isCollapsed, memberCount, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleCollapse, onSetContainerShape }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(node.label)
+  const [hover, setHover] = useState(false)
+  const inputRef = useRef()
+  useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
+  const commitEdit = () => { onLabelChange(node.id, draft.trim() || 'Container'); setEditing(false) }
+
+  const scale = viewProps.scale || 1
+  const r = NODE_R * scale
+  const cshape = viewProps.containerShape || 'rect'
+  const { halfW: defHW, halfH: defHH } = shapeDims('container', r)
+  const halfW = viewProps.frameHalfW ?? defHW
+  const halfH = viewProps.frameHalfH ?? defHH
+  const fill = (viewProps.fillColor && viewProps.fillColor !== 'none') ? viewProps.fillColor : '#141a33'
+  const stroke = isSelected ? '#5b6af0' : (viewProps.strokeColor || '#4a7abf')
+  const titleFS = Math.max(11, Math.round(13 * scale))
+  const x = node.x ?? 0, y = node.y ?? 0
+
+  // Collapsed → a compact node-like pill; click the ▸ to expand back into the container.
+  if (isCollapsed) {
+    const pw = Math.max(60, (node.label || 'Container').length * 7 + 34)
+    return (
+      <g transform={`translate(${x},${y})`} data-container="true"
+        onMouseDown={e => onMouseDown(e, node.id)} onClick={e => e.stopPropagation()}
+        onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true) }} style={{ cursor: 'move' }}>
+        <rect x={-pw / 2} y={-16} width={pw} height={32} rx={16} fill={fill} stroke={stroke} strokeWidth={isSelected ? 2.5 : 1.5} />
+        <g transform={`translate(${-pw / 2 + 15},0)`} onClick={e => { e.stopPropagation(); onToggleCollapse() }} style={{ cursor: 'pointer' }}>
+          <circle r={9} fill="#0c0c1a" stroke="#f6ad55" strokeWidth={1.2} /><text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#f6ad55" style={{ userSelect: 'none' }}>▸</text>
+        </g>
+        <text x={6} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={titleFS} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>{node.label || 'Container'}{memberCount ? ` · ${memberCount}` : ''}</text>
+      </g>
+    )
+  }
+
+  return (
+    <g transform={`translate(${x},${y})`} data-container="true"
+      onMouseDown={e => onMouseDown(e, node.id)} onClick={e => e.stopPropagation()}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
+      style={{ cursor: 'move' }}>
+      {/* Body (circle or rect). Semi-transparent so contents read through. */}
+      {cshape === 'circle'
+        ? <ellipse rx={halfW} ry={halfH} fill={fill} fillOpacity={0.5} stroke={stroke} strokeWidth={isSelected ? 2.5 : 1.5} />
+        : <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={16} fill={fill} fillOpacity={0.5} stroke={stroke} strokeWidth={isSelected ? 2.5 : 1.5} />}
+
+      {/* Title OUTSIDE, just above the shape */}
+      {!editing ? (
+        <text x={0} y={-halfH - 8} textAnchor="middle" fill={viewProps.textColor || '#9fb0e8'} fontSize={titleFS} fontWeight="600" style={{ userSelect: 'none', pointerEvents: 'none' }}>{node.label || 'Container'}</text>
+      ) : (
+        <foreignObject x={-90} y={-halfH - titleFS - 16} width={180} height={titleFS + 14} onMouseDown={e => e.stopPropagation()}>
+          <input ref={inputRef} value={draft} autoFocus onChange={e => setDraft(e.target.value)} onBlur={commitEdit}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { e.preventDefault(); setEditing(false) } }}
+            style={{ width: '100%', textAlign: 'center', background: 'rgba(10,20,40,0.9)', border: '1.5px solid #5b6af0', borderRadius: 5, color: '#c5d0ff', fontSize: titleFS, fontWeight: 600, padding: '2px 6px', outline: 'none', boxSizing: 'border-box' }} />
+        </foreignObject>
+      )}
+
+      {/* Collapse chevron — bottom center */}
+      {(isSelected || hover) && (
+        <g transform={`translate(0,${halfH + 12})`} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleCollapse() }} style={{ cursor: 'pointer' }}>
+          <circle r={10} fill="#16162a" stroke="rgba(255,255,255,0.2)" strokeWidth={1.2} /><text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#9aa8d8" style={{ userSelect: 'none' }}>▾</text>
+        </g>
+      )}
+
+      {isSelected && (<>
+        {/* × delete */}
+        <g transform={`translate(${halfW - 12},${-halfH + 12})`} onClick={e => { e.stopPropagation(); onDelete(node.id) }} style={{ cursor: 'pointer' }}>
+          <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} /><text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
+        </g>
+        {/* shape toggle ○ / ▢ */}
+        <g transform={`translate(${-halfW + 12},${-halfH + 12})`} onClick={e => { e.stopPropagation(); onSetContainerShape(cshape === 'circle' ? 'rect' : 'circle') }} style={{ cursor: 'pointer' }} >
+          <circle r={9} fill="#1a1a2e" stroke="#5b6af0" strokeWidth={1.3} /><text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#9ab0ff" style={{ userSelect: 'none' }}>{cshape === 'circle' ? '▢' : '○'}</text>
+        </g>
+        {/* Corner resize handles */}
+        {[[-1, -1, 'tl', 'nwse-resize'], [1, -1, 'tr', 'nesw-resize'], [-1, 1, 'bl', 'nesw-resize'], [1, 1, 'br', 'nwse-resize']].map(([sx, sy, corner, cur]) => (
+          <g key={corner} transform={`translate(${sx * halfW},${sy * halfH})`} onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }} style={{ cursor: cur }}>
+            <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} /><text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none', pointerEvents: 'none' }}>⤡</text>
+          </g>
+        ))}
+      </>)}
+      {hover && !isSelected && (
+        <g transform={`translate(${halfW},${halfH})`} onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, 'br') }} style={{ cursor: 'nwse-resize' }}>
+          <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} opacity={0.85} /><text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none', pointerEvents: 'none' }}>⤡</text>
+        </g>
+      )}
+    </g>
+  )
+}
+
 // ─── AnimatedG ── wraps node visual content with optional motion + color cycle ──
 function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isActive, opacity, children }) {
   const ref = useRef()
@@ -8783,7 +8948,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onToggleStrategy, isStrategy, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
+function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onToggleStrategy, isStrategy, onMakeContainer, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
@@ -8954,6 +9119,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && onToggleKanban && textRow(isKanban ? 'Show children as nodes' : 'Show as kanban board', onToggleKanban, { icon: '🗂️', right: isKanban ? '•' : '›', rightColor: isKanban ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && onToggleStrategy && textRow(isStrategy ? 'Show children as nodes' : 'Show as strategy', onToggleStrategy, { icon: '🕸️', right: isStrategy ? '•' : '›', rightColor: isStrategy ? '#f6ad55' : '#8090b8', opens: null })}
+        {hasChildrenForList && onMakeContainer && textRow('Make container', onMakeContainer, { icon: '⬭', right: '›', opens: null })}
         {hasChildrenForList && onGroupBoard && textRow('Group into board by…', () => setPanel('groupboard'), { icon: '⌗', right: '›', opens: 'groupboard' })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}
