@@ -1022,6 +1022,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [pushUndo, setNodeViewProp, setAnchor, setContainedIn, releaseAnchor, rerouteContainerLinks]) // eslint-disable-line -- scheduleRender declared later (TDZ)
 
+  // Turn a container back into a normal node (like "show as list/board" toggling off): restore its
+  // members as its own children, release them, and clear the container props/shape.
+  const revertContainer = useCallback((nodeId) => {
+    const st = useGraphStore.getState()
+    const v = st.views.find(vv => vv.id === st.activeViewId)
+    const members = st.nodes.filter(n => v?.nodeProps?.[n.id]?.containedIn === nodeId).map(n => n.id)
+    pushUndo()
+    rerouteContainerLinks(nodeId, 'container')   // point the members' links back at this node
+    members.forEach(id => setContainedIn(id, null))
+    setNodeViewProp(nodeId, 'shape', 'circle')
+    setNodeViewProp(nodeId, 'containerShape', null)
+    setNodeViewProp(nodeId, 'frameHalfW', null)
+    setNodeViewProp(nodeId, 'frameHalfH', null)
+    setNodeViewProp(nodeId, 'containerLinks', null)
+    setNodeViewProp(nodeId, 'containerDragOut', null)
+    if (simRef.current) simRef.current.alpha(0.5).restart()
+  }, [pushUndo, rerouteContainerLinks, setContainedIn, setNodeViewProp])
+
   // Create a table node at the current viewport center (sidebar "+" menu path — no right-click needed).
   const addTableToCenter = useCallback(() => {
     if (!svgRef.current) return
@@ -1632,6 +1650,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (node.x > cx + halfW - pad) node.vx -= alpha * 10
         if (node.y < cy - halfH + pad) node.vy += alpha * 10
         if (node.y > cy + halfH - pad) node.vy -= alpha * 10
+        // Containers hold HARD: clamp the position inside the box so a link to an outside parent
+        // (e.g. the grandmother, after reroute) can't drag the contents out of the container.
+        if (fvp.shape === 'container') {
+          node.x = Math.max(cx - halfW + pad, Math.min(cx + halfW - pad, node.x))
+          node.y = Math.max(cy - halfH + pad, Math.min(cy + halfH - pad, node.y))
+        }
       }
     }
 
@@ -4072,8 +4096,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const sMedia = storeNodeById[s.id]?.media, tMedia = storeNodeById[t.id]?.media
     const sShape = sMedia ? 'rect' : (svp.shape || 'circle')
     const tShape = tMedia ? 'rect' : (tvp.shape || 'circle')
-    const { halfW: swW, halfH: swH } = sMedia ? { halfW: sMedia.width / 2, halfH: sMedia.height / 2 } : shapeDims(svp.shape || 'circle', sr, sLabel, sFontSize, svp.labelWidth)
-    const { halfW: twW, halfH: twH } = tMedia ? { halfW: tMedia.width / 2, halfH: tMedia.height / 2 } : shapeDims(tvp.shape || 'circle', tr, tLabel, tFontSize, tvp.labelWidth)
+    // Frames/containers/3d clip at their actual box (frameHalfW/H) so an arrow lands on the edge, not
+    // in the middle of the shape.
+    const boxHalf = (vp, rr, lbl, fs, lw) => {
+      if (vp.shape === 'frame' || vp.shape === 'container' || vp.shape === '3d') {
+        const base = vp.shape === '3d' ? '3d' : (vp.shape === 'container' ? 'container' : 'frame')
+        const d = shapeDims(base, rr)
+        return { halfW: vp.shape === '3d' ? d.halfW : (vp.frameHalfW ?? d.halfW), halfH: vp.shape === '3d' ? d.halfH : (vp.frameHalfH ?? d.halfH) }
+      }
+      return shapeDims(vp.shape || 'circle', rr, lbl, fs, lw)
+    }
+    const { halfW: swW, halfH: swH } = sMedia ? { halfW: sMedia.width / 2, halfH: sMedia.height / 2 } : boxHalf(svp, sr, sLabel, sFontSize, svp.labelWidth)
+    const { halfW: twW, halfH: twH } = tMedia ? { halfW: tMedia.width / 2, halfH: tMedia.height / 2 } : boxHalf(tvp, tr, tLabel, tFontSize, tvp.labelWidth)
     const dx = t.x-s.x, dy = t.y-s.y, dist = Math.sqrt(dx*dx+dy*dy)||1
     const ux = dx/dist, uy = dy/dist
     const sd = clipDist(sShape, swW, swH, ux, uy)
@@ -5444,6 +5478,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   {seg('Spring back', dragOut === 'springback', () => setNodeViewProp(cid, 'containerDragOut', 'springback'))}
                   {seg('Release', dragOut === 'release', () => setNodeViewProp(cid, 'containerDragOut', 'release'))}
                 </div></div>
+              <button onClick={() => revertContainer(cid)} style={{ background: '#12122a', border: '1px solid #3a2d4a', color: '#c8a0e0', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 11 }}>↩ Turn back into node</button>
             </div>
           )
         })()}
