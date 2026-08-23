@@ -4175,7 +4175,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const perpX = -uy, perpY = ux
     const arrowPts = `${tipX},${tipY} ${basX+perpX*AW},${basY+perpY*AW} ${basX-perpX*AW},${basY-perpY*AW}`
     const mx = (x1+basX)/2, my = (y1+basY)/2
-    const edgeColor = isSel ? '#5b6af0' : '#334155'
+    const edgeColor = isSel ? '#5b6af0' : '#5a6a90'   // brighter slate — dark #334155 was too dim on dark/mid bgs
     // Blur fade: if an endpoint node is blurred, the edge dissolves into its halo.
     const sBlur = svp.borderBlur || 0, tBlur = tvp.borderBlur || 0
     const lineLen = Math.hypot(tipX - x1, tipY - y1) || 1
@@ -4395,12 +4395,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onMouseLeave={() => setIsPanning(false)}
         >
           <defs>
-            <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#334155" /></marker>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5a6a90" /></marker>
             <marker id="arr-sel" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L0,8 L8,4 z" fill="#5b6af0" /></marker>
             {/* Subtle, background-aware legibility halo for edges (not a glow):
                 one tight, low-opacity contrast outline — light on dark bg, dark on light bg. */}
-            <filter id="edge-shadow" x="-30%" y="-30%" width="160%" height="160%" colorInterpolationFilters="sRGB">
-              <feDropShadow dx="0" dy="0" stdDeviation="0.8" floodColor={edgeGlowColor} floodOpacity="0.35" />
+            <filter id="edge-shadow" x="-60%" y="-60%" width="220%" height="220%" colorInterpolationFilters="sRGB">
+              {/* Background-aware legibility halo — wider + stronger so edges stay readable even when the
+                  background brightness sits near the line's own tone (mid greys/slates were the worst case). */}
+              <feDropShadow dx="0" dy="0" stdDeviation="1.6" floodColor={edgeGlowColor} floodOpacity="0.8" />
             </filter>
             <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
               <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="#000" floodOpacity="0.5" />
