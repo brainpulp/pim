@@ -9234,11 +9234,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {onGenWords && textRow('Generate words', onGenWords, { icon: '⚡', opens: null })}
         {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
-        {hasChildrenForList && textRow(isList ? 'Show children as nodes' : 'Show children as list', onToggleList, { icon: '☰', right: isList ? '☰' : '☰', rightColor: isList ? '#f6ad55' : '#8090b8', opens: null })}
-        {hasChildrenForList && onToggleKanban && textRow(isKanban ? 'Show children as nodes' : 'Show as kanban board', onToggleKanban, { icon: '🗂️', right: isKanban ? '•' : '›', rightColor: isKanban ? '#f6ad55' : '#8090b8', opens: null })}
-        {hasChildrenForList && onToggleStrategy && textRow(isStrategy ? 'Show children as nodes' : 'Show as strategy', onToggleStrategy, { icon: '🕸️', right: isStrategy ? '•' : '›', rightColor: isStrategy ? '#f6ad55' : '#8090b8', opens: null })}
-        {hasChildrenForList && onMakeContainer && textRow('Make container', onMakeContainer, { icon: '⬭', right: '›', opens: null })}
-        {hasChildrenForList && onGroupBoard && textRow('Group into board by…', () => setPanel('groupboard'), { icon: '⌗', right: '›', opens: 'groupboard' })}
+        {hasChildrenForList && textRow('Show as…', () => setPanel('showas'), { icon: '▧', right: (isList || isKanban || isStrategy) ? '•' : '›', rightColor: (isList || isKanban || isStrategy) ? '#f6ad55' : '#8090b8', opens: 'showas' })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}
         {textRow('Delete', onDelete, { icon: '🗑️', color: '#f87171', opens: null })}
@@ -9468,6 +9464,19 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       )}
 
       {/* â"€â"€ Arrange panel (one-shot layouts) â"€â"€ */}
+      {panel === 'showas' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:2, minWidth:190 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:4 }}>
+            <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
+            <span style={{ fontSize:'0.72rem', color:'#c5d0ff' }}>Show children as…</span>
+          </div>
+          {textRow(isList ? 'List ✓ (back to nodes)' : 'List', onToggleList, { icon: '☰', rightColor: isList ? '#f6ad55' : '#8090b8', right: isList ? '✓' : '›', opens: null })}
+          {onToggleKanban && textRow(isKanban ? 'Board ✓ (back to nodes)' : 'Board (kanban)', onToggleKanban, { icon: '🗂️', right: isKanban ? '✓' : '›', rightColor: isKanban ? '#f6ad55' : '#8090b8', opens: null })}
+          {onToggleStrategy && textRow(isStrategy ? 'Strategy ✓ (back to nodes)' : 'Strategy', onToggleStrategy, { icon: '🕸️', right: isStrategy ? '✓' : '›', rightColor: isStrategy ? '#f6ad55' : '#8090b8', opens: null })}
+          {onMakeContainer && textRow('Container', onMakeContainer, { icon: '⬭', right: '›', opens: null })}
+          {onGroupBoard && textRow('Sorted / grouped by…', () => setPanel('groupboard'), { icon: '⌗', right: '›', opens: 'groupboard' })}
+        </div>
+      )}
       {panel === 'arrange' && (
         <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:180 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
