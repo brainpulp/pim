@@ -2576,7 +2576,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       simRef.current.alphaTarget(0)
       setMovingIds(null)   // clear the group-move highlight
 
-      // Clear hover highlight
+      // Clear hover highlight (remember what was highlighted so the drop can honor it — WYSIWYG).
+      const hoveredAtDrop = dragHoverNodeIdRef.current
       dragHoverNodeIdRef.current = null
       setDragHoverNodeId(null)
 
@@ -2659,13 +2660,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
         })
 
-        // For regular nodes: check if dropped inside a frame → update containedIn
+        // For regular nodes: check if dropped inside a frame/container → update containedIn.
         if (!isFrame && !multiDrag) {
           const sp = startPositions.find(p => p.node.id === nodeId)
           const dropX = sp ? sp.ox + ddx : sx
           const dropY = sp ? sp.oy + ddy : sy
           let newContainerId = null
-          for (const fn of simNodesRef.current) {
+          // 1) Whatever the drag highlighted (cursor-based) wins, so what glows green is what you get.
+          const hov = hoveredAtDrop
+          if (hov && hov !== nodeId && (viewNodePropsRef.current[hov] || {}).shape === 'container') newContainerId = hov
+          // 2) Fallback / frames: a box counts as hit if EITHER the cursor OR the node centre is inside it.
+          if (!newContainerId) for (const fn of simNodesRef.current) {
             if (fn.id === nodeId) continue
             const fvp = viewNodePropsRef.current[fn.id] || {}
             if ((fvp.shape !== 'frame' && fvp.shape !== '3d' && fvp.shape !== 'container') || fvp.visible === false) continue
@@ -2674,9 +2679,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const { halfW: dHW, halfH: dHH } = shapeDims(base, fr)
             const halfW = fvp.shape === '3d' ? dHW : (fvp.frameHalfW ?? dHW)
             const halfH = fvp.shape === '3d' ? dHH : (fvp.frameHalfH ?? dHH)
-            if (Math.abs(dropX - (fn.x || 0)) < halfW && Math.abs(dropY - (fn.y || 0)) < halfH) {
-              newContainerId = fn.id; break
-            }
+            const cxD = fn.x || 0, cyD = fn.y || 0
+            const inByCenter = Math.abs(dropX - cxD) < halfW && Math.abs(dropY - cyD) < halfH
+            const inByCursor = Math.abs(sx - cxD) < halfW && Math.abs(sy - cyD) < halfH
+            if (inByCenter || inByCursor) { newContainerId = fn.id; break }
           }
           // Only record undo when the container actually changes (not on every plain move)
           const curContainer = viewNodePropsRef.current[nodeId]?.containedIn ?? null
