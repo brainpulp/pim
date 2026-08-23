@@ -9098,7 +9098,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   // can travel diagonally to the open flyout without intermediate rows yanking it away.
   const panelTimerRef = useRef(null)
   const cancelPanelTimer = () => { if (panelTimerRef.current) { clearTimeout(panelTimerRef.current); panelTimerRef.current = null } }
-  const queuePanel = (p, top) => { cancelPanelTimer(); panelTimerRef.current = setTimeout(() => { setPanel(p); if (top != null) setPanelTop(top) }, 160) }
+  const queuePanel = (p, top) => { cancelPanelTimer(); panelTimerRef.current = setTimeout(() => { setPanel(p); if (top != null) setPanelTop(top) }, 90) }
   const openPanelNow = (p, top) => { cancelPanelTimer(); setPanel(p); if (top != null) setPanelTop(top) }
   useEffect(() => () => cancelPanelTimer(), [])
   const [newStyleName, setNewStyleName] = useState('')
@@ -9167,8 +9167,11 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const flyout = {
     position:'absolute', top: Math.max(-1, panelTop - 6),   // align to the row that opened it (near the cursor)
     [flipLeft ? 'right' : 'left']: '100%',
-    [flipLeft ? 'marginRight' : 'marginLeft']: 6,
+    [flipLeft ? 'marginRight' : 'marginLeft']: 0,   // flush with the menu — no dead-zone gap to cross
     background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
+    // Invisible 6px bridge on the menu-facing side (part of the flyout, so hovering it keeps it open).
+    // Declared AFTER `border` so the shorthand doesn't reset it.
+    [flipLeft ? 'borderRight' : 'borderLeft']: '6px solid transparent',
     padding:'8px 10px', minWidth:210, maxWidth:284, maxHeight:'72vh', overflowY:'auto',
     boxShadow:'0 6px 24px rgba(0,0,0,0.6)', zIndex:21,
   }
@@ -9179,7 +9182,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     const isOpen = opts.opens != null && (panel === opts.opens || (opts.opens === 'color' && STYLE_PANES.includes(panel)))
     return (
       <div onClick={e => { cancelPanelTimer(); if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop); onClick?.() }}
-        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens !== undefined) queuePanel(opts.opens, opts.opens != null ? e.currentTarget.offsetTop : null) }}
+        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens != null) queuePanel(opts.opens, e.currentTarget.offsetTop) }}
         onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#23234a' : 'transparent' }}
         style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
           background: isOpen ? '#23234a' : 'transparent',
