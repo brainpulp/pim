@@ -1129,6 +1129,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Mutable ref so D3 forces can always read the latest view props without stale closure
   const viewNodePropsRef = useRef(viewNodeProps)
   viewNodePropsRef.current = viewNodeProps
+  // A node inside a CONTAINER is governed by the container's own centre-pull, not by its link to an
+  // outside parent — so nearly kill the link strength for any edge touching such a node (used by every
+  // forceLink setup below so contents don't get dragged toward the grandmother).
+  const containedLinkStrength = (l) => {
+    const vp = viewNodePropsRef.current
+    const sId = l.source?.id ?? l.source, tId = l.target?.id ?? l.target
+    const inC = (id) => { const c = vp[id]?.containedIn; return c && vp[c]?.shape === 'container' }
+    return (inC(sId) || inC(tId)) ? 0.01 : 0.4
+  }
 
   const saveDirtyRef = useRef(false)
   useEffect(() => {
@@ -1646,22 +1655,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const halfH = fvp.shape === '3d' ? defHH : (fvp.frameHalfH ?? defHH)
         const cx = frame.x || 0, cy = frame.y || 0
         const pad = 30
-        if (node.x < cx - halfW + pad) node.vx += alpha * 10
-        if (node.x > cx + halfW - pad) node.vx -= alpha * 10
-        if (node.y < cy - halfH + pad) node.vy += alpha * 10
-        if (node.y > cy + halfH - pad) node.vy -= alpha * 10
-        // Containers hold HARD: clamp the position inside the box so a link to an outside parent
-        // (e.g. the grandmother, after reroute) can't drag the contents out of the container.
         if (fvp.shape === 'container') {
+          // Containers have their OWN gravity: contents are pulled toward the container's centre (not
+          // toward their outside parent), and hard-clamped inside so a link out can't drag them away.
+          node.vx += (cx - node.x) * alpha * 0.35
+          node.vy += (cy - node.y) * alpha * 0.35
           node.x = Math.max(cx - halfW + pad, Math.min(cx + halfW - pad, node.x))
           node.y = Math.max(cy - halfH + pad, Math.min(cy + halfH - pad, node.y))
+        } else {
+          if (node.x < cx - halfW + pad) node.vx += alpha * 10
+          if (node.x > cx + halfW - pad) node.vx -= alpha * 10
+          if (node.y < cy - halfH + pad) node.vy += alpha * 10
+          if (node.y > cy + halfH - pad) node.vy -= alpha * 10
         }
       }
     }
 
     if (!simRef.current) {
       simRef.current = d3.forceSimulation(simNodesRef.current)
-        .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
+        .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(containedLinkStrength))
         .force('charge', d3.forceManyBody().strength(-300))
         .force('collide', d3.forceCollide(NODE_R + 8))
         .force('center', centeringForce())
@@ -1680,7 +1692,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // "explosion". Leave the sim alone; the Organize effect re-packs.
       if (organizeActiveRef.current) return
       simRef.current
-        .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(150).strength(0.4))
+        .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(150).strength(containedLinkStrength))
         .alpha(wasEmpty && simNodesRef.current.length ? 0.9 : 0.25).restart()
     }
   }, [storeNodes, storeEdges, scheduleRender]) // eslint-disable-line
@@ -1804,7 +1816,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       sim.force('charge', d3.forceManyBody().strength(-300))
       sim.force('collide', d3.forceCollide(NODE_R + 8))
       sim.force('center', centeringForce())
-      sim.force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
+      sim.force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(containedLinkStrength))
       const vp = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.nodeProps || {}
       simNodesRef.current.forEach(n => { const p = vp[n.id] || {}; n.fx = p.fx ?? null; n.fy = p.fy ?? null })
       sim.alpha(0.5).restart()
