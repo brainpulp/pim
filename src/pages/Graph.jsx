@@ -4402,7 +4402,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <filter id="edge-shadow" x="-60%" y="-60%" width="220%" height="220%" colorInterpolationFilters="sRGB">
               {/* Background-aware legibility halo — wider + stronger so edges stay readable even when the
                   background brightness sits near the line's own tone (mid greys/slates were the worst case). */}
-              <feDropShadow dx="0" dy="0" stdDeviation="1.6" floodColor={edgeGlowColor} floodOpacity="0.8" />
+              <feDropShadow dx="0" dy="0" stdDeviation="0.7" floodColor={edgeGlowColor} floodOpacity="0.9" />
             </filter>
             <filter id="node-shadow" x="-30%" y="-30%" width="160%" height="160%">
               <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="#000" floodOpacity="0.5" />
