@@ -2516,23 +2516,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       startPositions.forEach(({ node, ox, oy }) => { node.fx = ox + ddx; node.fy = oy + ddy })
       attachedStart.forEach(a => updateImage(a.id, { x: a.ox + ddx, y: a.oy + ddy }))   // attached media follows
 
-      // Hover-detect: find node under cursor to highlight as reparent target
+      // Hover-detect: highlight the drop target — a node (reparent) OR a container (toss-in). Prefer an
+      // inner node over the container it sits in, so you can still reparent onto a node inside a container.
       if (!isFrame && !multiDrag) {
-        let found = null
+        let foundNode = null, foundContainer = null
         for (const n of simNodesRef.current) {
           if (n.id === nodeId) continue
           const nvp = viewNodePropsRef.current[n.id] || {}
-          // Only nodes actually on screen (in the current drill/filter) are valid targets — never
-          // reparent onto an off-screen node (that would move the dragged node out of view).
           if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
           const nr = NODE_R * (nvp.scale || 1)
-          const nLabel = n.label || ''
-          const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
-          const { halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, nLabel, nFontSize, nvp.labelWidth)
+          let halfW, halfH
+          if (nvp.shape === 'container') {
+            const d = shapeDims('container', nr); halfW = nvp.frameHalfW ?? d.halfW; halfH = nvp.frameHalfH ?? d.halfH
+          } else {
+            const nFontSize = Math.max(9, Math.round(12 * (nvp.scale || 1)))
+            ;({ halfW, halfH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', nFontSize, nvp.labelWidth))
+          }
           if (Math.abs((n.x || 0) - sx) < halfW && Math.abs((n.y || 0) - sy) < halfH) {
-            found = n.id; break
+            if (nvp.shape === 'container') { if (!foundContainer) foundContainer = n.id } else { foundNode = n.id; break }
           }
         }
+        const found = foundNode || foundContainer
         if (found !== dragHoverNodeIdRef.current) {
           dragHoverNodeIdRef.current = found
           setDragHoverNodeId(found)
@@ -2703,11 +2707,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             // Dropped INTO a container → release its anchor so the container's centre-gravity drives it
             // (an anchored node is skipped by the bounding force and would just sit where it landed).
             const newCvp = newContainerId ? (viewNodePropsRef.current[newContainerId] || {}) : null
-            if (newCvp?.shape === 'container') {
-              releaseAnchor(nodeId)
-              simNode.fx = null; simNode.fy = null
-              simRef.current?.alpha(0.6).restart()
-            }
+            if (newCvp?.shape === 'container') { releaseAnchor(nodeId); simNode.fx = null; simNode.fy = null }
+          }
+          // Containment changed → recompute link strengths so d3 actually weakens the parent-pull on the
+          // now-contained node (forceLink caches strengths at init; without this it keeps yanking it out).
+          // Deferred to the next frame so the store/ref reflect the new containedIn first.
+          if (newContainerId !== curContainer) {
+            requestAnimationFrame(() => { simRef.current?.force('link')?.strength(containedLinkStrength); simRef.current?.alpha(0.6).restart() })
           }
         }
       }
@@ -4423,6 +4429,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 viewProps={getVP(n.id)}
                 isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
                 isCollapsed={collapsedSet.has(n.id)}
+                isDropTarget={dragHoverNodeId === n.id}
                 memberCount={simNodesRef.current.filter(m => getVP(m.id).containedIn === n.id).length}
                 onMouseDown={handleNodeMouseDown}
                 onResizeMouseDown={handleFrameResizeMouseDown}
@@ -8034,7 +8041,7 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
 // Title sits OUTSIDE, just above the shape. Collapses to a small node-like pill (contents hidden by
 // containment in visibleNodeIds). Dragging it carries its contained nodes along (handled in the drag
 // handler, same path as frames).
-function ContainerNode({ node, viewProps, isSelected, isCollapsed, memberCount, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleCollapse, onSetContainerShape }) {
+function ContainerNode({ node, viewProps, isSelected, isCollapsed, isDropTarget, memberCount, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleCollapse, onSetContainerShape }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [hover, setHover] = useState(false)
@@ -8049,7 +8056,8 @@ function ContainerNode({ node, viewProps, isSelected, isCollapsed, memberCount, 
   const halfW = viewProps.frameHalfW ?? defHW
   const halfH = viewProps.frameHalfH ?? defHH
   const fill = (viewProps.fillColor && viewProps.fillColor !== 'none') ? viewProps.fillColor : '#141a33'
-  const stroke = isSelected ? '#5b6af0' : (viewProps.strokeColor || '#4a7abf')
+  const stroke = isDropTarget ? '#4ade80' : (isSelected ? '#5b6af0' : (viewProps.strokeColor || '#4a7abf'))
+  const strokeW = isDropTarget ? 3 : (isSelected ? 2.5 : 1.5)
   const titleFS = Math.max(11, Math.round(13 * scale))
   const x = node.x ?? 0, y = node.y ?? 0
 
@@ -8075,10 +8083,10 @@ function ContainerNode({ node, viewProps, isSelected, isCollapsed, memberCount, 
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) }}
       style={{ cursor: 'move' }}>
-      {/* Body (circle or rect). Semi-transparent so contents read through. */}
+      {/* Body (circle or rect). Semi-transparent so contents read through. Green glow while a drag hovers. */}
       {cshape === 'circle'
-        ? <ellipse rx={halfW} ry={halfH} fill={fill} fillOpacity={0.5} stroke={stroke} strokeWidth={isSelected ? 2.5 : 1.5} />
-        : <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={16} fill={fill} fillOpacity={0.5} stroke={stroke} strokeWidth={isSelected ? 2.5 : 1.5} />}
+        ? <ellipse rx={halfW} ry={halfH} fill={fill} fillOpacity={isDropTarget ? 0.7 : 0.5} stroke={stroke} strokeWidth={strokeW} />
+        : <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={16} fill={fill} fillOpacity={isDropTarget ? 0.7 : 0.5} stroke={stroke} strokeWidth={strokeW} />}
 
       {/* Title OUTSIDE, just above the shape */}
       {!editing ? (
