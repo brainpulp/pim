@@ -2821,12 +2821,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Pivot = the opposite corner, fixed in world coords for the whole drag.
     const pivotX = (simNode.x || 0) - sgnX * halfW0
     const pivotY = (simNode.y || 0) - sgnY * halfH0
+    // Containers carry their contents: as the box moves/shrinks, contained nodes shift with the centre
+    // and get clamped inside so none are left outside the boundary.
+    const isContainer = vp.shape === 'container'
+    const contained = isContainer ? simNodesRef.current.filter(n => viewNodePropsRef.current[n.id]?.containedIn === nodeId) : []
+    let prevCx = simNode.x || 0, prevCy = simNode.y || 0
     const onMove = me => {
       const [mx, my] = clientToSim(me.clientX, me.clientY)
       const newHW = Math.max(80, Math.abs(mx - pivotX) / 2)
       const newHH = Math.max(60, Math.abs(my - pivotY) / 2)
       const newCx = pivotX + sgnX * newHW, newCy = pivotY + sgnY * newHH
       simNode.x = newCx; simNode.y = newCy; simNode.fx = newCx; simNode.fy = newCy
+      if (isContainer) {
+        const dx = newCx - prevCx, dy = newCy - prevCy
+        const pad = 30
+        contained.forEach(cn => {
+          cn.x = (cn.x || 0) + dx; cn.y = (cn.y || 0) + dy   // follow the centre shift
+          cn.x = Math.max(newCx - newHW + pad, Math.min(newCx + newHW - pad, cn.x))   // clamp inside
+          cn.y = Math.max(newCy - newHH + pad, Math.min(newCy + newHH - pad, cn.y))
+          if (cn.fx != null) { cn.fx = cn.x; cn.fy = cn.y }
+        })
+        prevCx = newCx; prevCy = newCy
+      }
       setNodeViewProp(nodeId, 'frameHalfW', newHW)
       setNodeViewProp(nodeId, 'frameHalfH', newHH)
       scheduleRender()
@@ -2835,6 +2851,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp)
       hideDragShield()
       setAnchor(nodeId, simNode.x, simNode.y)   // persist the new center so the pinned corner sticks
+      if (isContainer) { contained.forEach(cn => { if (cn.fx != null) setAnchor(cn.id, cn.fx, cn.fy) }); simRef.current?.alpha(0.4).restart() }
     }
     showDragShield('nwse-resize')
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
