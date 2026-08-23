@@ -8078,21 +8078,17 @@ function ContainerNode({ node, viewProps, isSelected, isCollapsed, memberCount, 
         <g transform={`translate(${halfW - 12},${-halfH + 12})`} onClick={e => { e.stopPropagation(); onDelete(node.id) }} style={{ cursor: 'pointer' }}>
           <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} /><text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
         </g>
-        {/* shape toggle ○ / ▢ */}
-        <g transform={`translate(${-halfW + 12},${-halfH + 12})`} onClick={e => { e.stopPropagation(); onSetContainerShape(cshape === 'circle' ? 'rect' : 'circle') }} style={{ cursor: 'pointer' }} >
-          <circle r={9} fill="#1a1a2e" stroke="#5b6af0" strokeWidth={1.3} /><text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#9ab0ff" style={{ userSelect: 'none' }}>{cshape === 'circle' ? '▢' : '○'}</text>
-        </g>
-        {/* Corner resize handles */}
+        {/* Corner resize handles — image-style white squares, consistent across the app */}
         {[[-1, -1, 'tl', 'nwse-resize'], [1, -1, 'tr', 'nesw-resize'], [-1, 1, 'bl', 'nesw-resize'], [1, 1, 'br', 'nwse-resize']].map(([sx, sy, corner, cur]) => (
-          <g key={corner} transform={`translate(${sx * halfW},${sy * halfH})`} onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }} style={{ cursor: cur }}>
-            <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} /><text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none', pointerEvents: 'none' }}>⤡</text>
-          </g>
+          <rect key={corner} x={sx * halfW - 6} y={sy * halfH - 6} width={12} height={12} rx={2}
+            fill="#fff" stroke="#5b6af0" strokeWidth={1.5}
+            onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }} style={{ cursor: cur }} />
         ))}
       </>)}
       {hover && !isSelected && (
-        <g transform={`translate(${halfW},${halfH})`} onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, 'br') }} style={{ cursor: 'nwse-resize' }}>
-          <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} opacity={0.85} /><text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none', pointerEvents: 'none' }}>⤡</text>
-        </g>
+        <rect x={halfW - 6} y={halfH - 6} width={12} height={12} rx={2}
+          fill="#fff" stroke="#5b6af0" strokeWidth={1.5} opacity={0.9}
+          onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, 'br') }} style={{ cursor: 'nwse-resize' }} />
       )}
     </g>
   )
