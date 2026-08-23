@@ -1660,8 +1660,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           // toward their outside parent), and hard-clamped inside so a link out can't drag them away.
           node.vx += (cx - node.x) * alpha * 0.35
           node.vy += (cy - node.y) * alpha * 0.35
-          node.x = Math.max(cx - halfW + pad, Math.min(cx + halfW - pad, node.x))
-          node.y = Math.max(cy - halfH + pad, Math.min(cy + halfH - pad, node.y))
+          // Clamp by each node's OWN half-size (+ small margin) so its EDGE — not just its centre —
+          // stays inside the box. If the node is bigger than the box, pin it at centre.
+          const nvp = vp[node.id] || {}
+          const nr = NODE_R * (nvp.scale || 1)
+          const nfs = Math.max(9, Math.round(12 * (nvp.scale || 1)))
+          const { halfW: nhw, halfH: nhh } = shapeDims(nvp.shape || 'circle', nr, node.label || '', nfs, nvp.labelWidth)
+          const mW = nhw + 6, mH = nhh + 6
+          node.x = halfW <= mW ? cx : Math.max(cx - halfW + mW, Math.min(cx + halfW - mW, node.x))
+          node.y = halfH <= mH ? cy : Math.max(cy - halfH + mH, Math.min(cy + halfH - mH, node.y))
         } else {
           if (node.x < cx - halfW + pad) node.vx += alpha * 10
           if (node.x > cx + halfW - pad) node.vx -= alpha * 10
