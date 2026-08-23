@@ -2700,6 +2700,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           } else {
             if (newContainerId !== curContainer) pushUndo()
             setContainedIn(nodeId, newContainerId)
+            // Dropped INTO a container → release its anchor so the container's centre-gravity drives it
+            // (an anchored node is skipped by the bounding force and would just sit where it landed).
+            const newCvp = newContainerId ? (viewNodePropsRef.current[newContainerId] || {}) : null
+            if (newCvp?.shape === 'container') {
+              releaseAnchor(nodeId)
+              simNode.fx = null; simNode.fy = null
+              simRef.current?.alpha(0.6).restart()
+            }
           }
         }
       }
