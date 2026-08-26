@@ -776,6 +776,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   useEffect(() => { try { localStorage.setItem('pim_style_undock', floatDock ? '1' : '0') } catch { /* ignore */ } }, [floatDock])
   const [floatRect, setFloatRect] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_style_floatpos') || 'null') || { x: 80, y: 90 } } catch { return { x: 80, y: 90 } } })
   useEffect(() => { try { localStorage.setItem('pim_style_floatpos', JSON.stringify(floatRect)) } catch { /* ignore */ } }, [floatRect])
+  // Keyboard-navigation camera: how close the arrow-key nav zooms when a single node is framed.
+  // No settings page yet, so it's a persisted pref (tunable live with [ and ] while navigating).
+  const [navZoom, setNavZoom] = useState(() => { try { return Math.max(1.2, Math.min(3.5, +localStorage.getItem('pim_nav_zoom') || 2.2)) } catch { return 2.2 } })
+  useEffect(() => { try { localStorage.setItem('pim_nav_zoom', String(navZoom)) } catch { /* ignore */ } }, [navZoom])
+  const navZoomRef = useRef(navZoom); useEffect(() => { navZoomRef.current = navZoom }, [navZoom])
+  const navDepthRef = useRef(0)     // generations below the focused node to keep in frame (Shift+↓/↑ changes it)
+  const zoomNavRef = useRef(null)   // holds zoomToNodeDepth (defined later) so the key handler avoids a TDZ dep
+  const [navHud, setNavHud] = useState(null)   // { depth, zoom } transient indicator during keyboard nav
+  const navHudTimer = useRef(null)
+  const showNavHud = useCallback((depth) => {
+    setNavHud({ depth, zoom: navZoomRef.current })
+    clearTimeout(navHudTimer.current)
+    navHudTimer.current = setTimeout(() => setNavHud(null), 1900)
+  }, [])
   // While the style panel is undocked, keep it targeted on the currently selected node (so a plain
   // left-click retargets the floating window, not just a right-click).
   useEffect(() => {
@@ -2406,36 +2420,58 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
-      // ArrowUp → select parent
-      if (e.key === 'ArrowUp' && selected?.type === 'node') {
-        e.preventDefault()
-        const parentEdge = storeEdges.find(ed => ed.target === selected.id)
-        if (parentEdge) setSelected({ id: parentEdge.source, type: 'node' })
-        return
-      }
+      // ── Keyboard tree navigation with focus-zoom ─────────────────────────────
+      //   ← / →           cycle siblings (at a root, cycles among all roots)
+      //   ↑               parent · ↓ first child
+      //   Ctrl/Cmd + ↑    jump to root (topmost ancestor)
+      //   Shift + ↓ / ↑   change zoom depth (node only → +1 gen → +2 …) — sticky across moves
+      //   [ / ]           tune how close a single node zooms (persisted)
+      if (selected?.type === 'node' && !e.altKey) {
+        const navGo = (id) => { if (id) { setSelected({ id, type: 'node' }); zoomNavRef.current?.(id, navDepthRef.current) } }
 
-      // ArrowDown → select first child
-      if (e.key === 'ArrowDown' && selected?.type === 'node') {
-        e.preventDefault()
-        const childEdge = storeEdges.find(ed => ed.source === selected.id)
-        if (childEdge) setSelected({ id: childEdge.target, type: 'node' })
-        return
-      }
+        // Tune closeness live
+        if ((e.key === '[' || e.key === ']') && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault()
+          const nz = Math.max(1.2, Math.min(3.5, +(navZoomRef.current + (e.key === ']' ? 0.2 : -0.2)).toFixed(2)))
+          navZoomRef.current = nz; setNavZoom(nz)
+          zoomNavRef.current?.(selected.id, navDepthRef.current); showNavHud(navDepthRef.current)
+          return
+        }
 
-      // ArrowLeft/Right → cycle siblings
-      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && selected?.type === 'node') {
-        e.preventDefault()
-        const { siblings } = getSiblings(selected.id)
-        const idx = siblings.indexOf(selected.id)
-        const delta = e.key === 'ArrowRight' ? 1 : -1
-        const nextId = siblings[(idx + delta + siblings.length) % siblings.length]
-        if (nextId && nextId !== selected.id) setSelected({ id: nextId, type: 'node' })
-        return
+        // Change zoom depth (how many generations stay in frame)
+        if (e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+          e.preventDefault()
+          navDepthRef.current = Math.max(0, Math.min(8, navDepthRef.current + (e.key === 'ArrowDown' ? 1 : -1)))
+          zoomNavRef.current?.(selected.id, navDepthRef.current); showNavHud(navDepthRef.current)
+          return
+        }
+
+        // Jump to root (multiple roots are treated as siblings by getSiblings)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
+          e.preventDefault()
+          let cur = selected.id, guard = new Set()
+          while (!guard.has(cur)) { guard.add(cur); const pe = storeEdges.find(ed => ed.target === cur); if (!pe) break; cur = pe.source }
+          navGo(cur); return
+        }
+
+        if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+          if (e.key === 'ArrowUp') { e.preventDefault(); const pe = storeEdges.find(ed => ed.target === selected.id); if (pe) navGo(pe.source); return }
+          if (e.key === 'ArrowDown') { e.preventDefault(); const ce = storeEdges.find(ed => ed.source === selected.id); if (ce) navGo(ce.target); return }
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault()
+            const { siblings } = getSiblings(selected.id)
+            const idx = siblings.indexOf(selected.id)
+            const delta = e.key === 'ArrowRight' ? 1 : -1
+            const nextId = siblings[(idx + delta + siblings.length) % siblings.length]
+            if (nextId) navGo(nextId)
+            return
+          }
+        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds, nodeMenu, photoMenu, contextMenu, selectedDrawingId, deleteDrawing])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds, nodeMenu, photoMenu, contextMenu, selectedDrawingId, deleteDrawing, showNavHud])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
@@ -3409,6 +3445,56 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     zoomTransformRef.current = tf
     scheduleRender()
   }, [storeEdges, focusNode, scheduleRender])
+
+  // Keyboard-nav camera: frame a node together with `depth` generations of descendants that are on the
+  // canvas. depth 0 → the node alone at the configured closeness (navZoom); depth ≥1 → fit the subtree,
+  // never zooming in closer than navZoom (so deeper = wider). Used by the arrow-key tree navigation.
+  const zoomToNodeDepth = useCallback((nodeId, depth) => {
+    if (!svgRef.current || !zoomBehaviorRef.current) return
+    const byId = new Map(simNodesRef.current.map(n => [n.id, n]))
+    const self = byId.get(nodeId); if (!self) return
+    const targets = [self]
+    if (depth > 0) {
+      let frontier = [nodeId]
+      for (let d = 0; d < depth && frontier.length; d++) {
+        const next = []
+        for (const pid of frontier) {
+          for (const ed of storeEdges) {
+            if (ed.source !== pid) continue
+            const cn = byId.get(ed.target)
+            if (cn && !targets.includes(cn)) { targets.push(cn); next.push(ed.target) }
+          }
+        }
+        frontier = next
+      }
+    }
+    const svgW = svgRef.current.clientWidth, svgH = svgRef.current.clientHeight
+    const zMax = navZoomRef.current || 2.2
+    if (targets.length === 1) {
+      const t = d3.zoomIdentity.translate(svgW / 2 - zMax * (self.x || 0), svgH / 2 - zMax * (self.y || 0)).scale(zMax)
+      d3.select(svgRef.current).transition().duration(450).call(zoomBehaviorRef.current.transform, t)
+      zoomTransformRef.current = t; scheduleRender(); return
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const nd of targets) {
+      const vp = { ...DEFAULT_NODE_PROPS, ...(viewNodePropsRef.current[nd.id] || {}) }
+      const r = NODE_R * (vp.scale || 1)
+      const { halfW: dHW, halfH: dHH } = shapeDims(vp.shape || 'circle', r)
+      const box = (vp.shape === 'frame' || vp.shape === 'container' || vp.shape === '3d')
+      const hw = box ? (vp.frameHalfW ?? dHW) : dHW
+      const hh = box ? (vp.frameHalfH ?? dHH) : dHH
+      minX = Math.min(minX, (nd.x || 0) - hw); maxX = Math.max(maxX, (nd.x || 0) + hw)
+      minY = Math.min(minY, (nd.y || 0) - hh); maxY = Math.max(maxY, (nd.y || 0) + hh)
+    }
+    const bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1)
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
+    const pad = 70
+    const k = Math.max(0.1, Math.min((svgW - pad * 2) / bw, (svgH - pad * 2) / bh, zMax))
+    const tf = d3.zoomIdentity.translate(svgW / 2 - k * cx, svgH / 2 - k * cy).scale(k)
+    d3.select(svgRef.current).transition().duration(450).call(zoomBehaviorRef.current.transform, tf)
+    zoomTransformRef.current = tf; scheduleRender()
+  }, [storeEdges, scheduleRender])
+  useEffect(() => { zoomNavRef.current = zoomToNodeDepth }, [zoomToNodeDepth])
 
   // ── On-frame timeline ("builds") — keyframe editor ──────────────────────────
   // Pose the LIVE document to a stage (keyframe editing): anchors, visibility, scale, collapse are
@@ -5666,6 +5752,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             </div>
           )
         })()}
+
+        {/* Keyboard-nav focus indicator: shows current zoom depth + closeness while arrow-navigating */}
+        {navHud && !isPresenting && (
+          <div style={{ position:'absolute', bottom:24, left:'50%', transform:'translateX(-50%)', pointerEvents:'none', zIndex:28,
+            background:'rgba(10,10,24,0.9)', border:'1px solid #2d3a6a', borderRadius:10, padding:'7px 14px',
+            display:'flex', gap:12, alignItems:'center', boxShadow:'0 4px 18px rgba(0,0,0,0.55)', fontFamily:'-apple-system, sans-serif' }}>
+            <span style={{ color:'#c5d0ff', fontSize:'0.8rem', fontWeight:600 }}>
+              {navHud.depth === 0 ? 'Focus: node only' : `Focus: +${navHud.depth} level${navHud.depth > 1 ? 's' : ''} down`}
+            </span>
+            <span style={{ color:'#7c8cff', fontSize:'0.76rem' }}>zoom {navHud.zoom.toFixed(1)}×</span>
+            <span style={{ color:'#7080a0', fontSize:'0.64rem', lineHeight:1.2 }}>Shift+↑↓ depth · [ ] closeness</span>
+          </div>
+        )}
 
         {/* Presentation controls overlay */}
         {isPresenting && (
