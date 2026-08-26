@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
 import * as d3 from 'd3'
 import useGraphStore, { FILL_COLORS, COLOR_PALETTE } from '../lib/graphStore'
-import { saveProject, uploadImageDataUrl } from '../lib/db'
+import { saveProject, uploadImageDataUrl, uploadMediaFile } from '../lib/db'
 import { FilterBar, nodeMatchesFilter, defaultDoneFilter } from '../lib/filter'
 import { buildNestedTagTree } from '../lib/hierarchy'
 import NodePropsEditor from '../components/NodePropsEditor'
@@ -124,6 +124,7 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setNodeLink = useGraphStore(s => s.setNodeLink)
   const addImage = useGraphStore(s => s.addImage)
+  const addAudio = useGraphStore(s => s.addAudio)
   const updateImage = useGraphStore(s => s.updateImage)
   const deleteImage = useGraphStore(s => s.deleteImage)
   const addDrawing = useGraphStore(s => s.addDrawing)
@@ -439,9 +440,14 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
 
   // Photos on the canvas — the same view.images[] the graph stores (center coords), so a photo added
   // here shows in the graph too. Add via + Photo (file picker); drag to move, corner to resize.
-  const images = activeView?.images || EMPTY
+  const allMedia = activeView?.images || EMPTY
+  const images = useMemo(() => allMedia.filter(m => m.type !== 'audio'), [allMedia])
+  const audios = useMemo(() => allMedia.filter(m => m.type === 'audio'), [allMedia])
   const [selImage, setSelImage] = useState(null)
   const fileRef = useRef(null)
+  const audioFileRef = useRef(null)
+  const [audioAdd, setAudioAdd] = useState(false)   // + Audio popover open?
+  const [audioUrl, setAudioUrl] = useState('')
 
   // ── Free drawing layer (shared with the graph): view.drawings[] rendered in world coords. ──
   const drawings = activeView?.drawings || EMPTY
@@ -504,6 +510,35 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
   const commitImage = (id, patch) => { updateImage(id, patch); saveAll() }
   const removeImage = (id) => { deleteImage(id); setSelImage(null); saveAll() }
 
+  // World coords at the current viewport center — where new media drops.
+  const viewportCenter = () => {
+    const rect = svgRef.current?.getBoundingClientRect(), k = tf.k || 1
+    return { cx: ((rect?.width ?? 800) / 2 - tf.x) / k, cy: ((rect?.height ?? 600) / 2 - tf.y) / k }
+  }
+  const AUDIO_W = 260, AUDIO_H = 92
+  const titleFromUrl = (u) => { try { const n = decodeURIComponent(new URL(u).pathname.split('/').pop() || ''); return n.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim() || new URL(u).hostname } catch { return 'Audio' } }
+  const addAudioUrl = (url) => {
+    const clean = (url || '').trim(); if (!clean) return
+    const { cx, cy } = viewportCenter()
+    addAudio({ src: clean, title: titleFromUrl(clean), autoplayOnZoom: false, autoplayOnSlide: false }, cx, cy, AUDIO_W, AUDIO_H)
+    saveAll(); setAudioUrl(''); setAudioAdd(false)
+  }
+  const onPickAudio = (e) => {
+    const file = e.target.files?.[0]; e.target.value = ''
+    if (!file) return
+    setAudioAdd(false)
+    const { cx, cy } = viewportCenter()
+    const title = file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim() || 'Audio'
+    // Optimistic local playback via object URL, then swap in the Storage URL once uploaded.
+    const localUrl = URL.createObjectURL(file)
+    const id = addAudio({ src: localUrl, title, autoplayOnZoom: false, autoplayOnSlide: false }, cx, cy, AUDIO_W, AUDIO_H)
+    saveAll()
+    uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(id, { src: url }); saveAll() } })
+      .catch(err => console.warn('Audio upload failed:', err?.message || err))
+  }
+  const commitAudio = (id, patch) => { updateImage(id, patch); saveAll() }
+  const removeAudio = (id) => { deleteImage(id); setSelImage(null); saveAll() }
+
   // Zoom-to-fit a cluster's world bounding box (drill-down: double-click a cluster header).
   const zoomToFit = (bbox) => {
     const svg = svgRef.current; if (!svg || !zoomRef.current || !bbox) return
@@ -552,8 +587,26 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
           {!readOnly && <>
             <button style={styles.addBtn} onClick={addFreeNode} title="Create a free item on the board">+ Node</button>
             <button style={styles.addBtn} onClick={() => fileRef.current?.click()} title="Add a photo to the canvas">+ Photo</button>
+            <div style={{ position: 'relative' }}>
+              <button style={{ ...styles.addBtn, ...(audioAdd ? { background: '#2d3a6a', color: '#c5d0ff', borderColor: '#5b6af0' } : {}) }} onClick={() => setAudioAdd(o => !o)} title="Add audio — paste a link or upload a file">+ Audio</button>
+              {audioAdd && (<>
+                <div style={styles.backdrop} onClick={() => setAudioAdd(false)} />
+                <div style={{ ...styles.menu, minWidth: 260, padding: 10 }} onClick={e => e.stopPropagation()}>
+                  <div style={styles.mlabel}>♪ Paste an audio link</div>
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <input autoFocus value={audioUrl} onChange={e => setAudioUrl(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') addAudioUrl(audioUrl) }}
+                      placeholder="https://…/clip.mp3" style={styles.audioInput} />
+                    <button style={styles.audioGo} onClick={() => addAudioUrl(audioUrl)}>Add</button>
+                  </div>
+                  <div style={{ ...styles.mlabel, marginBottom: 6 }}>… or upload a file</div>
+                  <button style={{ ...styles.addBtn, width: '100%' }} onClick={() => audioFileRef.current?.click()}>⤒ Choose audio file</button>
+                </div>
+              </>)}
+            </div>
             <button style={{ ...styles.addBtn, ...(showDraw ? { background: '#2d3a6a', color: '#c5d0ff', borderColor: '#5b6af0' } : {}) }} onClick={() => setShowDraw(o => !o)} title="Drawing palette — shapes, lines, text, emoji">✏️ Draw</button>
             <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickPhoto} />
+            <input ref={audioFileRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={onPickAudio} />
           </>}
           <span style={{ fontSize: '0.6rem', letterSpacing: '0.08em', color: '#7080a0' }}>VIEWS</span>
           {views.map(v => (
@@ -596,8 +649,23 @@ export default function PackBoard({ projectId, projectList = [], onNavigateProje
             {images.map(img => (
               <BoardImage key={img.id} img={img} selected={selImage === img.id} toWorld={toWorld}
                 onSelect={() => setSelImage(img.id)} onCommit={patch => commitImage(img.id, patch)}
-                onDelete={() => removeImage(img.id)} />
+                onDelete={() => removeImage(img.id)}
+                onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) commitImage(img.id, { caption: next }) }} />
             ))}
+            {/* Audio clips — autoplay when zoomed into (card fills ≥ half the viewport and is on-screen). */}
+            {audios.map(a => {
+              const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
+              const cxs = tf.x + a.x * (tf.k || 1), cys = tf.y + a.y * (tf.k || 1)
+              const inView = vw > 0 && cxs > 0 && cxs < vw && cys > 0 && cys < vh
+              const fill = Math.max((a.width * (tf.k || 1)) / (vw || 1), (a.height * (tf.k || 1)) / (vh || 1))
+              const active = inView && fill >= 0.5
+              return (
+                <BoardAudio key={a.id} img={a} selected={selImage === a.id} active={active} toWorld={toWorld}
+                  onSelect={() => setSelImage(a.id)} onCommit={patch => commitAudio(a.id, patch)}
+                  onDelete={() => removeAudio(a.id)} onToggle={prop => commitAudio(a.id, { [prop]: !a[prop] })}
+                  onTitle={() => { const next = prompt('Audio title', a.title || ''); if (next !== null) commitAudio(a.id, { title: next.trim() }) }} />
+              )
+            })}
             {systems.map(sys => {
               const groupBy = (sys.groupBy && sys.groupBy.length) ? sys.groupBy : [sys.propId]
               const rawDef = propertyDefs.find(d => d.id === groupBy[0])
@@ -1504,7 +1572,7 @@ function dashArrayB(dash, sw = 1.4) {
 
 // A photo on the canvas (view.images[] — center coords, shared with the graph). Drag to move, the
 // bottom-right handle to resize (aspect-locked); × deletes. Selection shows the frame + handles.
-function BoardImage({ img, selected, toWorld, onSelect, onCommit, onDelete }) {
+function BoardImage({ img, selected, toWorld, onSelect, onCommit, onDelete, onCaption }) {
   const [box, setBox] = useState(null)   // live {x,y,w,h} during a move/resize; committed on mouseup
   const x = box ? box.x : img.x, y = box ? box.y : img.y
   const w = box ? box.w : img.width, h = box ? box.h : img.height
@@ -1528,9 +1596,99 @@ function BoardImage({ img, selected, toWorld, onSelect, onCommit, onDelete }) {
       {img.bgColor && <rect x={-w / 2} y={-h / 2} width={w} height={h} fill={img.bgColor} rx={2} />}
       <image href={img.src} x={-w / 2} y={-h / 2} width={w} height={h} preserveAspectRatio="xMidYMid meet"
         style={{ cursor: 'grab' }} onMouseDown={startMove}
+        onDoubleClick={e => { e.preventDefault(); e.stopPropagation(); onCaption?.() }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onSelect() }} />
+      {/* Caption — wrapped text beneath the photo. Double-click the photo (or the "＋ caption" hint) to edit. */}
+      {(() => {
+        const fs = Math.max(12, Math.min(20, w * 0.07))
+        const lines = img.caption ? wrapText(img.caption, Math.max(10, Math.floor(w / (fs * 0.56)))).slice(0, 4) : []
+        const top = h / 2 + fs * 1.1
+        if (!lines.length) {
+          return selected ? (
+            <text x={0} y={top} textAnchor="middle" fontSize={fs} fill="#7080a0" style={{ cursor: 'text' }}
+              onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCaption?.() }}>＋ caption</text>
+          ) : null
+        }
+        return (
+          <text x={0} y={top} textAnchor="middle" fontSize={fs} fill="#c5d0ff" style={{ cursor: 'text' }}
+            onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCaption?.() }}
+            paintOrder="stroke" stroke="rgba(12,12,26,0.85)" strokeWidth={fs * 0.14}>
+            {lines.map((ln, i) => <tspan key={i} x={0} dy={i === 0 ? 0 : fs * 1.15}>{ln}</tspan>)}
+          </text>
+        )
+      })()}
       {selected && (<>
         <rect x={-w / 2} y={-h / 2} width={w} height={h} fill="none" stroke="#5b6af0" strokeWidth={2} pointerEvents="none" />
+        <g transform={`translate(${w / 2},${h / 2})`} style={{ cursor: 'nwse-resize' }} onMouseDown={startResize}>
+          <rect x={-7} y={-7} width={14} height={14} rx={2} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
+        </g>
+        <g transform={`translate(${w / 2},${-h / 2})`} style={{ cursor: 'pointer' }}
+          onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDelete() }}>
+          <circle r={9} fill="#3a1a1a" stroke="#f87171" strokeWidth={1.4} />
+          <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="#f87171" pointerEvents="none">×</text>
+        </g>
+      </>)}
+    </g>
+  )
+}
+
+// An audio clip on the canvas (view.images[] with type:'audio'). Native <audio> controls embedded via
+// foreignObject; header is the drag handle. Two autoplay toggles (on zoom / on slide). `active` is the
+// parent's "zoomed-into" signal — when set and autoplayOnZoom is on, the clip plays; otherwise it pauses.
+function BoardAudio({ img, selected, active, toWorld, onSelect, onCommit, onDelete, onToggle, onTitle }) {
+  const audioRef = useRef(null)
+  const [box, setBox] = useState(null)
+  const x = box ? box.x : img.x, y = box ? box.y : img.y
+  const w = box ? box.w : img.width, h = box ? box.h : img.height
+  useEffect(() => {
+    const a = audioRef.current; if (!a || !img.autoplayOnZoom) return
+    if (active) { a.play().catch(() => { /* gesture-gated; ignore */ }) } else { a.pause() }
+  }, [active, img.autoplayOnZoom, img.src])
+  const startMove = (e) => {
+    if (e.button === 2) return
+    e.preventDefault(); e.stopPropagation(); onSelect()
+    const p0 = toWorld(e); const ox = img.x - p0.x, oy = img.y - p0.y; let moved = false
+    const move = ev => { const p = toWorld(ev); if (Math.hypot(p.x - p0.x, p.y - p0.y) > 2) moved = true; setBox({ x: p.x + ox, y: p.y + oy, w: img.width, h: img.height }) }
+    const up = ev => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); const p = toWorld(ev); if (moved) onCommit({ x: p.x + ox, y: p.y + oy }); setBox(null) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const startResize = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const aspect = img.width / img.height; let last = null
+    const move = ev => { const p = toWorld(ev); const nw = Math.max(180, 2 * Math.abs(p.x - img.x)); const nh = nw / aspect; last = { w: nw, h: nh }; setBox({ x: img.x, y: img.y, w: nw, h: nh }) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (last) onCommit({ width: last.w, height: last.h }); setBox(null) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const title = img.title || 'Audio'
+  const maxChars = Math.max(8, Math.floor((w - 60) / 8))
+  const shown = title.length > maxChars ? title.slice(0, maxChars - 1) + '…' : title
+  const pill = (px, on, label, onClick) => (
+    <g transform={`translate(${px},${h / 2 + 16})`} style={{ cursor: 'pointer' }}
+      onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onClick() }}>
+      <rect x={0} y={-11} width={label.length * 6.6 + 16} height={22} rx={11}
+        fill={on ? '#232a5c' : '#12122a'} stroke={on ? '#5b6af0' : '#2d3a6a'} strokeWidth={1.2} />
+      <text x={8} y={0} dominantBaseline="central" fontSize={11} fill={on ? '#aeb8ff' : '#7d84a4'}>{label}</text>
+    </g>
+  )
+  return (
+    <g data-audio="1" transform={`translate(${x},${y})`}>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={10} fill="#14142a"
+        stroke={selected ? '#5b6af0' : (active && img.autoplayOnZoom ? '#4ade80' : '#2d3a6a')} strokeWidth={selected ? 2 : 1.4} />
+      {/* Header = drag handle + title (double-click title to rename) */}
+      <g style={{ cursor: 'grab' }} onMouseDown={startMove}
+        onDoubleClick={e => { e.preventDefault(); e.stopPropagation(); onTitle?.() }}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onSelect() }}>
+        <rect x={-w / 2} y={-h / 2} width={w} height={30} rx={10} fill="transparent" />
+        <text x={-w / 2 + 13} y={-h / 2 + 20} fontSize={15} fill="#8ab4ff" pointerEvents="none">♪</text>
+        <text x={-w / 2 + 32} y={-h / 2 + 20} fontSize={13} fill="#c5d0ff" pointerEvents="none">{shown}</text>
+      </g>
+      {/* Native audio controls */}
+      <foreignObject x={-w / 2 + 10} y={-h / 2 + 34} width={w - 20} height={h - 44}>
+        <audio ref={audioRef} controls src={img.src} style={{ width: '100%', height: 34 }} onMouseDown={e => e.stopPropagation()} />
+      </foreignObject>
+      {selected && (<>
+        {pill(-w / 2, !!img.autoplayOnZoom, '⚡ On zoom', () => onToggle('autoplayOnZoom'))}
+        {pill(-w / 2 + 96, !!img.autoplayOnSlide, '▷ On slide', () => onToggle('autoplayOnSlide'))}
         <g transform={`translate(${w / 2},${h / 2})`} style={{ cursor: 'nwse-resize' }} onMouseDown={startResize}>
           <rect x={-7} y={-7} width={14} height={14} rx={2} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
         </g>
@@ -1792,5 +1950,7 @@ const styles = {
   menu: { position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 7, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '5px 0', minWidth: 210, boxShadow: '0 8px 26px rgba(0,0,0,0.6)' },
   item: { padding: '6px 12px', fontSize: '0.8rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap' },
   mlabel: { padding: '5px 12px 2px', fontSize: '0.62rem', letterSpacing: '0.06em', color: '#7080a0', textTransform: 'uppercase' },
+  audioInput: { flex: 1, minWidth: 0, background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '6px 8px', fontSize: 12.5, outline: 'none' },
+  audioGo: { background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 },
   empty: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8090b8', fontSize: '0.9rem', pointerEvents: 'none' },
 }

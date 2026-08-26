@@ -627,6 +627,19 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // Audio clip, stored in the SAME view.images[] array (shares selection/drag/resize/delete) but
+  // flagged type:'audio'. fields = { src, title, autoplayOnZoom?, autoplayOnSlide? }. src is a public
+  // URL (pasted link or Storage-offloaded upload).
+  addAudio: (fields, x, y, width, height) => {
+    const id = uid()
+    set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, images: [...(v.images || []), { id, type: 'audio', x, y, width, height, rotation: 0, bgColor: null, ...fields }],
+      }),
+    }))
+    return id
+  },
+
   updateImage: (imageId, props) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v, images: (v.images || []).map(img => img.id === imageId ? { ...img, ...props } : img),
