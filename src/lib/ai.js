@@ -146,6 +146,56 @@ async function oneTurn(messages) {
   return callAssistant({ messages, tools: AI_TOOLS, system: SYSTEM })
 }
 
+// ── Direct content generation (no tools) ─────────────────────────────────────
+// Type a verbal prompt, get generated prose back. Used by the node "✨ Generate…"
+// action to fill notes / spin up children / rewrite a label. Same key path as the
+// assistant (browser-direct with the user's key, edge-function fallback).
+const WRITER_MODEL = 'claude-sonnet-5'
+
+const WRITER_SYSTEM = `You are a writing assistant embedded in PIM, a mind-map / knowledge-graph app. The user gives you a short verbal prompt and you produce content directly.
+
+You will be told the desired OUTPUT MODE:
+- "prose": write clear, well-structured prose (the node's note body). Use short paragraphs. No title heading — the node already has a label. Plain text, light Markdown at most.
+- "list": produce a flat list of short items (each becomes a child node). Return ONE item per line, no numbering, no bullets, no blank lines, no commentary. Aim for the count the user asked for, otherwise 5–8 items. Keep each line under ~8 words.
+- "label": produce a single short title/label (a few words). Return ONLY the label text, nothing else.
+
+Context: you may be given the node's current label and note, and a few nearby nodes, to stay on-topic. Honor the user's language. Output only the requested content — no preamble like "Here is…", no closing remarks.`
+
+// One no-tools Claude turn returning plain text. Mode ∈ 'prose' | 'list' | 'label'.
+export async function generateContent(prompt, { mode = 'prose', context = null } = {}) {
+  const parts = [`OUTPUT MODE: ${mode}`]
+  if (context?.label) parts.push(`Node label: ${context.label}`)
+  if (context?.note) parts.push(`Node's current note:\n${context.note}`)
+  if (context?.nearby?.length) parts.push(`Nearby nodes: ${context.nearby.join(', ')}`)
+  parts.push(`\nRequest: ${prompt}`)
+  const messages = [{ role: 'user', content: parts.join('\n') }]
+
+  const key = getWordgenKey()
+  let text = ''
+  if (key) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: WRITER_MODEL, max_tokens: 2048,
+        system: WRITER_SYSTEM, messages,
+      }),
+    })
+    if (!res.ok) { let m = `HTTP ${res.status}`; try { m = (await res.json())?.error?.message || m } catch { /* ignore */ } throw new Error(m) }
+    const json = await res.json()
+    text = (json.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
+  } else {
+    const json = await callAssistant({ messages, system: WRITER_SYSTEM })
+    text = (json.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
+  }
+  return text
+}
+
 // ── Agentic loop (browser-driven). onEvent({type}) for lightweight status. ────
 export async function runAssistant(prompt, selection = {}, onEvent = () => {}) {
   const context = buildContext(selection)

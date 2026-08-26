@@ -5,6 +5,7 @@ import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
 import useGraphStore, { DEFAULT_NODE_PROPS, NODE_R, COLOR_PALETTE, FILL_COLORS, TEXT_COLORS, SHAPES, BG_COLORS, SLIDE_BG_COLORS, LAST_STYLE_PROPS, NEW_NODE_STYLE_PROPS } from '../lib/graphStore'
 import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, setWordgenKey } from '../lib/wordgen'
+import { generateContent } from '../lib/ai'
 import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
@@ -1943,6 +1944,38 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setWgBusy(false)
     }
   }, [addNode, setNodeMeta, setNodeViewProp, updateNotes, pushUndo, scheduleRender])
+
+  // ── Direct content generation: type a verbal prompt → Claude writes into the node ──
+  // genDialog = { nodeId } while open. The GenerateDialog handles its own prompt/preview;
+  // this only applies the confirmed text back into the doc (notes / children / label).
+  const [genDialog, setGenDialog] = useState(null)
+  const applyGenerated = useCallback((nodeId, mode, text, { append = false } = {}) => {
+    const st = useGraphStore.getState()
+    const node = st.nodes.find(n => n.id === nodeId)
+    if (!node || !text) return
+    pushUndo()
+    if (mode === 'label') {
+      updateLabel(nodeId, text.trim().replace(/\s+/g, ' ').slice(0, 200))
+    } else if (mode === 'prose') {
+      const existing = node.notes || ''
+      updateNotes(nodeId, append && existing.trim() ? `${existing.trimEnd()}\n\n${text.trim()}` : text.trim())
+    } else if (mode === 'list') {
+      const items = text.split('\n').map(s => s.replace(/^\s*[-*•\d.)]+\s*/, '').trim()).filter(Boolean).slice(0, 40)
+      if (items.length) {
+        const parent = simNodesRef.current.find(n => n.id === nodeId)
+        const cx = parent?.x || 0, cy = parent?.y || 0
+        const ids = items.map((label, i) => ({ id: addNode(label, nodeId), i }))
+        setTimeout(() => {
+          ids.forEach(({ id, i }) => {
+            const sn = simNodesRef.current.find(n => n.id === id)
+            if (sn) { const a = (i / ids.length) * Math.PI * 2; const r = 130 + (i % 3) * 28; sn.x = cx + Math.cos(a) * r; sn.y = cy + Math.sin(a) * r }
+          })
+          scheduleRender()
+        }, 0)
+      }
+    }
+    setGenDialog(null)
+  }, [addNode, updateLabel, updateNotes, pushUndo, scheduleRender])
 
   // USPTO live-trademark check for a set of node ids → badge each with its live-hit count.
   const [usptoBusy, setUsptoBusy] = useState(false)
@@ -5214,6 +5247,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               allTags={allProjectTags}
               onAddTag={t => addNodeTag(hn.id, t)}
               onRemoveTag={t => removeNodeTag(hn.id, t)}
+              onGenContent={() => { setGenDialog({ nodeId: hn.id }); close() }}
               onGenWords={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'words' }); close() }}
               onGenVariations={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'variations' }); close() }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
@@ -5759,6 +5793,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onClose={() => { if (!wgBusy) { setWgDialog(null); setWgErr(null) } }}
         />
       )}
+
+      {genDialog && (() => {
+        const gn = storeNodes.find(n => n.id === genDialog.nodeId)
+        if (!gn) return null
+        const parentOf = {}; storeEdges.forEach(e => { parentOf[e.target] = e.source })
+        const kids = storeEdges.filter(e => e.source === gn.id).map(e => storeNodes.find(n => n.id === e.target)?.label).filter(Boolean)
+        const parentLabel = parentOf[gn.id] ? storeNodes.find(n => n.id === parentOf[gn.id])?.label : null
+        const nearby = [...(parentLabel ? [parentLabel] : []), ...kids].slice(0, 12)
+        return (
+          <GenerateDialog
+            node={gn}
+            nearby={nearby}
+            onApply={(mode, text, opts) => applyGenerated(genDialog.nodeId, mode, text, opts)}
+            onClose={() => setGenDialog(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -9048,6 +9099,120 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 }
 
 // ─── Word-generator dialog ───────────────────────────────────────────────────
+// Type a verbal prompt → Claude writes content straight into the node.
+// Two phases: compose (prompt + target) → review (editable preview → Apply).
+function GenerateDialog({ node, nearby, onApply, onClose }) {
+  const [prompt, setPrompt] = useState('')
+  const [mode, setMode] = useState('prose')          // 'prose' | 'list' | 'label'
+  const [append, setAppend] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const [result, setResult] = useState(null)         // editable preview once generated
+  const [keyInput, setKeyInput] = useState(() => getWordgenKey())
+  const [live, setLive] = useState(() => hasWordgenKey())
+  const hasNotes = !!(node.notes || '').trim()
+
+  const inp = { width: '100%', boxSizing: 'border-box', background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 7, padding: '7px 9px', fontSize: 13, outline: 'none', fontFamily: '-apple-system, sans-serif' }
+  const lbl = { fontSize: 11.5, color: '#8fa0d8', margin: '0 0 4px', display: 'block', fontWeight: 600 }
+  const MODES = [
+    { k: 'prose', icon: '📝', label: 'Notes', hint: "Write into this node's note body" },
+    { k: 'list', icon: '🌿', label: 'Child nodes', hint: 'Spin up a list of children' },
+    { k: 'label', icon: '✏️', label: 'Rename', hint: 'Rewrite this node\'s label' },
+  ]
+
+  const run = async () => {
+    if (!prompt.trim()) return
+    setBusy(true); setErr(null)
+    try {
+      const text = await generateContent(prompt.trim(), {
+        mode,
+        context: { label: node.label, note: node.notes, nearby },
+      })
+      if (!text) { setErr('Nothing came back — try again or rephrase.'); return }
+      setResult(text)
+    } catch (e) {
+      setErr(e?.message || 'Generation failed.')
+    } finally { setBusy(false) }
+  }
+
+  const previewCount = result != null && mode === 'list'
+    ? result.split('\n').map(s => s.replace(/^\s*[-*•\d.)]+\s*/, '').trim()).filter(Boolean).length : 0
+
+  return (
+    <div onMouseDown={() => { if (!busy) onClose() }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, sans-serif' }}>
+      <div onMouseDown={e => e.stopPropagation()}
+        style={{ width: 440, maxWidth: '94vw', background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 12, padding: '1.1rem 1.15rem', boxShadow: '0 16px 48px rgba(0,0,0,0.7)' }}>
+        <div style={{ color: '#c5d0ff', fontSize: '0.95rem', fontWeight: 700, marginBottom: 3 }}>✨ Generate content</div>
+        <div style={{ color: '#8090b8', fontSize: '0.76rem', marginBottom: 12, lineHeight: 1.4 }}>
+          Describe what you want for <b style={{ color: '#a9b6ee' }}>“{node.label || 'this node'}”</b> and Claude writes it directly here.
+        </div>
+
+        <label style={lbl}>Prompt</label>
+        <textarea autoFocus value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
+          placeholder="e.g. Summarize the pros and cons of this approach&#10;or: list 6 subtopics to explore&#10;or: a punchier name for this"
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run() } }}
+          style={{ ...inp, marginBottom: 12, resize: 'vertical', lineHeight: 1.45 }} />
+
+        <label style={lbl}>Put the result into</label>
+        <div style={{ display: 'flex', gap: 6, marginBottom: hasNotes && mode === 'prose' ? 8 : 12 }}>
+          {MODES.map(m => (
+            <button key={m.k} title={m.hint} onClick={() => { setMode(m.k); setResult(null) }}
+              style={{ flex: 1, background: mode === m.k ? '#232a5c' : '#0e0e1c', border: `1px solid ${mode === m.k ? '#4a5aa8' : '#2a2f47'}`, color: mode === m.k ? '#dbe2ff' : '#8fa0d8', borderRadius: 8, padding: '7px 4px', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <span style={{ fontSize: 15 }}>{m.icon}</span>{m.label}
+            </button>
+          ))}
+        </div>
+        {mode === 'prose' && hasNotes && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={append} onChange={e => setAppend(e.target.checked)} style={{ width: 15, height: 15, accentColor: '#5b6af0' }} />
+            <span style={{ fontSize: 12.5, color: '#c5d0ff' }}>Append to existing note <span style={{ color: '#8090b8' }}>(otherwise replaces it)</span></span>
+          </label>
+        )}
+
+        {result != null && (
+          <>
+            <label style={lbl}>Preview{mode === 'list' ? ` — ${previewCount} node${previewCount === 1 ? '' : 's'} (one per line, editable)` : ' (editable)'}</label>
+            <textarea value={result} onChange={e => setResult(e.target.value)} rows={mode === 'label' ? 1 : 6}
+              style={{ ...inp, marginBottom: 12, resize: 'vertical', lineHeight: 1.45 }} />
+          </>
+        )}
+
+        {!live && (
+          <div style={{ background: '#0e0e1c', border: '1px solid #2a2f47', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
+            <div style={{ color: '#f6ad55', fontSize: '0.72rem', marginBottom: 6 }}>Paste an Anthropic key for generation (stored only in this browser).</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={keyInput} onChange={e => setKeyInput(e.target.value)} placeholder="sk-ant-…" type="password" style={{ ...inp, flex: 1 }} />
+              <button onClick={() => { setWordgenKey(keyInput.trim()); setLive(hasWordgenKey()) }}
+                style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 7, padding: '0 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Save</button>
+            </div>
+          </div>
+        )}
+
+        {err && <div style={{ color: '#f87171', fontSize: '0.76rem', marginBottom: 10 }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button disabled={busy} onClick={onClose} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#9aa8d8', borderRadius: 7, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          {result != null && (
+            <button disabled={busy} onClick={run} style={{ background: 'transparent', border: '1px solid #3a4a8a', color: '#a9b6ee', borderRadius: 7, padding: '7px 14px', cursor: busy ? 'default' : 'pointer', fontSize: 13 }}>{busy ? '…' : '↻ Redo'}</button>
+          )}
+          {result == null ? (
+            <button disabled={busy || !prompt.trim()} onClick={run}
+              style={{ background: busy ? '#2a3260' : 'linear-gradient(#2a327a, #1e2358)', border: '1px solid #3a4a8a', color: '#e6ebff', borderRadius: 7, padding: '7px 16px', cursor: busy || !prompt.trim() ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: !prompt.trim() ? 0.55 : 1 }}>
+              {busy ? 'Generating…' : 'Generate'}
+            </button>
+          ) : (
+            <button disabled={busy || !result.trim()} onClick={() => onApply(mode, result, { append })}
+              style={{ background: 'linear-gradient(#2a7a4a, #1e5838)', border: '1px solid #3a8a5a', color: '#e6ffef', borderRadius: 7, padding: '7px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              {mode === 'list' ? 'Add nodes' : mode === 'label' ? 'Rename' : 'Apply'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
   const [count, setCount] = useState(8)
   const [modifier, setModifier] = useState('')
@@ -9115,7 +9280,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onToggleStrategy, isStrategy, onMakeContainer, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenWords, onGenVariations, selCount = 0,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
   floating = false, onUndock, onRedock, nodeTitle }) {
@@ -9282,6 +9447,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         }, { icon: '⊕', right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
         {onDuplicate && textRow('Duplicate', onDuplicate, { icon: '⧉', opens: null })}
+        {onGenContent && textRow('Generate…', onGenContent, { icon: '✨', opens: null })}
         {onGenWords && textRow('Generate words', onGenWords, { icon: '⚡', opens: null })}
         {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
