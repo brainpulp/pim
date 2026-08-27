@@ -16,6 +16,54 @@ import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from 
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
 
+// ── Auto-styling: derive a visual channel from a property value ──────────────────
+// Channels the parent can map a property to (label + the view prop each writes).
+const STYLE_CHANNELS = [
+  { key: 'color', label: 'Color', prop: 'fillColor' },
+  { key: 'size', label: 'Size', prop: 'scale' },
+  { key: 'shape', label: 'Shape', prop: 'shape' },
+  { key: 'blur', label: 'Blurriness', prop: 'borderBlur' },
+  { key: 'motion', label: 'Motion', prop: 'nodeMotion' },
+  { key: 'outlineWidth', label: 'Outline thickness', prop: 'strokeWidth' },
+  { key: 'outlineColor', label: 'Outline color', prop: 'strokeColor' },
+]
+const AUTOSTYLE_SHAPES = ['circle', 'roundrect', 'rect', 'ellipse', 'diamond']
+const AUTOSTYLE_MOTIONS = ['shake', 'circle', 'jerk', 'updown', 'sideways', 'scale']
+const valKey = (v) => Array.isArray(v) ? v.join('|') : String(v)
+// A node's value for a property def (Select→optionId, multiSelect→array, number→number, else raw).
+function nodeValueForProp(node, def) {
+  if (!def) return null
+  const raw = node?.props?.[def.id]
+  if (def.type === 'number') { const n = Number(raw); return (raw == null || raw === '' || isNaN(n)) ? null : n }
+  if (Array.isArray(raw)) return raw.length ? raw : null
+  return raw ?? null
+}
+function autoStyleColor(value, idx, def) {
+  if (def && (def.type === 'select' || def.type === 'multiSelect')) {
+    const v = Array.isArray(value) ? value[0] : value
+    const opt = (def.options || []).find(o => o.id === v)
+    if (opt?.color) return opt.color
+  }
+  return FILL_COLORS[(idx < 0 ? 0 : idx) % FILL_COLORS.length]
+}
+// value → {viewProp: value} for one channel. ctx = { distinct, min, max, def }.
+function deriveChannel(channel, value, ctx) {
+  const { distinct, min, max, def } = ctx
+  const idx = distinct.findIndex(d => valKey(d) === valKey(value))
+  const frac = distinct.length > 1 && idx >= 0 ? idx / (distinct.length - 1) : 0
+  const numFrac = (typeof value === 'number' && max > min) ? (value - min) / (max - min) : frac
+  switch (channel) {
+    case 'color': return { fillColor: autoStyleColor(value, idx, def) }
+    case 'outlineColor': return { strokeColor: autoStyleColor(value, idx, def), strokeWidth: 2.5 }
+    case 'shape': return { shape: AUTOSTYLE_SHAPES[(idx < 0 ? 0 : idx) % AUTOSTYLE_SHAPES.length] }
+    case 'size': return { scale: +(0.7 + numFrac * 1.8).toFixed(2) }
+    case 'blur': return { borderBlur: Math.round(numFrac * 24) }
+    case 'outlineWidth': return { strokeWidth: +(1 + numFrac * 5).toFixed(1) }
+    case 'motion': return { nodeMotion: { type: AUTOSTYLE_MOTIONS[(idx < 0 ? 0 : idx) % AUTOSTYLE_MOTIONS.length], speed: 1, intensity: 1 } }
+    default: return {}
+  }
+}
+
 // Central "gesture cursor": while a drag/pan/connect is in progress we set the cursor on <body>, which
 // overrides whatever element is under the pointer, then clear it on gesture end. One source of truth
 // so cursor states never fight (idle cursor lives on the <svg>; active gestures live here).
@@ -1186,9 +1234,57 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
   }, [projectId, readOnly])
 
+  // ── Live auto-styling ────────────────────────────────────────────────────────
+  // A node can carry `meta.autoStyle = { maps:[{propId,channel}], rules:[{tags:[],styleId}] }`.
+  // It styles that node's DIRECT CHILDREN, live: property→channel maps set a visual channel from each
+  // child's property value; tag rules apply a whole saved style when the child has all the listed tags
+  // (rules win over maps). The result is a per-node overlay merged into getVP — non-destructive (stored
+  // styles are never touched) and reactive (recomputes when nodes/edges/styles/props change).
+  const autoStyleOverlay = useMemo(() => {
+    const overlay = {}
+    const stylers = storeNodes.filter(n => n.meta?.autoStyle && ((n.meta.autoStyle.maps?.length) || (n.meta.autoStyle.rules?.length)))
+    if (!stylers.length) return overlay
+    const byId = new Map(storeNodes.map(n => [n.id, n]))
+    const childrenOf = {}
+    storeEdges.forEach(e => { (childrenOf[e.source] || (childrenOf[e.source] = [])).push(e.target) })
+    const styleById = new Map((storeStyles || []).map(s => [s.id, s]))
+    const defById = new Map((storePropertyDefs || []).map(d => [d.id, d]))
+    for (const parent of stylers) {
+      const as = parent.meta.autoStyle
+      const kids = (childrenOf[parent.id] || []).map(id => byId.get(id)).filter(Boolean)
+      if (!kids.length) continue
+      // Precompute, per mapped property, the ordered distinct values + numeric range across these kids.
+      const mapCtx = (as.maps || []).map(m => {
+        const def = defById.get(m.propId)
+        const vals = kids.map(k => nodeValueForProp(k, def))
+        const nums = vals.filter(v => typeof v === 'number' && !isNaN(v))
+        const distinct = []
+        vals.forEach(v => { const key = valKey(v); if (v != null && v !== '' && !distinct.some(d => valKey(d) === key)) distinct.push(v) })
+        return { m, def, distinct, min: nums.length ? Math.min(...nums) : 0, max: nums.length ? Math.max(...nums) : 1 }
+      })
+      for (const kid of kids) {
+        let ov = {}
+        for (const ctx of mapCtx) {
+          const v = nodeValueForProp(kid, ctx.def)
+          if (v == null || v === '') continue
+          Object.assign(ov, deriveChannel(ctx.m.channel, v, ctx))
+        }
+        for (const r of (as.rules || [])) {
+          const req = r.tags || []
+          if (req.length && r.styleId && req.every(t => (kid.meta?.tags || []).includes(t))) {
+            const st = styleById.get(r.styleId)
+            if (st) { ov = { ...ov, ...st.props }; break }
+          }
+        }
+        if (Object.keys(ov).length) overlay[kid.id] = { ...(overlay[kid.id] || {}), ...ov }
+      }
+    }
+    return overlay
+  }, [storeNodes, storeEdges, storeStyles, storePropertyDefs])
+
   const getVP = useCallback((nodeId) => ({
-    ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}),
-  }), [viewNodeProps])
+    ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}), ...(autoStyleOverlay[nodeId] || {}),
+  }), [viewNodeProps, autoStyleOverlay])
 
   // BFS hop-distance from a focal node (undirected — follows edges both ways)
   const expandHops = useMemo(() => {
@@ -1968,6 +2064,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // genDialog = { nodeId } while open. The GenerateDialog handles its own prompt/preview;
   // this only applies the confirmed text back into the doc (notes / children / label).
   const [genDialog, setGenDialog] = useState(null)
+  const [autoStyleNode, setAutoStyleNode] = useState(null)   // nodeId whose auto-style config is open
   const applyGenerated = useCallback((nodeId, mode, text, { append = false } = {}) => {
     const st = useGraphStore.getState()
     const node = st.nodes.find(n => n.id === nodeId)
@@ -5423,6 +5520,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               allTags={allProjectTags}
               onAddTag={t => addNodeTag(hn.id, t)}
               onRemoveTag={t => removeNodeTag(hn.id, t)}
+              onAutoStyle={() => { setAutoStyleNode(hn.id); close() }}
               onGenContent={() => { setGenDialog({ nodeId: hn.id }); close() }}
               onGenWords={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'words' }); close() }}
               onGenVariations={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'variations' }); close() }}
@@ -5996,6 +6094,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             nearby={nearby}
             onApply={(mode, text, opts) => applyGenerated(genDialog.nodeId, mode, text, opts)}
             onClose={() => setGenDialog(null)}
+          />
+        )
+      })()}
+
+      {autoStyleNode && (() => {
+        const an = storeNodes.find(n => n.id === autoStyleNode)
+        if (!an) return null
+        return (
+          <AutoStyleDialog
+            node={an}
+            styles={storeStyles || []}
+            propertyDefs={storePropertyDefs || []}
+            onSave={(autoStyle) => { setNodeMeta(autoStyleNode, { autoStyle }); setAutoStyleNode(null) }}
+            onClose={() => setAutoStyleNode(null)}
           />
         )
       })()}
@@ -9357,6 +9469,78 @@ function ColorSubPopup({ colors, current, onPick, label }) {
 }
 
 // ─── Word-generator dialog ───────────────────────────────────────────────────
+// Configure live auto-styling of a node's DIRECT CHILDREN: map properties → visual channels, and/or
+// tag rules → saved styles. Saved to node.meta.autoStyle; the overlay engine applies it live.
+function AutoStyleDialog({ node, styles, propertyDefs, onSave, onClose }) {
+  const init = node.meta?.autoStyle || {}
+  const [maps, setMaps] = useState(() => (init.maps || []).map(m => ({ ...m })))
+  const [rules, setRules] = useState(() => (init.rules || []).map(r => ({ ...r, tagsText: (r.tags || []).join(', ') })))
+  const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '6px 8px', fontSize: 12.5, outline: 'none', fontFamily: '-apple-system, sans-serif' }
+  const lbl = { fontSize: 11.5, color: '#8fa0d8', margin: '2px 0 6px', fontWeight: 600 }
+  const rowX = { background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 2px' }
+  const addBtn = { background: '#1a1f4a', border: '1px solid #3a4a8a', color: '#c5d0ff', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12 }
+  const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2))
+  const addMap = () => setMaps(m => [...m, { propId: propertyDefs[0]?.id || '', channel: 'color' }])
+  const addRule = () => setRules(r => [...r, { id: uid(), tagsText: '', styleId: styles[0]?.id || '' }])
+  const save = () => {
+    const cleanMaps = maps.filter(m => m.propId && m.channel).map(m => ({ propId: m.propId, channel: m.channel }))
+    const cleanRules = rules
+      .map(r => ({ tags: r.tagsText.split(',').map(t => t.trim().replace(/^#/, '')).filter(Boolean), styleId: r.styleId }))
+      .filter(r => r.tags.length && r.styleId)
+    onSave({ maps: cleanMaps, rules: cleanRules }); onClose()
+  }
+  return (
+    <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, sans-serif' }}>
+      <div onMouseDown={e => e.stopPropagation()} style={{ width: 520, maxWidth: '94vw', maxHeight: '86vh', overflowY: 'auto', background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 12, padding: '1.1rem 1.15rem', boxShadow: '0 16px 48px rgba(0,0,0,0.7)' }}>
+        <div style={{ color: '#c5d0ff', fontSize: '0.95rem', fontWeight: 700, marginBottom: 3 }}>🪄 Auto-style children</div>
+        <div style={{ color: '#8090b8', fontSize: '0.76rem', marginBottom: 14, lineHeight: 1.4 }}>
+          Style the direct children of <b style={{ color: '#a9b6ee' }}>“{node.label || 'this node'}”</b> automatically. Updates live as their tags/properties change.
+        </div>
+
+        <div style={{ ...lbl, fontSize: 12.5, color: '#c5d0ff', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Map a property → style</div>
+        {maps.length === 0 && <div style={{ color: '#7080a0', fontSize: 12, marginBottom: 8 }}>No mappings yet.</div>}
+        {maps.map((m, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+            <select value={m.propId} onChange={e => setMaps(a => a.map((x, j) => j === i ? { ...x, propId: e.target.value } : x))} style={{ ...inp, flex: 1 }}>
+              {(propertyDefs || []).length === 0 && <option value="">(no properties)</option>}
+              {(propertyDefs || []).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <span style={{ color: '#7080a0', fontSize: 13 }}>→</span>
+            <select value={m.channel} onChange={e => setMaps(a => a.map((x, j) => j === i ? { ...x, channel: e.target.value } : x))} style={{ ...inp, flex: 1 }}>
+              {STYLE_CHANNELS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            <button style={rowX} onClick={() => setMaps(a => a.filter((_, j) => j !== i))}>×</button>
+          </div>
+        ))}
+        <button style={{ ...addBtn, marginBottom: 16 }} onClick={addMap} disabled={!(propertyDefs || []).length}>＋ Add mapping</button>
+
+        <div style={{ ...lbl, fontSize: 12.5, color: '#c5d0ff', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Style rules (tags → saved style)</div>
+        {!styles.length && <div style={{ color: '#f6ad55', fontSize: 11.5, marginBottom: 8 }}>No saved styles yet — style a node, then “Save style”, and it’ll appear here.</div>}
+        {rules.map((r, i) => (
+          <div key={r.id || i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ color: '#7080a0', fontSize: 12 }}>if</span>
+            <input value={r.tagsText} onChange={e => setRules(a => a.map((x, j) => j === i ? { ...x, tagsText: e.target.value } : x))}
+              placeholder="task, urgent, marketing" style={{ ...inp, flex: 1.3 }} />
+            <span style={{ color: '#7080a0', fontSize: 12 }}>→</span>
+            <select value={r.styleId} onChange={e => setRules(a => a.map((x, j) => j === i ? { ...x, styleId: e.target.value } : x))} style={{ ...inp, flex: 1 }} disabled={!styles.length}>
+              {!styles.length && <option value="">(none)</option>}
+              {styles.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <button style={rowX} onClick={() => setRules(a => a.filter((_, j) => j !== i))}>×</button>
+          </div>
+        ))}
+        <div style={{ color: '#7080a0', fontSize: 10.5, margin: '2px 0 8px' }}>Comma-separated tags; a child needs ALL of them to match. First matching rule wins, and rules override mappings.</div>
+        <button style={{ ...addBtn, marginBottom: 18 }} onClick={addRule} disabled={!styles.length}>＋ Add rule</button>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#9aa8d8', borderRadius: 7, padding: '7px 14px', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          <button onClick={save} style={{ background: 'linear-gradient(#2a327a, #1e2358)', border: '1px solid #3a4a8a', color: '#e6ebff', borderRadius: 7, padding: '7px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Type a verbal prompt → Claude writes content straight into the node.
 // Two phases: compose (prompt + target) → review (editable preview → Apply).
 function GenerateDialog({ node, nearby, onApply, onClose }) {
@@ -9538,7 +9722,7 @@ function WordgenDialog({ nodeLabel, mode, busy, err, onRun, onClose }) {
 // â"€â"€â"€ NodeToolbar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetStrokeColor, onSetStrokeWidth, onSetStrokeDash, onSetBorderBlur, onSetOpacity, onSetShadow, onSetBorderFx, onSetBorderFxAmp, onSetBorderFxCount, onSetSpin, onSetShape, onDrill, onToggleList, isList, onToggleKanban, isKanban, onToggleStrategy, isStrategy, onMakeContainer, onGroupBoard, hasChildrenForList, childrenEffect, onSetChildrenEffect, onHide, onRelease, onDelete, onNotesChange, isAnchored, onRadiate, onSetMotion, onSetColorCycle, onAddEmoji, onRemoveEmojiById, customEmojis, onAddCustomEmoji, onRemoveCustomEmoji, onAddNodeImage, onSetNodeImagePosition, onRemoveNodeImageById, onMouseEnter, onMouseLeave, onWheel , imageUrl, onSetImageUrl, depthExpand, onSetDepthExpand, maxExpandRadius, nodeId,
-  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, selCount = 0,
+  styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, onAutoStyle, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
   floating = false, onUndock, onRedock, nodeTitle }) {
@@ -9710,6 +9894,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {hasChildrenForList && textRow('Show as…', () => setPanel('showas'), { icon: '▧', right: (isList || isKanban || isStrategy) ? '•' : '›', rightColor: (isList || isKanban || isStrategy) ? '#f6ad55' : '#8090b8', opens: 'showas' })}
+        {hasChildrenForList && onAutoStyle && textRow('Auto-style children…', onAutoStyle, { icon: '🪄', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
         {isAnchored && textRow('Release anchor', onRelease, { icon: '⚓', color: '#f6ad55', opens: null })}
         {textRow('Delete', onDelete, { icon: '🗑️', color: '#f87171', opens: null })}
