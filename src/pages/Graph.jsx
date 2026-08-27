@@ -4898,23 +4898,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {/* 3. Images (floating photos are hidden while drilled into a node) */}
             {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img => {
               // Audio autoplay signal: play when zoomed into it, or when its slide (containing frame) is presented.
-              let audioPlay = false
-              if (img.type === 'audio' && (img.autoplayOnZoom || img.autoplayOnSlide)) {
+              // Audio AND video autoplay signal. "Zoomed/nav'd into it" (fills ≥ half the viewport, on
+              // screen) plays it for EITHER flag — so a clip set to "on slide" also plays when you arrow-nav
+              // into it. During presentation, on-slide media plays when its containing frame is the slide.
+              let mediaPlay = false
+              if ((img.type === 'audio' || img.type === 'video') && (img.autoplayOnZoom || img.autoplayOnSlide)) {
                 const t = zoomTransformRef.current, k = t.k || 1
                 const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
-                if (img.autoplayOnZoom && vw > 0) {
+                if (vw > 0) {
                   const cxs = t.x + img.x * k, cys = t.y + img.y * k
                   const inView = cxs > 0 && cxs < vw && cys > 0 && cys < vh
                   const fill = Math.max((img.width * k) / vw, (img.height * k) / vh)
-                  if (inView && fill >= 0.5) audioPlay = true
+                  if (inView && fill >= 0.5) mediaPlay = true
                 }
-                if (!audioPlay && img.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
+                if (!mediaPlay && img.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
                   const fr = slideSimNodes[presentingSlideIdx]
                   if (fr) {
                     const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(fr.id) || {}) }
                     const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
                     const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
-                    if (Math.abs(img.x - (fr.x || 0)) <= fhw && Math.abs(img.y - (fr.y || 0)) <= fhh) audioPlay = true
+                    if (Math.abs(img.x - (fr.x || 0)) <= fhw && Math.abs(img.y - (fr.y || 0)) <= fhh) mediaPlay = true
                   }
                 }
               }
@@ -4923,9 +4926,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   isSelected={selectedImageIds.has(img.id)}
                   isCropping={cropImageId === img.id}
                   onMouseDown={handleImageMouseDown}
-                  audioPlay={audioPlay}
-                  onToggleAudio={prop => updateImage(img.id, { [prop]: !img[prop] })}
-                  onAudioTitle={() => { const next = prompt('Audio title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
+                  mediaPlay={mediaPlay}
+                  onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
+                  onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
                   onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) updateImage(img.id, { caption: next }) }}
                 />
               )
@@ -8055,13 +8058,27 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Video body — a YouTube <iframe> or an uploaded <video>, honoring the per-video options
 // (autoplay/loop/mute/controls/hide-related/start/end/speed). Extracted so it can use refs/effects.
-function VideoEmbed({ img }) {
+function VideoEmbed({ img, play }) {
   const ref = useRef(null)
   const [errCode, setErrCode] = useState(0)
   const speed = img.speed || 1
   const start = img.start || 0
   const end = (img.end && img.end > start) ? img.end : 0
   useEffect(() => { setErrCode(0) }, [img.src])
+
+  // Autoplay-on-focus: when the media is flagged for zoom/slide autoplay, the parent's `play` signal
+  // drives play/pause (e.g. arrow-nav zooming into it, or its frame being presented).
+  useEffect(() => {
+    if (!img.autoplayOnZoom && !img.autoplayOnSlide) return
+    const el = ref.current; if (!el) return
+    if (img.videoKind === 'youtube') {
+      try { el.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: play ? 'playVideo' : 'pauseVideo', args: [] }), '*') } catch { /* ignore */ }
+    } else if (play) {
+      el.play().catch(() => { /* gesture-gated; ignore */ })
+    } else {
+      el.pause()
+    }
+  }, [play, img.autoplayOnZoom, img.autoplayOnSlide, img.videoKind, img.src])
 
   // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
   useEffect(() => {
@@ -8123,7 +8140,7 @@ function VideoEmbed({ img }) {
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, audioPlay, onToggleAudio, onAudioTitle }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
@@ -8139,9 +8156,9 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, audioP
     if (!isAudio) return
     const a = audioRef.current; if (!a) return
     if (!img.autoplayOnZoom && !img.autoplayOnSlide) return
-    if (audioPlay) a.play().catch(() => { /* gesture-gated; ignore */ })
+    if (mediaPlay) a.play().catch(() => { /* gesture-gated; ignore */ })
     else a.pause()
-  }, [isAudio, audioPlay, img.autoplayOnZoom, img.autoplayOnSlide, img.src])
+  }, [isAudio, mediaPlay, img.autoplayOnZoom, img.autoplayOnSlide, img.src])
   const hw = width / 2, hh = height / 2
 
   // Crop rect (normalised source rect → local box coords). Defaults to the whole box.
@@ -8254,7 +8271,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, audioP
         // eat the scroll wheel). Activate with the ▶ button when selected.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
           <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && videoActive) ? 'auto' : 'none' }}>
-            <VideoEmbed img={img} />
+            <VideoEmbed img={img} play={mediaPlay} />
           </div>
         </foreignObject>
       ) : isAudio ? (
@@ -8262,10 +8279,10 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, audioP
         // canvas pans/zooms over it (a transparent hit rect below selects/drags it).
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
           <div style={{ width: '100%', height: '100%', boxSizing: 'border-box', background: '#14142a',
-            border: `1px solid ${audioPlay ? '#4ade80' : '#2d3a6a'}`, borderRadius: 10, overflow: 'hidden',
+            border: `1px solid ${mediaPlay ? '#4ade80' : '#2d3a6a'}`, borderRadius: 10, overflow: 'hidden',
             display: 'flex', flexDirection: 'column', fontFamily: '-apple-system, sans-serif',
             pointerEvents: isSelected ? 'auto' : 'none' }}>
-            <div onDoubleClick={e => { e.stopPropagation(); onAudioTitle?.() }}
+            <div onDoubleClick={e => { e.stopPropagation(); onMediaTitle?.() }}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 9px 3px', minHeight: 0 }}>
               <span style={{ fontSize: 15, color: '#8ab4ff' }}>♪</span>
               <span style={{ fontSize: 12.5, color: '#c5d0ff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.title || 'Audio'}</span>
@@ -8353,11 +8370,13 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, audioP
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
           </g>
         )}
-        {/* Audio: two autoplay toggles below the card */}
-        {isAudio && (() => {
+        {/* Audio/Video: two autoplay toggles below the card. "On zoom" also fires when you arrow-nav
+            into the media; "On slide" plays it while its frame is presented (and when nav'd into). */}
+        {(isAudio || isVideo) && (() => {
+          const py = isVideo ? vB + 24 : vB + 6   // video clears its own title caption
           const pill = (px, on, label, prop) => (
-            <g key={prop} transform={`translate(${px},${vB + 6})`} style={{ cursor: 'pointer' }}
-              onMouseDown={e => { e.stopPropagation(); onToggleAudio?.(prop) }}>
+            <g key={prop} transform={`translate(${px},${py})`} style={{ cursor: 'pointer' }}
+              onMouseDown={e => { e.stopPropagation(); onToggleMedia?.(prop) }}>
               <rect x={0} y={0} width={label.length * 6.2 + 16} height={20} rx={10}
                 fill={on ? '#232a5c' : '#12122a'} stroke={on ? '#5b6af0' : '#2d3a6a'} strokeWidth={1.1} />
               <text x={8} y={13.5} fontSize={10.5} fill={on ? '#aeb8ff' : '#7d84a4'} style={{ userSelect: 'none' }}>{label}</text>
