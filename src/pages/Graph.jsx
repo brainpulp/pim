@@ -106,8 +106,9 @@ const youtubeEmbedUrl = (img) => {
   if (img.hideRelated) { p.set('rel', '0'); p.set('modestbranding', '1'); p.set('iv_load_policy', '3') }
   if (img.start) p.set('start', String(Math.max(0, Math.round(img.start))))
   if (img.end && img.end > (img.start || 0)) p.set('end', String(Math.round(img.end)))
-  p.set('enablejsapi', '1')   // lets us set playback speed via postMessage
+  p.set('enablejsapi', '1')   // lets us drive play/pause/speed via postMessage
   p.set('playsinline', '1')
+  try { p.set('origin', window.location.origin) } catch { /* SSR / no window */ }
   return `https://www.youtube-nocookie.com/embed/${img.youtubeId}?${p.toString()}`
 }
 
@@ -4909,7 +4910,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   const cxs = t.x + img.x * k, cys = t.y + img.y * k
                   const inView = cxs > 0 && cxs < vw && cys > 0 && cys < vh
                   const fill = Math.max((img.width * k) / vw, (img.height * k) / vh)
-                  if (inView && fill >= 0.5) mediaPlay = true
+                  if (inView && fill >= 0.4) mediaPlay = true
                 }
                 if (!mediaPlay && img.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
                   const fr = slideSimNodes[presentingSlideIdx]
@@ -8072,7 +8073,17 @@ function VideoEmbed({ img, play }) {
     if (!img.autoplayOnZoom && !img.autoplayOnSlide) return
     const el = ref.current; if (!el) return
     if (img.videoKind === 'youtube') {
-      try { el.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: play ? 'playVideo' : 'pauseVideo', args: [] }), '*') } catch { /* ignore */ }
+      const cmd = (func) => { try { el.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args: [] }), '*') } catch { /* ignore */ } }
+      if (play) {
+        // Programmatic play is only allowed MUTED (the parent's keypress gesture doesn't cross into the
+        // cross-origin iframe). Mute → play, and retry a couple of times in case the player isn't ready.
+        const go = () => { cmd('mute'); cmd('playVideo') }
+        go()
+        const t1 = setTimeout(go, 400), t2 = setTimeout(go, 1200)
+        return () => { clearTimeout(t1); clearTimeout(t2) }
+      } else {
+        cmd('pauseVideo')
+      }
     } else if (play) {
       el.play().catch(() => { /* gesture-gated; ignore */ })
     } else {
