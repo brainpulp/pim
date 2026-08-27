@@ -68,7 +68,7 @@ export default function App() {
     } catch { return null }
   })
   const [view, setView] = useState(() => {   // restore the last-used tab (canvas/graph/table/lab)
-    try { const v = localStorage.getItem('pim_last_view') || 'board'; return v === 'write' ? 'board' : v } catch { return 'board' }
+    try { const v = localStorage.getItem('pim_last_view') || 'graph'; return v === 'write' ? 'graph' : v } catch { return 'graph' }
   })
   useEffect(() => { try { localStorage.setItem('pim_last_view', view) } catch { /* ignore */ } }, [view])
   // Docked outliner (the Writer as a resizable side panel beside the canvas), with selection synced.
@@ -252,7 +252,7 @@ export default function App() {
         </div>
         {/* Segmented tab control — Figma/Linear style */}
         <div style={segStyle}>
-          {[['board', 'Canvas'], ['graph', 'Graph'], ['strategy', 'Strategy'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
+          {[['graph', 'Graph'], ['board', 'Grouping'], ['strategy', 'Strategy'], ['table', 'Table'], ['lab', 'Lab']].map(([v, label]) => (
             <button
               key={v}
               className="pim-nav-tab"

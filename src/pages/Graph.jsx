@@ -753,6 +753,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [searchQuery, setSearchQuery] = useState('')
   const [outlineSearch, setOutlineSearch] = useState('')   // real-time filter: greys out non-matches (outline + canvas)
   const [searchIdx, setSearchIdx] = useState(0)          // highlighted result index
+  const searchInputRef = useRef(null)
+  // autoFocus can be missed (the global key handler that opened the spotlight still holds focus, or the
+  // overlay mounts a tick later), so grab focus explicitly whenever the spotlight opens.
+  useEffect(() => { if (searchOpen) { const t = setTimeout(() => searchInputRef.current?.focus(), 20); return () => clearTimeout(t) } }, [searchOpen])
   const [pendingEditId, setPendingEditId] = useState(null)
   const [selectedImageIds, setSelectedImageIds] = useState(new Set())
   const [drilledImageId, setDrilledImageId] = useState(null)
@@ -929,6 +933,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
   const addVideo        = useGraphStore(s => s.addVideo)
+  const addAudio        = useGraphStore(s => s.addAudio)
   const addLink         = useGraphStore(s => s.addLink)
   const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
   const copyChildrenInto = useGraphStore(s => s.copyChildrenInto)
@@ -3956,6 +3961,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     input.click()
   }, [addVideo, updateImage, projectId])
 
+  // Audio card size, and a filename/URL → title helper.
+  const AUDIO_W = 260, AUDIO_H = 96
+  const audioTitleFrom = (name) => (name || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim() || 'Audio'
+  // Add an audio clip from a file (uploaded to Storage) at a world point.
+  const addAudioFileAt = useCallback((sx, sy) => {
+    const input = document.createElement('input')
+    input.type = 'file'; input.accept = 'audio/*'
+    input.onchange = () => {
+      const file = input.files?.[0]; if (!file) return
+      if (file.size > 45 * 1024 * 1024) { alert(`That audio is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the 45 MB upload limit. Use a smaller file or paste a link instead.`); return }
+      const blobUrl = URL.createObjectURL(file)
+      const id = addAudio({ src: blobUrl, title: audioTitleFrom(file.name), autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H)
+      uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(id, { src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+        .catch(e => console.warn('Audio upload failed:', e?.message || e))
+    }
+    input.click()
+  }, [addAudio, updateImage, projectId])
+  // Add an audio clip from a pasted URL at a world point.
+  const addAudioUrlAt = useCallback((url, sx, sy) => {
+    const clean = (url || '').trim(); if (!clean) return
+    let title = 'Audio'; try { title = audioTitleFrom(decodeURIComponent(new URL(clean).pathname.split('/').pop() || '')) } catch { /* keep */ }
+    addAudio({ src: clean, title, autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H)
+  }, [addAudio])
+
   // Parse a YouTube URL/ID and drop a 16:9 YouTube player on the canvas.
   const dropYoutube = useCallback((vidId, sx, sy) => {
     const W = 320
@@ -4684,13 +4713,40 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             })()}
 
             {/* 3. Images (floating photos are hidden while drilled into a node) */}
-            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img => (
-              <ImageNode key={img.id} img={img}
-                isSelected={selectedImageIds.has(img.id)}
-                isCropping={cropImageId === img.id}
-                onMouseDown={handleImageMouseDown}
-              />
-            ))}
+            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img => {
+              // Audio autoplay signal: play when zoomed into it, or when its slide (containing frame) is presented.
+              let audioPlay = false
+              if (img.type === 'audio' && (img.autoplayOnZoom || img.autoplayOnSlide)) {
+                const t = zoomTransformRef.current, k = t.k || 1
+                const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
+                if (img.autoplayOnZoom && vw > 0) {
+                  const cxs = t.x + img.x * k, cys = t.y + img.y * k
+                  const inView = cxs > 0 && cxs < vw && cys > 0 && cys < vh
+                  const fill = Math.max((img.width * k) / vw, (img.height * k) / vh)
+                  if (inView && fill >= 0.5) audioPlay = true
+                }
+                if (!audioPlay && img.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
+                  const fr = slideSimNodes[presentingSlideIdx]
+                  if (fr) {
+                    const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(fr.id) || {}) }
+                    const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
+                    const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
+                    if (Math.abs(img.x - (fr.x || 0)) <= fhw && Math.abs(img.y - (fr.y || 0)) <= fhh) audioPlay = true
+                  }
+                }
+              }
+              return (
+                <ImageNode key={img.id} img={img}
+                  isSelected={selectedImageIds.has(img.id)}
+                  isCropping={cropImageId === img.id}
+                  onMouseDown={handleImageMouseDown}
+                  audioPlay={audioPlay}
+                  onToggleAudio={prop => updateImage(img.id, { [prop]: !img[prop] })}
+                  onAudioTitle={() => { const next = prompt('Audio title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
+                  onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) updateImage(img.id, { caption: next }) }}
+                />
+              )
+            })}
 
             {/* 3a. Drawing layer — floating shapes/lines/arrows/emoji/text (per-view decorations, not nodes). */}
             {(activeView?.drawings || []).map(d => (
@@ -5079,6 +5135,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     })}
                     {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
                     {item('🎬', 'Video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
+                    {item('🎵', 'Audio…', () => { const { sx, sy } = contextMenu; close(); addAudioFileAt(sx, sy) })}
                     {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
                     {item('⬭', 'Container', () => {
                       pushUndo()
@@ -5093,6 +5150,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
                     {item('▶️', 'Add YouTube…', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
                     {item('🔗', 'Add link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
+                    {item('♪', 'Add audio link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste an audio link (mp3, etc.):'); if (url && url.trim()) addAudioUrlAt(url.trim(), sx, sy) })}
                     {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
@@ -5524,7 +5582,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onClick={() => { setSearchOpen(false); setSearchQuery('') }}>
               <div style={{ width: 'min(520px, 92vw)', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.5)', overflow: 'hidden' }}
                 onClick={e => e.stopPropagation()}>
-                <input autoFocus value={searchQuery}
+                <input autoFocus ref={searchInputRef} value={searchQuery}
                   onChange={e => { setSearchQuery(e.target.value); setSearchIdx(0) }}
                   onKeyDown={e => {
                     if (e.key === 'ArrowDown') { e.preventDefault(); setSearchIdx(i => Math.min(i + 1, results.length - 1)) }
@@ -7867,14 +7925,25 @@ function VideoEmbed({ img }) {
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, audioPlay, onToggleAudio, onAudioTitle }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
+  const isAudio = img.type === 'audio'
   // Video player is "pass-through" (canvas pan/zoom work over it) until the user activates it. A
   // YouTube iframe otherwise swallows the scroll wheel so the canvas can't zoom over it (Miro-style).
   const [videoActive, setVideoActive] = useState(false)
   useEffect(() => { if (!isSelected) setVideoActive(false) }, [isSelected])
   const isLink = img.type === 'link'
+  // Audio autoplay: when a card is flagged for zoom/slide autoplay, the parent's `audioPlay` signal
+  // drives play/pause. Manual native controls still work when neither flag is on.
+  const audioRef = useRef(null)
+  useEffect(() => {
+    if (!isAudio) return
+    const a = audioRef.current; if (!a) return
+    if (!img.autoplayOnZoom && !img.autoplayOnSlide) return
+    if (audioPlay) a.play().catch(() => { /* gesture-gated; ignore */ })
+    else a.pause()
+  }, [isAudio, audioPlay, img.autoplayOnZoom, img.autoplayOnSlide, img.src])
   const hw = width / 2, hh = height / 2
 
   // Crop rect (normalised source rect → local box coords). Defaults to the whole box.
@@ -7910,6 +7979,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
       data-img="true"
       onClick={e => e.stopPropagation()}
       onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
+      onDoubleClick={(!isVideo && !isLink && img.type !== 'audio' && !isCropping) ? (e => { e.stopPropagation(); onCaption?.() }) : undefined}
       style={{ cursor: isCropping ? 'default' : 'move' }}
     >
       {(hasCrop || blur > 0 || edgeBlur > 0) && (
@@ -7989,6 +8059,25 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
             <VideoEmbed img={img} />
           </div>
         </foreignObject>
+      ) : isAudio ? (
+        // Audio card. Native controls are interactive when selected; otherwise pass-through so the
+        // canvas pans/zooms over it (a transparent hit rect below selects/drags it).
+        <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
+          <div style={{ width: '100%', height: '100%', boxSizing: 'border-box', background: '#14142a',
+            border: `1px solid ${audioPlay ? '#4ade80' : '#2d3a6a'}`, borderRadius: 10, overflow: 'hidden',
+            display: 'flex', flexDirection: 'column', fontFamily: '-apple-system, sans-serif',
+            pointerEvents: isSelected ? 'auto' : 'none' }}>
+            <div onDoubleClick={e => { e.stopPropagation(); onAudioTitle?.() }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 9px 3px', minHeight: 0 }}>
+              <span style={{ fontSize: 15, color: '#8ab4ff' }}>♪</span>
+              <span style={{ fontSize: 12.5, color: '#c5d0ff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.title || 'Audio'}</span>
+            </div>
+            <div style={{ padding: '0 8px 8px', marginTop: 'auto' }}>
+              <audio ref={audioRef} controls src={img.src} style={{ width: '100%', height: 32 }}
+                onMouseDown={e => { if (isSelected) e.stopPropagation() }} />
+            </div>
+          </div>
+        </foreignObject>
       ) : (<>
       {/* While cropping, show the full image dimmed so trimmed areas stay visible */}
       {isCropping && (
@@ -8011,7 +8100,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
           which otherwise lets clicks (incl. ctrl-click to multi-select) fall through instead of hitting
           the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
           while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
-      {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected)) && (
+      {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected) || (isAudio && !isSelected)) && (
         <rect x={-hw} y={-hh} width={width} height={height} fill="transparent"
           onDoubleClick={isVideo ? (e => { e.stopPropagation(); setVideoActive(true) }) : undefined}
           style={{ cursor: 'move' }}>
@@ -8019,6 +8108,29 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
         </rect>
       )}
 
+      {/* Caption — editable text beneath the photo (any non-link media). Always visible when set;
+          a "＋ caption" hint shows when selected and empty. Click it (or double-click the photo) to edit. */}
+      {!isLink && !isVideo && !isAudio && !isCropping && (() => {
+        const fs = 12
+        const maxCh = Math.max(12, Math.floor(width / (fs * 0.55)))
+        if (img.caption) {
+          const parts = []
+          let rest = String(img.caption)
+          while (rest.length > maxCh && parts.length < 2) { parts.push(rest.slice(0, maxCh)); rest = rest.slice(maxCh) }
+          parts.push(rest.length > maxCh ? rest.slice(0, maxCh - 1) + '…' : rest)
+          return (
+            <text x={0} y={hh + 15} textAnchor="middle" fontSize={fs} fill="#c5d0ff"
+              style={{ cursor: 'text' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCaption?.() }}
+              paintOrder="stroke" stroke="rgba(12,12,26,0.85)" strokeWidth={fs * 0.14}>
+              {parts.map((ln, i) => <tspan key={i} x={0} dy={i === 0 ? 0 : fs * 1.2}>{ln}</tspan>)}
+            </text>
+          )
+        }
+        return isSelected ? (
+          <text x={0} y={hh + 15} textAnchor="middle" fontSize={fs} fill="#7080a0"
+            style={{ cursor: 'text' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCaption?.() }}>＋ caption</text>
+        ) : null
+      })()}
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
@@ -8036,13 +8148,28 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown }) {
             <text textAnchor="middle" dominantBaseline="central" fontSize={10} style={{ userSelect: 'none' }}>🔗</text>
           </g>
         )}
-        {/* Video/Link: a top drag-bar to move it (the body's pointer events belong to the player/link) */}
-        {(isVideo || isLink) && (
+        {/* Video/Link/Audio: a top drag-bar to move it (the body's pointer events belong to the player/link) */}
+        {(isVideo || isLink || isAudio) && (
           <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
             <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
           </g>
         )}
+        {/* Audio: two autoplay toggles below the card */}
+        {isAudio && (() => {
+          const pill = (px, on, label, prop) => (
+            <g key={prop} transform={`translate(${px},${vB + 6})`} style={{ cursor: 'pointer' }}
+              onMouseDown={e => { e.stopPropagation(); onToggleAudio?.(prop) }}>
+              <rect x={0} y={0} width={label.length * 6.2 + 16} height={20} rx={10}
+                fill={on ? '#232a5c' : '#12122a'} stroke={on ? '#5b6af0' : '#2d3a6a'} strokeWidth={1.1} />
+              <text x={8} y={13.5} fontSize={10.5} fill={on ? '#aeb8ff' : '#7d84a4'} style={{ userSelect: 'none' }}>{label}</text>
+            </g>
+          )
+          return (<>
+            {pill(vL, !!img.autoplayOnZoom, '⚡ On zoom', 'autoplayOnZoom')}
+            {pill(vL + 92, !!img.autoplayOnSlide, '▷ On slide', 'autoplayOnSlide')}
+          </>)
+        })()}
         {/* Video: the body pans/zooms with the canvas until you "arm" the player. Double-clicking the
             video activates it (handled on the hit rect); when idle we show only a low-key play glyph so
             it isn't a big clunky button. Once active, a small ✕ (top-right) releases it to the canvas. */}
