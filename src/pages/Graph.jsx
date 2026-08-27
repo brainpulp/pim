@@ -2451,14 +2451,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       //   ↑               parent · ↓ first child
       //   Ctrl/Cmd + ↑    jump to root (topmost ancestor)
       //   Shift + ↓ / ↑   change zoom depth (node only → +1 gen → +2 …) — sticky across moves
-      //   [ / ]           tune how close a single node zooms (persisted)
+      //   + / −  (or [ / ]) tune how close a single node zooms (persisted)
       if (selected?.type === 'node' && !e.altKey) {
         const navGo = (id) => { if (id) { setSelected({ id, type: 'node' }); zoomNavRef.current?.(id, navDepthRef.current) } }
 
-        // Tune closeness live
-        if ((e.key === '[' || e.key === ']') && !e.ctrlKey && !e.metaKey) {
+        // Tune closeness live: + / = / ] zoom closer, - / _ / [ zoom wider.
+        const closer = e.key === ']' || e.key === '+' || e.key === '='
+        const wider = e.key === '[' || e.key === '-' || e.key === '_'
+        if ((closer || wider) && !e.ctrlKey && !e.metaKey) {
           e.preventDefault()
-          const nz = Math.max(1.2, Math.min(3.5, +(navZoomRef.current + (e.key === ']' ? 0.2 : -0.2)).toFixed(2)))
+          const nz = Math.max(1.2, Math.min(3.5, +(navZoomRef.current + (closer ? 0.2 : -0.2)).toFixed(2)))
           navZoomRef.current = nz; setNavZoom(nz)
           zoomNavRef.current?.(selected.id, navDepthRef.current); showNavHud(navDepthRef.current)
           return
@@ -5841,7 +5843,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               {navHud.depth === 0 ? 'Focus: node only' : `Focus: +${navHud.depth} level${navHud.depth > 1 ? 's' : ''} down`}
             </span>
             <span style={{ color:'#7c8cff', fontSize:'0.76rem' }}>zoom {navHud.zoom.toFixed(1)}×</span>
-            <span style={{ color:'#7080a0', fontSize:'0.64rem', lineHeight:1.2 }}>Shift+↑↓ depth · [ ] closeness</span>
+            <span style={{ color:'#7080a0', fontSize:'0.64rem', lineHeight:1.2 }}>Shift+↑↓ depth · +/− closeness</span>
           </div>
         )}
 
