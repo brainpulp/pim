@@ -782,7 +782,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   useEffect(() => { try { localStorage.setItem('pim_style_floatpos', JSON.stringify(floatRect)) } catch { /* ignore */ } }, [floatRect])
   // Keyboard-navigation camera: how close the arrow-key nav zooms when a single node is framed.
   // No settings page yet, so it's a persisted pref (tunable live with [ and ] while navigating).
-  const [navZoom, setNavZoom] = useState(() => { try { return Math.max(1.2, Math.min(3.5, +localStorage.getItem('pim_nav_zoom') || 2.2)) } catch { return 2.2 } })
+  const [navZoom, setNavZoom] = useState(() => { try { return Math.max(1.2, Math.min(10, +localStorage.getItem('pim_nav_zoom') || 2.2)) } catch { return 2.2 } })
   useEffect(() => { try { localStorage.setItem('pim_nav_zoom', String(navZoom)) } catch { /* ignore */ } }, [navZoom])
   const navZoomRef = useRef(navZoom); useEffect(() => { navZoomRef.current = navZoom }, [navZoom])
   const navDepthRef = useRef(0)     // generations below the focused node to keep in frame (Shift+↓/↑ changes it)
@@ -2041,14 +2041,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         scheduleRender()
         // Persist the viewport to localStorage *instantly* so a reload restores it even if
         // the debounced DB save (below) hasn't fired yet. The DB save is the cross-device backup.
-        if (projectId && presentingSlideIdxRef.current === null) {
+        // ONLY on real user gestures — a programmatic transition (arrow-nav / zoom-to-frame) fires a
+        // zoom event every animation frame, and a synchronous setItem per frame janks the animation.
+        if (e.sourceEvent && projectId && presentingSlideIdxRef.current === null) {
           try {
             localStorage.setItem(`pim:pan:${projectId}:${useGraphStore.getState().activeViewId}`,
               JSON.stringify({ x: e.transform.x, y: e.transform.y, k: e.transform.k }))
           } catch (_) { /* quota / private mode — ignore */ }
         }
         if (panSaveTimerRef.current) clearTimeout(panSaveTimerRef.current)
-        panSaveTimerRef.current = setTimeout(() => { if (presentingSlideIdxRef.current === null) setViewPan(e.transform.x, e.transform.y, e.transform.k) }, 600)
+        panSaveTimerRef.current = setTimeout(() => {
+          if (presentingSlideIdxRef.current === null) {
+            setViewPan(e.transform.x, e.transform.y, e.transform.k)
+            // Final localStorage write once the (user or programmatic) gesture settles.
+            if (projectId) { try { localStorage.setItem(`pim:pan:${projectId}:${useGraphStore.getState().activeViewId}`, JSON.stringify({ x: e.transform.x, y: e.transform.y, k: e.transform.k })) } catch (_) { /* ignore */ } }
+          }
+        }, 600)
       })
     // Pan cursor: a drag-pan (mousedown, not wheel) shows the grabbing hand for its duration.
     zoomBehaviorRef.current
@@ -2460,7 +2468,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const wider = e.key === '[' || e.key === '-' || e.key === '_'
         if ((closer || wider) && !e.ctrlKey && !e.metaKey) {
           e.preventDefault()
-          const nz = Math.max(1.2, Math.min(3.5, +(navZoomRef.current + (closer ? 0.2 : -0.2)).toFixed(2)))
+          const nz = Math.max(1.2, Math.min(10, +(navZoomRef.current + (closer ? 0.4 : -0.4)).toFixed(2)))
           navZoomRef.current = nz; setNavZoom(nz)
           zoomNavRef.current?.(selected.id, navDepthRef.current); showNavHud(navDepthRef.current)
           return
@@ -3479,6 +3487,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // never zooming in closer than navZoom (so deeper = wider). Used by the arrow-key tree navigation.
   const zoomToNodeDepth = useCallback((nodeId, depth) => {
     if (!svgRef.current || !zoomBehaviorRef.current) return
+    d3.select(svgRef.current).interrupt()   // kill any in-flight zoom transition so rapid nav doesn't fight itself
     const byId = new Map(simNodesRef.current.map(n => [n.id, n]))
     const self = byId.get(nodeId); if (!self) return
     const targets = [self]
