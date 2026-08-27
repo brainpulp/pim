@@ -2425,6 +2425,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
+      // No node selected yet → the first arrow key picks a starting node (nearest the viewport
+      // centre) and focuses it, so navigation works without a click first.
+      if (selected?.type !== 'node' && !e.altKey && !e.ctrlKey && !e.metaKey &&
+          (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
+        const t = zoomTransformRef.current
+        const [wx, wy] = t.invert([(svgRef.current?.clientWidth || 800) / 2, (svgRef.current?.clientHeight || 600) / 2])
+        const cand = simNodesRef.current.filter(n => visibleNodeIds.has(n.id))
+        let start = null
+        if (cand.length) {
+          const roots = cand.filter(n => !storeEdges.some(ed => ed.target === n.id))
+          const pool = roots.length ? roots : cand
+          start = pool.reduce((best, n) => {
+            const d = Math.hypot((n.x || 0) - wx, (n.y || 0) - wy)
+            return !best || d < best.d ? { id: n.id, d } : best
+          }, null)
+        }
+        if (start) { setSelected({ id: start.id, type: 'node' }); zoomNavRef.current?.(start.id, navDepthRef.current) }
+        return
+      }
+
       // ── Keyboard tree navigation with focus-zoom ─────────────────────────────
       //   ← / →           cycle siblings (at a root, cycles among all roots)
       //   ↑               parent · ↓ first child
