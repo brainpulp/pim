@@ -835,8 +835,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const navZoomRef = useRef(navZoom); useEffect(() => { navZoomRef.current = navZoom }, [navZoom])
   const navDepthRef = useRef(0)     // generations below the focused node to keep in frame (Shift+↓/↑ changes it)
   const navFocusRef = useRef(null)  // current node for keyboard nav — decoupled from selection (nav only pans/zooms)
-  const [navFocusId, setNavFocusId] = useState(null)   // reactive mirror of navFocusRef, for the faint focus ring
+  const navOutRef = useRef(0)       // zoom-out ladder level once you press ↑ past a root (0 = not laddering)
   const zoomNavRef = useRef(null)   // holds zoomToNodeDepth (defined later) so the key handler avoids a TDZ dep
+  const zoomForestRef = useRef(null) // holds zoomToForest (defined later) for the ↑-past-root zoom-out ladder
   const [navHud, setNavHud] = useState(null)   // { depth, zoom } transient indicator during keyboard nav
   const navHudTimer = useRef(null)
   const showNavHud = useCallback((depth) => {
@@ -846,7 +847,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [])
   // Clicking/selecting a node seeds the nav focus there; arrow-nav then moves the focus (pan/zoom only)
   // WITHOUT changing the selection, so navigating doesn't pop the node toolbar on every hop.
-  useEffect(() => { if (selected?.type === 'node') { navFocusRef.current = selected.id; setNavFocusId(selected.id) } }, [selected])
+  useEffect(() => { if (selected?.type === 'node') { navFocusRef.current = selected.id; navOutRef.current = 0 } }, [selected])
   // While the style panel is undocked, keep it targeted on the currently selected node (so a plain
   // left-click retargets the floating window, not just a right-click).
   useEffect(() => {
@@ -2554,10 +2555,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const pool = roots.length ? roots : cand
             cur = pool.reduce((best, n) => { const d = Math.hypot((n.x || 0) - wx, (n.y || 0) - wy); return !best || d < best.d ? { id: n.id, d } : best }, null)?.id || null
           }
-          if (cur) { e.preventDefault(); navFocusRef.current = cur; setNavFocusId(cur); zoomNavRef.current?.(cur, navDepthRef.current) }
+          if (cur) { e.preventDefault(); navFocusRef.current = cur; navOutRef.current = 0; zoomNavRef.current?.(cur, navDepthRef.current) }
           return
         }
-        const goTo = (id, viaIds) => { if (id) { navFocusRef.current = id; setNavFocusId(id); zoomNavRef.current?.(id, navDepthRef.current, viaIds) } }
+        const goTo = (id, viaIds) => { if (id) { navFocusRef.current = id; navOutRef.current = 0; zoomNavRef.current?.(id, navDepthRef.current, viaIds) } }
 
         const closer = e.key === ']' || e.key === '+' || e.key === '='
         const wider = e.key === '[' || e.key === '-' || e.key === '_'
@@ -2581,8 +2582,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           goTo(r); return
         }
         if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
-          if (e.key === 'ArrowUp') { e.preventDefault(); const pe = storeEdges.find(ed => ed.target === cur); if (pe) goTo(pe.source); return }
-          if (e.key === 'ArrowDown') { e.preventDefault(); const ce = storeEdges.find(ed => ed.source === cur); if (ce) goTo(ce.target); return }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            const pe = storeEdges.find(ed => ed.target === cur)
+            if (pe) { goTo(pe.source); return }          // has a parent → climb toward the root
+            navOutRef.current = Math.min(12, navOutRef.current + 1)   // at a root → advance the zoom-out ladder
+            zoomForestRef.current?.(navOutRef.current - 1)            // level 1 = all roots (depth 0), then +1 gen each press
+            return
+          }
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            // First TRUE child (a node whose primary parent is `cur`) — not just any outgoing link, which
+            // could be a sibling-to-sibling connection the user drew.
+            const kids = storeEdges.filter(ed => ed.source === cur).map(ed => ed.target)
+              .filter(t => (storeEdges.find(ed => ed.target === t)?.source) === cur)
+            if (kids.length) goTo(kids[0])
+            return
+          }
           if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
             e.preventDefault()
             const { siblings } = getSiblings(cur)
@@ -3640,6 +3656,33 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [storeEdges, scheduleRender, fitNodesTransform])
   useEffect(() => { zoomNavRef.current = zoomToNodeDepth }, [zoomToNodeDepth])
+
+  // ↑-past-root zoom-out ladder: fit ALL roots + `depth` generations of descendants. depth 0 = just the
+  // roots; each further press adds a generation; once everything is in frame it's a true fit-to-extents.
+  const zoomToForest = useCallback((depth) => {
+    if (!svgRef.current || !zoomBehaviorRef.current) return
+    const svgEl = svgRef.current
+    d3.select(svgEl).interrupt()
+    const visSet = visibleNodeIdsRef.current
+    const vis = simNodesRef.current.filter(n => visSet.has(n.id))
+    if (!vis.length) return
+    const byId = new Map(vis.map(n => [n.id, n]))
+    const seeds = vis.filter(n => !storeEdges.some(ed => ed.target === n.id)).map(n => n.id)
+    const rootIds = seeds.length ? seeds : vis.map(n => n.id)
+    const set = new Set(rootIds)
+    let frontier = [...rootIds]
+    for (let d = 0; d < depth && frontier.length; d++) {
+      const next = []
+      for (const pid of frontier) for (const ed of storeEdges) if (ed.source === pid && byId.has(ed.target) && !set.has(ed.target)) { set.add(ed.target); next.push(ed.target) }
+      frontier = next
+    }
+    const nodes = [...set].map(id => byId.get(id)).filter(Boolean)
+    const svgW = svgEl.clientWidth, svgH = svgEl.clientHeight
+    const tf = fitNodesTransform(nodes, svgW, svgH, 90, 1.4)   // capK 1.4 so a small forest doesn't zoom IN
+    d3.select(svgEl).transition().duration(450).ease(d3.easeCubicInOut).call(zoomBehaviorRef.current.transform, tf)
+    scheduleRender()
+  }, [storeEdges, scheduleRender, fitNodesTransform])
+  useEffect(() => { zoomForestRef.current = zoomToForest }, [zoomToForest])
 
   // ── On-frame timeline ("builds") — keyframe editor ──────────────────────────
   // Pose the LIVE document to a stage (keyframe editing): anchors, visibility, scale, collapse are
@@ -4978,25 +5021,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onExit={() => toggleListNode(n.id)} />
               )
             })}
-
-            {/* Faint focus ring on the current keyboard-nav node (no selection / no toolbar) */}
-            {navFocusId && navFocusId !== (selected?.type === 'node' ? selected.id : null) && (() => {
-              const n = simNodesRef.current.find(m => m.id === navFocusId)
-              if (!n || !visibleNodeIds.has(navFocusId)) return null
-              const vp = getVP(navFocusId)
-              const r = NODE_R * (vp.scale || 1)
-              const { halfW, halfH } = shapeDims(vp.shape || 'circle', r)
-              const box = (vp.shape === 'frame' || vp.shape === 'container' || vp.shape === '3d')
-              const hw = (box ? (vp.frameHalfW ?? halfW) : halfW) + 9
-              const hh = (box ? (vp.frameHalfH ?? halfH) : halfH) + 9
-              const k = T.k || 1
-              return (
-                <g transform={`translate(${n.x},${n.y})`} style={{ pointerEvents: 'none' }}>
-                  <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx={Math.min(hw, hh) * 0.5} fill="none"
-                    stroke="#8aa0ff" strokeOpacity={0.7} strokeWidth={2.2 / k} strokeDasharray={`${6 / k} ${4 / k}`} />
-                </g>
-              )
-            })()}
 
             {/* Alt-drag duplicate ghost — translucent preview that follows the cursor */}
             {dupGhost && (() => {
