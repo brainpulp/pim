@@ -5168,11 +5168,36 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && mediaNodeSet.has(n.id)).map(n => {
               const m = storeNodeById[n.id]?.media
               if (!m) return null
-              const mediaImg = { id: n.id, x: n.x, y: n.y, width: m.width, height: m.height, rotation: m.rotation || 0, bgColor: null, ...m, title: storeNodeById[n.id]?.label || m.title, type: m.kind === 'video' ? 'video' : undefined }
+              const meta = storeNodeById[n.id]?.meta || {}
+              const mediaImg = { id: n.id, x: n.x, y: n.y, width: m.width, height: m.height, rotation: m.rotation || 0, bgColor: null, ...m, title: storeNodeById[n.id]?.label || m.title, type: m.kind === 'video' ? 'video' : (m.kind === 'audio' ? 'audio' : undefined), autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide }
+              // Autoplay-on-focus: a video/audio NODE plays when this node fills the viewport (e.g. arrow-nav
+              // zoomed to it) or when its containing frame is presented. Flags live on node.meta.
+              let mediaPlay = false
+              if ((mediaImg.type === 'video' || mediaImg.type === 'audio') && (meta.autoplayOnZoom || meta.autoplayOnSlide)) {
+                const t = zoomTransformRef.current, k = t.k || 1
+                const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
+                if (vw > 0) {
+                  const cxs = t.x + n.x * k, cys = t.y + n.y * k
+                  const inView = cxs > 0 && cxs < vw && cys > 0 && cys < vh
+                  const fill = Math.max((m.width * k) / vw, (m.height * k) / vh)
+                  if (inView && fill >= 0.4) mediaPlay = true
+                }
+                if (!mediaPlay && meta.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
+                  const fr = slideSimNodes[presentingSlideIdx]
+                  if (fr) {
+                    const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(fr.id) || {}) }
+                    const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
+                    const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
+                    if (Math.abs(n.x - (fr.x || 0)) <= fhw && Math.abs(n.y - (fr.y || 0)) <= fhh) mediaPlay = true
+                  }
+                }
+              }
               return (
                 <ImageNode key={'media' + n.id} img={mediaImg}
                   isSelected={(selected?.type === 'node' && selected.id === n.id) || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
                   isCropping={false}
+                  mediaPlay={mediaPlay}
+                  onToggleMedia={prop => setNodeMeta(n.id, { [prop]: !meta[prop] })}
                   onMouseDown={handleMediaNodeMouseDown} />
               )
             })}
