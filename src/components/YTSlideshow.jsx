@@ -163,7 +163,7 @@ function TrimSlider({ start, end, max, onChange }) {
 }
 
 // ── Inspector: the clips column + preview player + trim + triggers ────────────
-export function YTSlideshowInspector({ clips, onChange, onClose }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -192,8 +192,13 @@ export function YTSlideshowInspector({ clips, onChange, onClose }) {
 
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const max = Math.max(dur || 0, cur?.end || 0, 30)
+  // Unfold from the node when an anchor is given (clamped on-screen); else fall back to a right-side panel.
+  const W = 380
+  const pos = anchor
+    ? { position: 'fixed', left: Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - W - 8)), top: Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 480)), width: W, maxHeight: '82vh', borderRadius: 12, border: '1px solid #2d3a6a' }
+    : { position: 'fixed', top: 0, right: 0, height: '100%', width: 420, maxWidth: '96vw', borderLeft: '1px solid #2d3a6a' }
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', width: 420, maxWidth: '96vw', background: '#12122a', borderLeft: '1px solid #2d3a6a', boxShadow: '-8px 0 32px rgba(0,0,0,0.5)', zIndex: 500, display: 'flex', flexDirection: 'column', fontFamily: '-apple-system, sans-serif' }}
+    <div style={{ ...pos, background: '#12122a', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
       onMouseDown={e => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', padding: '12px 14px', borderBottom: '1px solid #23234a' }}>
         <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>▶ YouTube slideshow</div>
@@ -248,6 +253,7 @@ export function YTSlideshowInspector({ clips, onChange, onClose }) {
             </div>
             <button onClick={e => { e.stopPropagation(); move(i, -1) }} style={miniBtn} title="Move up">▲</button>
             <button onClick={e => { e.stopPropagation(); move(i, 1) }} style={miniBtn} title="Move down">▼</button>
+            {onExtract && <button onClick={e => { e.stopPropagation(); onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} style={miniBtn} title="Pop out onto the canvas">↗</button>}
             <button onClick={e => { e.stopPropagation(); del(i) }} style={{ ...miniBtn, color: '#f87171' }} title="Delete">×</button>
           </div>
         ))}

@@ -12,7 +12,9 @@ A new player object that plays through a sequence of YouTube clips, cleanly.
 - **Trim** each clip (start/end) with a dual-handle slider or by punching in `min:sec`.
 - Choose how each clip **advances**: automatically when it ends, after a delay, or on click/keypress.
 - **Clean playback** — YouTube's controls, title, and end-screen are hidden before and after each clip.
-- An **inspector** panel to preview, trim, reorder, delete, and add clips.
+- An **inspector** panel to preview, trim, reorder, delete, and add clips — now **unfolds right from the node**.
+- **Paste to add:** with a slideshow selected (or entered), paste a YouTube link and it drops straight into the box.
+- **Drag videos in and out:** drop a YouTube video from the canvas onto a slideshow to fold it in (it leaves the canvas); pop a clip back out onto the canvas with the ↗ button in the inspector.
 - **Arrow-key control** once entered (double-click / Enter to enter, Esc to leave): ←/→ previous/next clip, Space play/pause, Shift+←/→ ∓10 seconds.
 
 **How arrow keys stay unambiguous:** arrows always go to the *innermost active layer* — a YouTube slideshow only captures them once you *enter* it; otherwise normal graph navigation (or a running presentation) keeps the arrows. In a presentation, a slide holding a slideshow steps through its clips, then continues to the next slide.

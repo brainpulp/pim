@@ -2084,6 +2084,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
+  // The slideshow a pasted/dropped YouTube link should land in: the entered one, or a selected ytss node.
+  const ytssTargetRef = useRef(null)
+  const addClipToYtss = useCallback((nodeId, youtubeId) => {
+    const st = useGraphStore.getState(); const node = st.nodes.find(n => n.id === nodeId)
+    if (!node?.ytss) return
+    const clips = node.ytss.clips || []
+    const nc = { id: crypto.randomUUID(), youtubeId, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }
+    setYtssClips(nodeId, [...clips, nc])
+    setYtssIdxMap(m => ({ ...m, [nodeId]: clips.length }))
+  }, [setYtssClips])
+  useEffect(() => { ytssTargetRef.current = ytssActiveId || (selected?.type === 'node' && ytssNodeSet.has(selected.id) ? selected.id : null) }, [ytssActiveId, selected, ytssNodeSet])
   // Selecting something else exits the active slideshow (arrows go back to normal nav) — but not during
   // a presentation, where a slideshow is auto-entered without being "selected".
   useEffect(() => { if (presentingSlideIdx === null && ytssActiveId && selected?.id !== ytssActiveId) { ytssHandlesRef.current[ytssActiveId]?.pause?.(); setYtssActiveId(null) } }, [selected, ytssActiveId, presentingSlideIdx])
@@ -2856,6 +2867,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
         const ddx = sx - startSx, ddy = sy - startSy
 
+        // Drop a canvas YouTube video onto a YouTube-slideshow node → append it as a clip and remove
+        // the standalone node from the canvas. Only single-node drags of a youtube media node qualify.
+        if (!isFrame && !multiDrag) {
+          const draggedMedia = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.media
+          if (draggedMedia?.videoKind === 'youtube' && draggedMedia?.youtubeId) {
+            const sp = startPositions.find(p => p.node.id === nodeId)
+            const dropX = sp ? sp.ox + ddx : sx, dropY = sp ? sp.oy + ddy : sy
+            let targetYtss = null
+            for (const yn of simNodesRef.current) {
+              if (yn.id === nodeId || !ytssNodeSet.has(yn.id) || !visibleNodeIdsRef.current.has(yn.id)) continue
+              const scale = (viewNodePropsRef.current[yn.id]?.ytssScale) || 1
+              const halfW = 240 * scale, halfH = 135 * scale
+              const inByCenter = Math.abs((yn.x || 0) - dropX) < halfW && Math.abs((yn.y || 0) - dropY) < halfH
+              const inByCursor = Math.abs((yn.x || 0) - sx) < halfW && Math.abs((yn.y || 0) - sy) < halfH
+              if (inByCenter || inByCursor) { targetYtss = yn.id; break }
+            }
+            if (targetYtss) {
+              pushUndo()
+              addClipToYtss(targetYtss, draggedMedia.youtubeId)
+              deleteNode(nodeId)
+              if (selectedRef.current?.id === nodeId) setSelected(null)
+              document.removeEventListener('mousemove', onMove)
+              document.removeEventListener('mouseup', onUp)
+              return
+            }
+          }
+        }
+
         // Organize mode: drops reassign the group property, never touch fx/fy or topology.
         // The nearest group cell → that property value; the "(empty)" cell clears it.
         if (organizeActiveRef.current && organizeRef.current) {
@@ -2999,7 +3038,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage, removeEdge, pushUndo])
+  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage, removeEdge, pushUndo, addClipToYtss, deleteNode, ytssNodeSet, setSelected])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -3999,7 +4038,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const [cx, cy] = zoomTransformRef.current.invert([(rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2])
           // A YouTube link embeds the player directly; anything else unfurls to a preview card.
           const ytId = parseYoutubeId(text)
-          if (ytId) dropYoutube(ytId, cx, cy)
+          // With a YouTube slideshow selected/entered, a pasted YouTube link goes straight INTO it.
+          if (ytId && ytssTargetRef.current) { addClipToYtss(ytssTargetRef.current, ytId) }
+          else if (ytId) dropYoutube(ytId, cx, cy)
           else addLinkAt(text, cx, cy)
         }
         return
@@ -6330,10 +6371,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {ytssInspectorId && (() => {
         const yn = storeNodes.find(n => n.id === ytssInspectorId)
         if (!yn?.ytss) return null
+        const sn = simNodesRef.current.find(n => n.id === ytssInspectorId)
+        const T = zoomTransformRef.current, rect = svgRef.current?.getBoundingClientRect()
+        let anchor = null
+        if (sn && rect) {
+          const halfW = 240 * (getVP(ytssInspectorId).ytssScale || 1)
+          anchor = { x: rect.left + T.x + (sn.x + halfW) * T.k + 14, y: rect.top + T.y + sn.y * T.k }
+        }
         return (
           <YTSlideshowInspector
             clips={yn.ytss.clips || []}
+            anchor={anchor}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
+            onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); dropYoutube(clip.youtubeId, (s?.x || 0) + 340, (s?.y || 0)) }}
             onClose={() => setYtssInspectorId(null)}
           />
         )
