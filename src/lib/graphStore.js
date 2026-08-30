@@ -1214,6 +1214,26 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // ── YouTube slideshow node (node.ytss) ──────────────────────────────────────
+  // A node carrying an ordered list of YouTube clips with per-clip trim + trigger. Rendered as a clean
+  // player; arrow-navigable when "entered". clip = { id, youtubeId, title, start, end, trigger, delayMs }.
+  addYtssNode: (x = null, y = null) => {
+    const id = uid()
+    set(s => ({
+      nodes: [...s.nodes, { id, label: 'YouTube slideshow', notes: '', ytss: { clips: [] } }],
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, nodeProps: { ...v.nodeProps, [id]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
+      }),
+    }))
+    return id
+  },
+  setYtssClips: (nodeId, clips) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.ytss ? n : { ...n, ytss: { ...n.ytss, clips } }),
+  })),
+  setYtssProp: (nodeId, patch) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.ytss ? n : { ...n, ytss: { ...n.ytss, ...patch } }),
+  })),
+
   setTableCell: (nodeId, rowId, colId, value) => set(s => ({
     nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : {
       ...n, table: { ...n.table, rows: n.table.rows.map(r => r.id !== rowId ? r : { ...r, cells: { ...r.cells, [colId]: value } }) },

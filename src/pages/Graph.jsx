@@ -15,6 +15,7 @@ import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
+import { YTSlideshowNode, YTSlideshowInspector } from '../components/YTSlideshow'
 
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
 // Channels the parent can map a property to (label + the view prop each writes).
@@ -989,6 +990,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addImage        = useGraphStore(s => s.addImage)
   const addVideo        = useGraphStore(s => s.addVideo)
   const addAudio        = useGraphStore(s => s.addAudio)
+  const addYtssNode     = useGraphStore(s => s.addYtssNode)
+  const setYtssClips    = useGraphStore(s => s.setYtssClips)
   const addLink         = useGraphStore(s => s.addLink)
   const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
   const copyChildrenInto = useGraphStore(s => s.copyChildrenInto)
@@ -1470,6 +1473,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const allProjectTags = useMemo(() => { const set = new Set(); storeNodes.forEach(n => (n.meta?.tags || []).forEach(t => set.add(t))); return [...set].sort() }, [storeNodes])
   const tableNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.table).map(n => n.id)), [storeNodes])
   const mediaNodeSet   = useMemo(() => new Set(storeNodes.filter(n => n.media).map(n => n.id)), [storeNodes])
+  const ytssNodeSet    = useMemo(() => new Set(storeNodes.filter(n => n.ytss).map(n => n.id)), [storeNodes])
   // Migrate previously-"attached" media (image.attachedTo, the old follow model) into real media nodes,
   // once per view, so older projects gain the node behavior (outliner/collapse/edges).
   const migratedViewsRef = useRef(new Set())
@@ -2072,6 +2076,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // this only applies the confirmed text back into the doc (notes / children / label).
   const [genDialog, setGenDialog] = useState(null)
   const [autoStyleNode, setAutoStyleNode] = useState(null)   // nodeId whose auto-style config is open
+  const [ytssInspectorId, setYtssInspectorId] = useState(null)   // which YouTube-slideshow node's editor is open
+  const [ytssActiveId, setYtssActiveId] = useState(null)         // which ytss is "entered" (arrows drive it)
+  const [ytssIdxMap, setYtssIdxMap] = useState({})              // current clip index per ytss node id
+  const ytssHandlesRef = useRef({})                            // { [nodeId]: live player handle }
+  const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
+  const ytssPlayingRef = useRef(false)
+  const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
+  // Selecting something else exits the active slideshow (arrows go back to normal nav).
+  useEffect(() => { if (ytssActiveId && selected?.id !== ytssActiveId) { ytssHandlesRef.current[ytssActiveId]?.pause?.(); setYtssActiveId(null) } }, [selected, ytssActiveId])
   const applyGenerated = useCallback((nodeId, mode, text, { append = false } = {}) => {
     const st = useGraphStore.getState()
     const node = st.nodes.find(n => n.id === nodeId)
@@ -2381,6 +2394,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (readOnly) return   // shared read-only view: no keyboard mutations
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
+
+      // ── YouTube slideshow "entered": it owns the arrows until Esc. ──
+      //   ←/→ prev/next clip · Space play/pause · Shift+←/→ ∓10s · Esc exit
+      if (ytssActiveRef.current && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const nid = ytssActiveRef.current
+        const yn = useGraphStore.getState().nodes.find(n => n.id === nid)
+        const clips = yn?.ytss?.clips || []
+        const h = ytssHandlesRef.current[nid]
+        const cur = Math.max(0, Math.min(ytssIdxMapRef.current[nid] || 0, clips.length - 1))
+        const goClip = (ni) => { setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true; h?.loadClip?.(clips[ni], true) }
+        if (e.key === 'Escape') { e.preventDefault(); h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); return }
+        if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(10); return }
+        if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(-10); return }
+        if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
+        if (e.key === 'ArrowRight') { e.preventDefault(); if (cur < clips.length - 1) goClip(cur + 1); else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null) } return }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); if (cur > 0) goClip(cur - 1); return }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); return }   // swallow so it doesn't nav underneath
+        return
+      }
+
       if (e.key === 'Escape') {
         if (nodeMenu) { setNodeMenu(null); return }
         if (photoMenu) { setPhotoMenu(null); return }
@@ -2425,6 +2458,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && selected?.type === 'node') {
         e.preventDefault()
         if (e.repeat) return
+        if (ytssNodeSet.has(selected.id)) { setYtssActiveId(selected.id); return }   // Enter a YT slideshow
         const isRoot = !storeEdges.some(se => se.target === selected.id)
         if (isRoot) {
           pushUndo()
@@ -4952,7 +4986,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             )}
 
             {/* 4. Regular nodes on top */}
-            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && getVP(n.id).shape !== 'container' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id) && !mediaNodeSet.has(n.id)).map(n => {
+            {simNodesRef.current.filter(n => mountedRef.current.has(n.id) && getVP(n.id).shape !== 'frame' && getVP(n.id).shape !== 'container' && !listNodeSet.has(n.id) && !kanbanNodeSet.has(n.id) && !strategyNodeSet.has(n.id) && !tableNodeSet.has(n.id) && !mediaNodeSet.has(n.id) && !ytssNodeSet.has(n.id)).map(n => {
               const fo = nodeOpacityRef.current[n.id] ?? 1
               const dim = searchMatchSet && !searchMatchSet.has(n.id) ? 0.16 : 1
               return (
@@ -5202,6 +5236,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               )
             })}
 
+            {/* YouTube slideshow nodes — a node carrying `ytss` is a clean multi-clip player. */}
+            {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && ytssNodeSet.has(n.id)).map(n => {
+              const nd = storeNodeById[n.id]; if (!nd?.ytss) return null
+              n.__scale = getVP(n.id).ytssScale || 1
+              const active = ytssActiveId === n.id
+              return (
+                <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
+                  currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active}
+                  selected={selected?.type === 'node' && selected.id === n.id}
+                  onHeaderDown={e => handleNodeMouseDown(e, n.id)}
+                  onSelect={() => setSelected({ id: n.id, type: 'node' })}
+                  onEnter={() => { setSelected({ id: n.id, type: 'node' }); setYtssActiveId(n.id) }}
+                  onEdit={() => setYtssInspectorId(n.id)}
+                  onSetIdx={i => setYtssIdxMap(m => ({ ...m, [n.id]: i }))}
+                  onReady={h => { ytssHandlesRef.current[n.id] = h }}
+                  onEnded={() => { /* Stage 3: auto-advance per trigger */ }} />
+              )
+            })}
+
             {/* Table nodes — a node carrying `table` is drawn as an editable spreadsheet card. */}
             {simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && tableNodeSet.has(n.id)).map(n => {
               const node = storeNodeById[n.id]
@@ -5348,6 +5401,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
                     {item('🎬', 'Video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
                     {item('🎵', 'Audio…', () => { const { sx, sy } = contextMenu; close(); addAudioFileAt(sx, sy) })}
+                    {item('📺', 'YouTube slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
                     {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
                     {item('⬭', 'Container', () => {
                       pushUndo()
@@ -6191,6 +6245,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             propertyDefs={storePropertyDefs || []}
             onSave={(autoStyle) => { setNodeMeta(autoStyleNode, { autoStyle }); setAutoStyleNode(null) }}
             onClose={() => setAutoStyleNode(null)}
+          />
+        )
+      })()}
+
+      {ytssInspectorId && (() => {
+        const yn = storeNodes.find(n => n.id === ytssInspectorId)
+        if (!yn?.ytss) return null
+        return (
+          <YTSlideshowInspector
+            clips={yn.ytss.clips || []}
+            onChange={clips => setYtssClips(ytssInspectorId, clips)}
+            onClose={() => setYtssInspectorId(null)}
           />
         )
       })()}
