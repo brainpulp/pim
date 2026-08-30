@@ -2083,8 +2083,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
-  // Selecting something else exits the active slideshow (arrows go back to normal nav).
-  useEffect(() => { if (ytssActiveId && selected?.id !== ytssActiveId) { ytssHandlesRef.current[ytssActiveId]?.pause?.(); setYtssActiveId(null) } }, [selected, ytssActiveId])
+  // Selecting something else exits the active slideshow (arrows go back to normal nav) — but not during
+  // a presentation, where a slideshow is auto-entered without being "selected".
+  useEffect(() => { if (presentingSlideIdx === null && ytssActiveId && selected?.id !== ytssActiveId) { ytssHandlesRef.current[ytssActiveId]?.pause?.(); setYtssActiveId(null) } }, [selected, ytssActiveId, presentingSlideIdx])
   const applyGenerated = useCallback((nodeId, mode, text, { append = false } = {}) => {
     const st = useGraphStore.getState()
     const node = st.nodes.find(n => n.id === nodeId)
@@ -2408,9 +2409,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(10); return }
         if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(-10); return }
         if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
-        if (e.key === 'ArrowRight') { e.preventDefault(); if (cur < clips.length - 1) goClip(cur + 1); else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null) } return }
-        if (e.key === 'ArrowLeft') { e.preventDefault(); if (cur > 0) goClip(cur - 1); return }
-        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); return }   // swallow so it doesn't nav underneath
+        const presenting = presentingSlideIdxRef.current !== null
+        if (e.key === 'ArrowRight') { e.preventDefault(); if (cur < clips.length - 1) goClip(cur + 1); else if (presenting) advanceBuild(1); else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null) } return }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
+        if (e.key === 'ArrowUp') { e.preventDefault(); if (presenting) jumpSlide(-1); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); if (presenting) jumpSlide(1); return }
         return
       }
 
@@ -4579,6 +4582,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setStageOverlay(null)
   }
   const slideStages = (idx) => { const f = slideSimNodes[idx]; return f ? (getVP(f.id).stages || []) : [] }
+  // The YouTube slideshow (if any) whose centre sits inside a frame's box.
+  const frameYtss = (frame) => {
+    if (!frame) return null
+    const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(frame.id) || {}) }
+    const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
+    const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
+    const y = simNodesRef.current.find(n => ytssNodeSet.has(n.id) && visibleNodeIdsRef.current.has(n.id) &&
+      Math.abs((n.x || 0) - (frame.x || 0)) <= fhw && Math.abs((n.y || 0) - (frame.y || 0)) <= fhh)
+    return y?.id || null
+  }
   const presentSlide = (idx, direction) => {
     if (idx < 0 || idx >= slideSimNodes.length) return
     restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
@@ -4589,6 +4602,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const sIdx = stages.length ? (direction === 'back' ? stages.length - 1 : 0) : 0
     setPresentStage(sIdx)
     if (stages.length) setTimeout(() => applyStage(slideSimNodes[idx].id, sIdx), 60)
+
+    // Auto-enter a YouTube slideshow living on this slide (and exit the previous slide's, if any).
+    const yid = frameYtss(slideSimNodes[idx])
+    if (ytssActiveRef.current && ytssActiveRef.current !== yid) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) }
+    if (yid) {
+      const clips = useGraphStore.getState().nodes.find(n => n.id === yid)?.ytss?.clips || []
+      const startIdx = direction === 'back' ? Math.max(0, clips.length - 1) : 0
+      setYtssActiveId(yid); setYtssIdxMap(m => ({ ...m, [yid]: startIdx })); ytssPlayingRef.current = true
+      setTimeout(() => ytssHandlesRef.current[yid]?.loadClip?.(clips[startIdx], true), 120)
+    }
   }
   const advanceBuild = (dir) => {
     const cur = presentingSlideIdxRef.current ?? 0
@@ -4603,7 +4626,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }
   const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
 
-  const exitPresentation = () => { restoreOverlayInstant(); setPresentingSlideIdx(null); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } restoreOverlayInstant(); setPresentingSlideIdx(null); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
 
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
@@ -5260,7 +5283,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     const advance = () => {
                       const ni = cur + 1
                       if (ni < clips.length) { setYtssIdxMap(m => ({ ...m, [n.id]: ni })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(clips[ni], true) }
-                      else { ytssPlayingRef.current = false }   // end of the show → stop (Stage 3 will bubble to the next slide)
+                      else { ytssPlayingRef.current = false; if (presentingSlideIdxRef.current !== null) advanceBuild(1) }   // end of show → next slide when presenting
                     }
                     if (clip.trigger === 'auto') advance()
                     else if (clip.trigger === 'delay') setTimeout(advance, clip.delayMs || 1500)
