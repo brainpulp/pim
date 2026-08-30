@@ -819,6 +819,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [newNodeAt, setNewNodeAt] = useState(null)       // { px, py, sx, sy } floating new-node name input
   const [contextMenu, setContextMenu] = useState(null)   // { px, py, sx, sy } right-click menu (only on click, not drag)
   const [ctxColors, setCtxColors] = useState(false)      // context-menu background-color submenu open
+  const [ctxPanel, setCtxPanel] = useState(null)         // context-menu submenu: null | 'insert' | 'video' | 'audio'
   const [bulkMenu, setBulkMenu] = useState(null)         // { px, py, ids } right-click menu for a multi-selection
   const [bulkPanel, setBulkPanel] = useState(null)       // 'color' | 'shape' submenu open in the bulk menu
   const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
@@ -2387,7 +2388,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (!contextMenu && !bulkMenu) return
     const onDown = e => {
       if (e.target?.closest?.('[data-graphmenu]')) return
-      setContextMenu(null); setCtxColors(false)
+      setContextMenu(null); setCtxColors(false); setCtxPanel(null)
       setBulkMenu(null); setBulkPanel(null)
     }
     // Defer binding a tick so the same click that opened the menu doesn't immediately close it.
@@ -5395,7 +5396,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
         {/* Right-click context menu */}
         {contextMenu && (() => {
-          const close = () => { setContextMenu(null); setCtxColors(false) }
+          const close = () => { setContextMenu(null); setCtxColors(false); setCtxPanel(null) }
           const item = (icon, label, onClick) => (
             <div onClick={onClick}
               onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
@@ -5429,9 +5430,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       ))}
                     </div>
                   </>
-                ) : (
+                ) : ctxPanel === 'insert' ? (
                   <>
-                    <div style={{ fontSize: 9.5, letterSpacing: 0.5, color: '#7c8cff', padding: '3px 10px 2px', textTransform: 'uppercase' }}>Insert</div>
+                    {item(null, <span style={{ color: '#8090b8' }}>‹ Insert</span>, () => setCtxPanel(null))}
                     {item('▭', 'Frame', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
@@ -5446,25 +5447,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addTableNode(sx, sy)
-                      if (drillRoot) addEdge(drillRoot, id)   // keep it inside the drilled subtree so it renders
+                      if (drillRoot) addEdge(drillRoot, id)
                       setSelected({ id, type: 'node' })
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('🗂️', 'Board', () => {
+                    {item('🗂️', 'Kanban board', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
                       const id = addKanbanNode(sx, sy)
-                      if (drillRoot) addEdge(drillRoot, id)   // keep it inside the drilled subtree so it renders
+                      if (drillRoot) addEdge(drillRoot, id)
                       setSelected({ id, type: 'node' })
                       setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
                       close()
                     })}
-                    {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
-                    {item('🎬', 'Video…', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
-                    {item('🎵', 'Audio…', () => { const { sx, sy } = contextMenu; close(); addAudioFileAt(sx, sy) })}
-                    {item('📺', 'YouTube slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
-                    {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
                     {item('⬭', 'Container', () => {
                       pushUndo()
                       const { sx, sy } = contextMenu
@@ -5475,10 +5471,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                       close()
                     })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                    {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
-                    {item('▶️', 'Add YouTube…', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
-                    {item('🔗', 'Add link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
-                    {item('♪', 'Add audio link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste an audio link (mp3, etc.):'); if (url && url.trim()) addAudioUrlAt(url.trim(), sx, sy) })}
+                    {item('🎬', <>Video<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('video'))}
+                    {item('🎵', <>Audio<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('audio'))}
+                    {item('📺', 'YouTube slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
+                    {item('🔗', 'Link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
+                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                    {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
+                  </>
+                ) : ctxPanel === 'video' ? (
+                  <>
+                    {item(null, <span style={{ color: '#8090b8' }}>‹ Video</span>, () => setCtxPanel('insert'))}
+                    {item('⤒', 'Upload a file', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
+                    {item('🔗', 'Paste a YouTube link', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
+                  </>
+                ) : ctxPanel === 'audio' ? (
+                  <>
+                    {item(null, <span style={{ color: '#8090b8' }}>‹ Audio</span>, () => setCtxPanel('insert'))}
+                    {item('⤒', 'Upload a file', () => { const { sx, sy } = contextMenu; close(); addAudioFileAt(sx, sy) })}
+                    {item('🔗', 'Paste a link', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste an audio link (mp3, etc.):'); if (url && url.trim()) addAudioUrlAt(url.trim(), sx, sy) })}
+                  </>
+                ) : (
+                  <>
+                    {item('＋', <>Insert<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('insert'))}
                     {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
