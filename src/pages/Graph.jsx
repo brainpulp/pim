@@ -2199,6 +2199,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
       const px = clientX - rect.left, py = clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
+      // Big "card" nodes (YouTube slideshow, table, kanban, list, strategy, media) have small circular
+      // hitboxes, so a right-click on the card body would otherwise fall through to the background Insert
+      // menu. Route it to THAT node's own menu instead — the menu should pertain to the item clicked.
+      if (!forceBg) {
+        const cardEl = target?.closest?.('[data-cardnode]')
+        const cardId = cardEl?.getAttribute('data-cardnode')
+        if (cardId && !isCtrl && simNodesRef.current.some(n => n.id === cardId)) {
+          setContextMenu(null); setPhotoMenu(null); setBulkMenu(null)
+          setSelected({ id: cardId, type: 'node' }); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set())
+          setNodeMenu({ nodeId: cardId, px, py })
+          return
+        }
+      }
       // Shift+right-click forces the background menu open even when the cursor is over a node — a reliable
       // escape hatch when the canvas is dense and there's no empty space to click.
       if (forceBg) { setNodeMenu(null); setPhotoMenu(null); setBulkMenu(null); setContextMenu({ px, py, sx, sy }); return }
@@ -5064,7 +5077,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const rows = buildListRows(n.id, order, arrangements)
               const topOrder = rows.filter(r => r.depth === 0).map(r => r.id)
               return (
-              <ListCard key={'lc' + n.id} node={n} rootLabel={n.label} rows={rows}
+              <g key={'lc' + n.id} data-cardnode={n.id}>
+              <ListCard node={n} rootLabel={n.label} rows={rows}
                 fill={getVP(n.id).fillColor} selectedId={selected?.type === 'node' ? selected.id : null}
                 width={meta.listWidth || 248} onSetWidth={w => setNodeMeta(n.id, { listWidth: w })} zoomRef={zoomTransformRef}
                 order={order} arrangements={arrangements} topOrder={topOrder} propertyDefs={storePropertyDefs}
@@ -5080,6 +5094,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onDeleteArrangement={id => setNodeMeta(n.id, { listArrangements: arrangements.filter(a => a.id !== id), ...(order.arrangementId === id ? { listOrder: { mode: 'structure' } } : {}) })}
                 onReorderArrangement={newOrder => { const aid = order.arrangementId; setNodeMeta(n.id, { listArrangements: arrangements.map(a => a.id === aid ? { ...a, order: newOrder } : a) }) }}
                 onExit={() => toggleListNode(n.id)} />
+              </g>
               )
             })}
 
@@ -5149,6 +5164,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 }
                 const colOptId = colId => colId.startsWith('opt:') ? colId.slice(4) : null
                 return (
+                  <g key={'kb' + n.id} data-cardnode={n.id}>
                   <KanbanCard {...common} columns={columns} grouped groupBy={gb}
                     onSetGroupBy={g => setKanbanGroupBy(n.id, g)}
                     onRenameBoard={label => updateLabel(n.id, label)}
@@ -5161,6 +5177,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     onDeleteCard={id => { pushUndo(); deleteNode(id) }}
                     onMoveCard={(cardId, colId) => { pushUndo(); applyMove(cardId, colId) }}
                     onMoveColumn={() => {}} />
+                  </g>
                 )
               }
 
@@ -5178,6 +5195,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               })
               const setCardCol = (cardId, colId) => { if (propId && colOptById[colId]) setNodeProp(cardId, propId, colOptById[colId]) }
               return (
+                <g key={'kb' + n.id} data-cardnode={n.id}>
                 <KanbanCard {...common} columns={columns} propId={propId}
                   onRenameBoard={label => renameKanbanBoard(n.id, propId, label)}
                   onAddColumn={() => { pushUndo(); addKanbanColumn(n.id, propId) }}
@@ -5189,6 +5207,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onDeleteCard={id => { pushUndo(); deleteNode(id) }}
                   onMoveCard={(cardId, colId, beforeId) => { pushUndo(); moveCardToColumn(cardId, colId, beforeId); setCardCol(cardId, colId) }}
                   onMoveColumn={(colId, beforeId) => { pushUndo(); moveChild(n.id, colId, beforeId) }} />
+                </g>
               )
             })}
 
@@ -5200,7 +5219,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const items = flattenSubtree(n.id).map(r => ({ id: r.id, label: nodeLabelById[r.id] || '(untitled)' }))
               const strat = board?.meta?.strategy || {}
               return (
-                <StrategyCard key={'st' + n.id} node={n} title={board?.label || 'Strategy'} items={items}
+                <g key={'st' + n.id} data-cardnode={n.id}>
+                <StrategyCard node={n} title={board?.label || 'Strategy'} items={items}
                   strategy={strat} zoomRef={zoomTransformRef} scale={getVP(n.id).strategyScale || 1}
                   fill={getVP(n.id).fillColor}
                   selectedId={selected?.type === 'node' ? selected.id : null}
@@ -5216,6 +5236,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onToggleDecision={id => toggleStrategyDecision(n.id, id)}
                   onSetScale={k => setNodeViewProp(n.id, 'strategyScale', k)}
                   onExit={() => toggleStrategyNode(n.id)} />
+                </g>
               )
             })}
 
@@ -5250,12 +5271,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 }
               }
               return (
-                <ImageNode key={'media' + n.id} img={mediaImg}
-                  isSelected={(selected?.type === 'node' && selected.id === n.id) || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
-                  isCropping={false}
-                  mediaPlay={mediaPlay}
-                  onToggleMedia={prop => setNodeMeta(n.id, { [prop]: !meta[prop] })}
-                  onMouseDown={handleMediaNodeMouseDown} />
+                <g key={'media' + n.id} data-cardnode={n.id}>
+                  <ImageNode img={mediaImg}
+                    isSelected={(selected?.type === 'node' && selected.id === n.id) || selectedNodeIds.has(n.id) || !!movingIds?.has(n.id)}
+                    isCropping={false}
+                    mediaPlay={mediaPlay}
+                    onToggleMedia={prop => setNodeMeta(n.id, { [prop]: !meta[prop] })}
+                    onMouseDown={handleMediaNodeMouseDown} />
+                </g>
               )
             })}
 
@@ -5297,7 +5320,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const node = storeNodeById[n.id]
               if (!node?.table) return null
               return (
-                <TableCard key={'tbl' + n.id} node={n} title={node.label} table={node.table} zoomRef={zoomTransformRef}
+                <g key={'tbl' + n.id} data-cardnode={n.id}>
+                <TableCard node={n} title={node.label} table={node.table} zoomRef={zoomTransformRef}
                   fill={getVP(n.id).fillColor} scale={getVP(n.id).tableScale || 1} palette={COLOR_PALETTE}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
@@ -5317,6 +5341,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onSetTextColor={c => setNodeViewProp(n.id, 'textColor', c === '__default__' ? null : c)}
                   onSetScale={k => setNodeViewProp(n.id, 'tableScale', k)}
                   onDelete={() => setConfirmDeleteNodes([n.id])} />
+                </g>
               )
             })}
 

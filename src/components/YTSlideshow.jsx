@@ -275,7 +275,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalCo
   const W = 480 * (node.__scale || 1), H = 270 * (node.__scale || 1)
   const label = node.label || 'YouTube slideshow'
   return (
-    <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1"
+    <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
       onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.() } }}
       onDoubleClick={e => { e.stopPropagation(); onEnter?.() }}>
       {/* Title above */}
