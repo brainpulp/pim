@@ -15,7 +15,7 @@ import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
-import { YTSlideshowNode, YTSlideshowInspector } from '../components/YTSlideshow'
+import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer } from '../components/YTSlideshow'
 import { playDrop } from '../lib/sound'
 
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
@@ -1508,6 +1508,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const lbl = (n.label || '').trim().toLowerCase()
         if (lbl === '' || lbl === 'video') fetchTitle('node:' + n.id, n.media.youtubeId, t => updateLabel(n.id, t))
       }
+      // YouTube-slideshow clips: backfill each clip's real title (shown in the inspector list).
+      if (n.ytss?.clips?.length) {
+        n.ytss.clips.forEach(cl => {
+          if (cl.youtubeId && !cl.title) fetchTitle('ytss:' + n.id + ':' + cl.id, cl.youtubeId, t => {
+            const cur = useGraphStore.getState().nodes.find(x => x.id === n.id)
+            if (!cur?.ytss) return
+            setYtssClips(n.id, (cur.ytss.clips || []).map(c => c.id === cl.id ? { ...c, title: t } : c))
+          })
+        })
+      }
     })
     const v = s.views.find(vv => vv.id === s.activeViewId)
     ;(v?.images || []).forEach(img => {
@@ -2081,10 +2091,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [ytssInspectorId, setYtssInspectorId] = useState(null)   // which YouTube-slideshow node's editor is open
   const [ytssActiveId, setYtssActiveId] = useState(null)         // which ytss is "entered" (arrows drive it)
   const [ytssIdxMap, setYtssIdxMap] = useState({})              // current clip index per ytss node id
+  const [ytssEndedId, setYtssEndedId] = useState(null)         // the entered ytss that has reached its end (shows replay)
+  const [ytssFullscreenId, setYtssFullscreenId] = useState(null)   // ytss playing in real browser fullscreen
   const ytssHandlesRef = useRef({})                            // { [nodeId]: live player handle }
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
+  const ytssEndedRef = useRef(null); useEffect(() => { ytssEndedRef.current = ytssEndedId }, [ytssEndedId])
+  // Enter a slideshow and start playing its current clip (used by double-click, ▶, and arrow-nav arrival).
+  const enterYtssAndPlay = useCallback((nodeId) => {
+    setYtssActiveId(nodeId); setYtssEndedId(null)
+    const clips = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.ytss?.clips || []
+    if (!clips.length) return
+    const i = Math.max(0, Math.min(ytssIdxMapRef.current[nodeId] || 0, clips.length - 1))
+    ytssPlayingRef.current = true
+    // The handle may not be ready this tick (player still mounting) — retry briefly.
+    let tries = 0
+    const kick = () => { const h = ytssHandlesRef.current[nodeId]; if (h?.loadClip) h.loadClip(clips[i], true); else if (tries++ < 20) setTimeout(kick, 120) }
+    kick()
+  }, [])
   // The slideshow a pasted/dropped YouTube link should land in: the entered one, or a selected ytss node.
   const ytssTargetRef = useRef(null)
   const addClipToYtss = useCallback((nodeId, youtubeId) => {
@@ -2098,7 +2123,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   useEffect(() => { ytssTargetRef.current = ytssActiveId || (selected?.type === 'node' && ytssNodeSet.has(selected.id) ? selected.id : null) }, [ytssActiveId, selected, ytssNodeSet])
   // Selecting something else exits the active slideshow (arrows go back to normal nav) — but not during
   // a presentation, where a slideshow is auto-entered without being "selected".
-  useEffect(() => { if (presentingSlideIdx === null && ytssActiveId && selected?.id !== ytssActiveId) { ytssHandlesRef.current[ytssActiveId]?.pause?.(); setYtssActiveId(null) } }, [selected, ytssActiveId, presentingSlideIdx])
+  // Selecting a DIFFERENT node exits the active slideshow (arrows go back to normal nav). Keyed off
+  // `selected` only (not ytssActiveId) so an arrow-nav auto-enter — which sets active WITHOUT selecting —
+  // isn't torn down the instant it starts. Not during a presentation (auto-entered without selection).
+  useEffect(() => {
+    if (presentingSlideIdx !== null) return
+    const a = ytssActiveRef.current
+    if (a && selected?.id !== a) { ytssHandlesRef.current[a]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null) }
+  }, [selected, presentingSlideIdx])
   const applyGenerated = useCallback((nodeId, mode, text, { append = false } = {}) => {
     const st = useGraphStore.getState()
     const node = st.nodes.find(n => n.id === nodeId)
@@ -2430,14 +2462,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const clips = yn?.ytss?.clips || []
         const h = ytssHandlesRef.current[nid]
         const cur = Math.max(0, Math.min(ytssIdxMapRef.current[nid] || 0, clips.length - 1))
-        const goClip = (ni) => { setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true; h?.loadClip?.(clips[ni], true) }
-        if (e.key === 'Escape') { e.preventDefault(); h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); return }
+        const goClip = (ni) => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true; h?.loadClip?.(clips[ni], true) }
+        if (e.key === 'Escape') { e.preventDefault(); h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null); return }
         if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(10); return }
         if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(-10); return }
         if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
         const presenting = presentingSlideIdxRef.current !== null
-        if (e.key === 'ArrowRight') { e.preventDefault(); if (cur < clips.length - 1) goClip(cur + 1); else if (presenting) advanceBuild(1); else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null) } return }
-        if (e.key === 'ArrowLeft') { e.preventDefault(); if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
+        const atEnd = ytssEndedRef.current === nid
+        if (e.key === 'ArrowRight') {
+          e.preventDefault()
+          if (cur < clips.length - 1) goClip(cur + 1)
+          else if (presenting) advanceBuild(1)
+          else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
+          else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null) }   // → show the node on canvas
+          return
+        }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); if (atEnd) { setYtssEndedId(null); h?.play?.(); ytssPlayingRef.current = true } else if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
         if (e.key === 'ArrowUp') { e.preventDefault(); if (presenting) jumpSlide(-1); return }
         if (e.key === 'ArrowDown') { e.preventDefault(); if (presenting) jumpSlide(1); return }
         return
@@ -2487,7 +2527,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && selected?.type === 'node') {
         e.preventDefault()
         if (e.repeat) return
-        if (ytssNodeSet.has(selected.id)) { setYtssActiveId(selected.id); return }   // Enter a YT slideshow
+        if (ytssNodeSet.has(selected.id)) { enterYtssAndPlay(selected.id); return }   // Enter a YT slideshow (and play)
         const isRoot = !storeEdges.some(se => se.target === selected.id)
         if (isRoot) {
           pushUndo()
@@ -2622,7 +2662,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (cur) { e.preventDefault(); navFocusRef.current = cur; navOutRef.current = 0; zoomNavRef.current?.(cur, navDepthRef.current) }
           return
         }
-        const goTo = (id, viaIds) => { if (id) { navFocusRef.current = id; navOutRef.current = 0; zoomNavRef.current?.(id, navDepthRef.current, viaIds) } }
+        const goTo = (id, viaIds) => {
+          if (!id) return
+          navFocusRef.current = id; navOutRef.current = 0; zoomNavRef.current?.(id, navDepthRef.current, viaIds)
+          // Landing on a YouTube slideshow auto-enters it and starts playing (arrows then drive the clips).
+          if (ytssNodeSet.has(id) && ytssActiveRef.current !== id) enterYtssAndPlay(id)
+        }
 
         const closer = e.key === ']' || e.key === '+' || e.key === '='
         const wider = e.key === '[' || e.key === '-' || e.key === '_'
@@ -5330,14 +5375,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const nd = storeNodeById[n.id]; if (!nd?.ytss) return null
               n.__scale = getVP(n.id).ytssScale || 1
               const active = ytssActiveId === n.id
+              const inspecting = ytssInspectorId === n.id
               return (
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
-                  currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active}
+                  currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active || inspecting}
+                  ended={ytssEndedId === n.id}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
-                  onEnter={() => { setSelected({ id: n.id, type: 'node' }); setYtssActiveId(n.id) }}
+                  onEnter={() => { setSelected({ id: n.id, type: 'node' }); enterYtssAndPlay(n.id) }}
+                  onFullscreen={() => setYtssFullscreenId(n.id)}
+                  onReplay={() => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [n.id]: 0 })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(nd.ytss.clips[0], true) }}
                   onEdit={() => setYtssInspectorId(n.id)}
                   onSetIdx={i => setYtssIdxMap(m => ({ ...m, [n.id]: i }))}
                   onReady={h => { ytssHandlesRef.current[n.id] = h }}
@@ -5350,11 +5399,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     const advance = () => {
                       const ni = cur + 1
                       if (ni < clips.length) { setYtssIdxMap(m => ({ ...m, [n.id]: ni })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(clips[ni], true) }
-                      else { ytssPlayingRef.current = false; if (presentingSlideIdxRef.current !== null) advanceBuild(1) }   // end of show → next slide when presenting
+                      else { ytssPlayingRef.current = false; if (presentingSlideIdxRef.current !== null) advanceBuild(1); else setYtssEndedId(n.id) }   // end of show → next slide when presenting, else show replay
                     }
                     if (clip.trigger === 'auto') advance()
                     else if (clip.trigger === 'delay') setTimeout(advance, clip.delayMs || 1500)
-                    // 'click' → wait for an arrow / Space
+                    else if (cur === clips.length - 1) setYtssEndedId(n.id)   // 'click' on the last clip → end state
+                    // other 'click' → wait for an arrow / Space
                   }} />
               )
             })}
@@ -6384,10 +6434,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           <YTSlideshowInspector
             clips={yn.ytss.clips || []}
             anchor={anchor}
+            preview={{
+              select: (i, clip) => { setYtssIdxMap(m => ({ ...m, [ytssInspectorId]: i })); ytssHandlesRef.current[ytssInspectorId]?.loadClip?.(clip, true) },
+              seek: t => ytssHandlesRef.current[ytssInspectorId]?.seekTo?.(t),
+              play: () => ytssHandlesRef.current[ytssInspectorId]?.play?.(),
+              pause: () => ytssHandlesRef.current[ytssInspectorId]?.pause?.(),
+              duration: () => ytssHandlesRef.current[ytssInspectorId]?.duration?.() || 0,
+            }}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); dropYoutube(clip.youtubeId, (s?.x || 0) + 340, (s?.y || 0)) }}
-            onClose={() => setYtssInspectorId(null)}
+            onClose={() => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }}
           />
+        )
+      })()}
+
+      {ytssFullscreenId && (() => {
+        const yn = storeNodes.find(n => n.id === ytssFullscreenId)
+        const clips = yn?.ytss?.clips || []
+        if (!clips.length) return null
+        const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
+        return (
+          <YTFullscreenPlayer clips={clips} startIndex={start}
+            onExit={() => {
+              const id = ytssFullscreenId
+              setYtssFullscreenId(null)
+              // Back to the node on the canvas: focus + zoom it (not "entered", so the next arrow resumes nav).
+              navFocusRef.current = id; navOutRef.current = 0
+              zoomNavRef.current?.(id, navDepthRef.current)
+            }} />
         )
       })()}
     </div>

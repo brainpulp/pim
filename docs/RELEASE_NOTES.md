@@ -12,10 +12,16 @@ A new player object that plays through a sequence of YouTube clips, cleanly.
 - **Trim** each clip (start/end) with a dual-handle slider or by punching in `min:sec`.
 - Choose how each clip **advances**: automatically when it ends, after a delay, or on click/keypress.
 - **Clean playback** — YouTube's controls, title, and end-screen are hidden before and after each clip.
-- An **inspector** panel to preview, trim, reorder, delete, and add clips — now **unfolds right from the node**.
+- An **inspector** that unfolds from the node — and **previews on the node itself** (no separate mini-screen). Selecting a clip plays it right on the node.
+- **Live trim preview:** drag the start handle and playback restarts from the new start; drag the end handle and it seeks there.
+- **Real video titles** shown in the clip list.
+- **Drag to reorder** clips (no more up/down buttons).
+- **Fullscreen playback** — play the whole slideshow in real fullscreen (fullscreen button when the node is selected).
 - **Paste to add:** with a slideshow selected (or entered), paste a YouTube link and it drops straight into the box.
-- **Drag videos in and out:** drop a YouTube video from the canvas onto a slideshow to fold it in (it leaves the canvas); pop a clip back out onto the canvas with the ↗ button in the inspector.
+- **Drag videos in and out:** drop a YouTube video from the canvas onto a slideshow to fold it in (it leaves the canvas); pop a clip back out onto the canvas with the pop-out button in the inspector.
 - **Arrow-key control** once entered (double-click / Enter to enter, Esc to leave): ←/→ previous/next clip, Space play/pause, Shift+←/→ ∓10 seconds.
+- **Auto-play on arrival:** arrow-navigating onto a slideshow starts it playing. When it finishes it shows a **replay** on its last frame; press → to return to the node, → again to continue navigating.
+- Crisp, centered control icons.
 
 **How arrow keys stay unambiguous:** arrows always go to the *innermost active layer* — a YouTube slideshow only captures them once you *enter* it; otherwise normal graph navigation (or a running presentation) keeps the arrows. In a presentation, a slide holding a slideshow steps through its clips, then continues to the next slide.
 
