@@ -114,6 +114,32 @@ const youtubeEmbedUrl = (img) => {
   return `https://www.youtube-nocookie.com/embed/${img.youtubeId}?${p.toString()}`
 }
 
+// Centered inline-SVG icon for SVG-space circular badges. Authored in a 24×24 box; a nested <svg> with
+// x/y = -size/2 puts the glyph's centre (12,12) exactly at (0,0), so it sits dead-center in a <circle> —
+// unlike emoji/text glyphs, whose optical centre drifts under dominantBaseline. Stroke stays ~constant
+// px via non-scaling-stroke. Use inside a `<g transform="translate(cx,cy)">` alongside the circle.
+function IconGlyph({ name, size = 12, color = '#fff', fill }) {
+  const s = { fill: 'none', stroke: color, strokeWidth: 2.1, strokeLinecap: 'round', strokeLinejoin: 'round', vectorEffect: 'non-scaling-stroke' }
+  const solid = { fill: fill || color, stroke: 'none' }
+  const paths = {
+    close:    <path d="M7 7l10 10M17 7L7 17" {...s} />,
+    plus:     <path d="M12 5v14M5 12h14" {...s} />,
+    check:    <path d="M5 12.5l4.5 4.5L19 7" {...s} />,
+    link:     <g {...s}><path d="M10 14l4-4" /><path d="M13.5 6.5l1-1a3.9 3.9 0 0 1 5.5 5.5l-2.5 2.5" /><path d="M10.5 17.5l-1 1a3.9 3.9 0 0 1-5.5-5.5l2.5-2.5" /></g>,
+    play:     <path d="M8 5.5v13l11-6.5z" {...solid} />,
+    refresh:  <g {...s}><path d="M20 12a8 8 0 1 1-2.3-5.6" /><path d="M20 4v4h-4" /></g>,
+    resize:   <g {...s}><path d="M20 10V4h-6" /><path d="M4 14v6h6" /><path d="M20 4L4 20" /></g>,
+    chevronR: <path d="M9.5 6l6 6-6 6" {...s} />,
+    chevronD: <path d="M6 9.5l6 6 6-6" {...s} />,
+    edit:     <path d="M4 20h4L18.5 9.5l-4-4L4 16z" {...s} />,
+  }
+  return (
+    <svg x={-size / 2} y={-size / 2} width={size} height={size} viewBox="0 0 24 24" style={{ overflow: 'visible', pointerEvents: 'none' }}>
+      {paths[name] || null}
+    </svg>
+  )
+}
+
 // Gentle gravity toward the cloud's OWN centroid (not a fixed point) — counteracts the charge
 // repulsion so the layout stays compact instead of scattering disconnected nodes/branches outward
 // every time the simulation restarts. Skips pinned nodes. Robust to pan/zoom (uses live positions).
@@ -8311,7 +8337,7 @@ function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate, onDele
       {selected && (
         <g transform={`translate(${hx + 2},${(bbox ? bbox.y : 0) - 12})`} style={{ cursor: 'pointer' }} onMouseDown={e => { stop(e); onDelete() }}>
           <circle r={8} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.3} />
-          <text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
+          <IconGlyph name="close" size={13} color="#f87171" />
         </g>
       )}
       {selected && (d.kind === 'shape' || d.kind === 'text' || isLine) && (
@@ -8666,7 +8692,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         {img.attachedTo && (
           <g transform={`translate(${vR - 10},${vT + 2})`} style={{ pointerEvents: 'none' }}>
             <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1} />
-            <text textAnchor="middle" dominantBaseline="central" fontSize={10} style={{ userSelect: 'none' }}>🔗</text>
+            <IconGlyph name="link" size={12} color="#9fb0e8" />
           </g>
         )}
         {/* Video/Link/Audio: a top drag-bar to move it (the body's pointer events belong to the player/link) */}
@@ -8705,7 +8731,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         {isVideo && videoActive && (
           <g transform={`translate(${vR - 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(false) }} style={{ cursor: 'pointer' }}>
             <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
-            <text x={0} y={0.5} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>✕</text>
+            <IconGlyph name="close" size={13} color="#c5d0ff" />
           </g>
         )}
         {/* Four square corner resize handles — pivot on the opposite corner (Miro style) */}
@@ -8719,7 +8745,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         <g transform={`translate(${(vL + vR) / 2},${vT - 28})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'rotate') }} style={{ cursor: 'grab' }}>
           <circle r={8} fill="#16162a" stroke="#a78bfa" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="#a78bfa" style={{ userSelect: 'none' }}>↻</text>
+          <IconGlyph name="refresh" size={13} color="#a78bfa" />
         </g>
       </>)}
 
@@ -8820,7 +8846,7 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
           onClick={e => { e.stopPropagation(); onDelete(node.id) }}
           style={{ cursor: 'pointer' }}>
           <circle r={9} fill="#1a1a2e" stroke="#f87171" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={12} fill="#f87171" style={{ userSelect: 'none' }}>×</text>
+          <IconGlyph name="close" size={14} color="#f87171" />
         </g>
       )}
 
@@ -8845,7 +8871,7 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
           onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }}
           style={{ cursor: cur }}>
           <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} opacity={isSelected ? 1 : 0.85} />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={9} fill="#5b6af0" style={{ userSelect: 'none', pointerEvents: 'none' }}>⤡</text>
+          <IconGlyph name="resize" size={12} color="#5b6af0" />
         </g>
       ))}
     </g>
@@ -8885,7 +8911,7 @@ function ContainerNode({ node, viewProps, isSelected, isCollapsed, isDropTarget,
         onDoubleClick={e => { e.stopPropagation(); setDraft(node.label); setEditing(true) }} style={{ cursor: 'move' }}>
         <rect x={-pw / 2} y={-16} width={pw} height={32} rx={16} fill={fill} stroke={stroke} strokeWidth={isSelected ? 2.5 : 1.5} />
         <g transform={`translate(${-pw / 2 + 15},0)`} onClick={e => { e.stopPropagation(); onToggleCollapse() }} style={{ cursor: 'pointer' }}>
-          <circle r={9} fill="#0c0c1a" stroke="#f6ad55" strokeWidth={1.2} /><text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#f6ad55" style={{ userSelect: 'none' }}>▸</text>
+          <circle r={9} fill="#0c0c1a" stroke="#f6ad55" strokeWidth={1.2} /><IconGlyph name="chevronR" size={12} color="#f6ad55" />
         </g>
         <text x={6} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={titleFS} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>{node.label || 'Container'}{memberCount ? ` · ${memberCount}` : ''}</text>
       </g>
@@ -8917,7 +8943,7 @@ function ContainerNode({ node, viewProps, isSelected, isCollapsed, isDropTarget,
       {/* Collapse chevron — bottom center */}
       {(isSelected || hover) && (
         <g transform={`translate(0,${halfH + 12})`} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleCollapse() }} style={{ cursor: 'pointer' }}>
-          <circle r={10} fill="#16162a" stroke="rgba(255,255,255,0.2)" strokeWidth={1.2} /><text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#9aa8d8" style={{ userSelect: 'none' }}>▾</text>
+          <circle r={10} fill="#16162a" stroke="rgba(255,255,255,0.2)" strokeWidth={1.2} /><IconGlyph name="chevronD" size={13} color="#9aa8d8" />
         </g>
       )}
 
@@ -9327,7 +9353,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
                     <g transform={`translate(${im.w / 2 - 6},${-im.h / 2 + 6})`}
                       onClick={e => { e.stopPropagation(); onRemoveNodeImage?.(node.id, im.id) }} style={{ cursor:'pointer' }}>
                       <circle r={5.5} fill="#f87171" />
-                      <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
+                      <IconGlyph name="close" size={10} color="#fff" />
                     </g>
                     <g transform={`translate(${im.w / 2},${im.h / 2})`}
                       onMouseDown={e => { e.stopPropagation(); onImageResizeStart?.(e, node.id, im.id, (node.x || 0) + ix, (node.y || 0) + iy) }}
@@ -9362,7 +9388,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             {/* larger transparent hit target so the small ✎ is easy to click */}
             <circle r={13} fill="transparent" />
             <circle r={8} fill="#12122a" stroke="#5b6af0" strokeWidth={1.2} />
-            <text textAnchor="middle" dominantBaseline="central" fill="#5b6af0" fontSize={9} style={{ userSelect:'none', pointerEvents:'none' }}>✎</text>
+            <IconGlyph name="edit" size={12} color="#5b6af0" />
           </g>
         )}
 
@@ -9444,7 +9470,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
             {isSelected && (
               <g transform="translate(14,-14)" onClick={e => { e.stopPropagation(); onRemoveEmoji?.(node.id, em.id) }} style={{ cursor:'pointer' }}>
                 <circle r={5.5} fill="#f87171" />
-                <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
+                <IconGlyph name="close" size={10} color="#fff" />
               </g>
             )}
             {isSelected && (
@@ -9509,7 +9535,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
                 <g transform={`translate(${im.w / 2 - 6},${-im.h / 2 + 6})`}
                   onClick={e => { e.stopPropagation(); onRemoveNodeImage?.(node.id, im.id) }} style={{ cursor:'pointer' }}>
                   <circle r={5.5} fill="#f87171" />
-                  <text textAnchor="middle" dominantBaseline="central" fontSize={8} fill="#fff" style={{ userSelect:'none', pointerEvents:'none' }}>×</text>
+                  <IconGlyph name="close" size={10} color="#fff" />
                 </g>
                 <g transform={`translate(${im.w / 2},${im.h / 2})`}
                   onMouseDown={e => { e.stopPropagation(); onImageResizeStart?.(e, node.id, im.id, (node.x || 0) + ix - im.w / 2, (node.y || 0) + iy - im.h / 2) }}
