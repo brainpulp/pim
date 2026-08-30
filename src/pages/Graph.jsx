@@ -5430,6 +5430,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
                   currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active || inspecting}
                   muted={nd.ytss.muted === true}
+                  captions={nd.ytss.captions === true}
                   ended={ytssEndedId === n.id}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
@@ -6490,12 +6491,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               seek: t => ytssHandlesRef.current[ytssInspectorId]?.seekTo?.(t),
               play: () => ytssHandlesRef.current[ytssInspectorId]?.play?.(),
               pause: () => ytssHandlesRef.current[ytssInspectorId]?.pause?.(),
+              setRate: r => ytssHandlesRef.current[ytssInspectorId]?.setRate?.(r),
               duration: () => ytssHandlesRef.current[ytssInspectorId]?.duration?.() || 0,
             }}
             fullscreen={!!yn.ytss.fullscreen}
             onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
             sound={yn.ytss.muted !== true}
             onToggleSound={v => { setYtssProp(ytssInspectorId, { muted: !v }); const h = ytssHandlesRef.current[ytssInspectorId]; if (v) h?.unMute?.(); else h?.mute?.() }}
+            captions={yn.ytss.captions === true}
+            onToggleCaptions={v => setYtssProp(ytssInspectorId, { captions: v })}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); dropYoutube(clip.youtubeId, (s?.x || 0) + 340, (s?.y || 0)) }}
             onClose={() => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }}
@@ -6509,7 +6513,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!clips.length) return null
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
-          <YTFullscreenPlayer clips={clips} startIndex={start} muted={yn?.ytss?.muted === true}
+          <YTFullscreenPlayer clips={clips} startIndex={start} muted={yn?.ytss?.muted === true} captions={yn?.ytss?.captions === true}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)

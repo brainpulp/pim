@@ -78,7 +78,7 @@ function loadYTApi() {
 
 // A single reusable YT player. Exposes an imperative handle via onReady(api). `clip` = {youtubeId,start,end}.
 // While not playing, a poster (thumbnail) covers the iframe so no YouTube UI shows. On end, calls onEnded.
-export function YTPlayer({ clip, autoplay = false, muted = false, interactive = true, externalControl = false, onReady, onEnded, onStateChange, style }) {
+export function YTPlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, externalControl = false, onReady, onEnded, onStateChange, style }) {
   const holderRef = useRef(null)
   const playerRef = useRef(null)
   const [ready, setReady] = useState(false)
@@ -96,12 +96,15 @@ export function YTPlayer({ clip, autoplay = false, muted = false, interactive = 
         playerVars: {
           controls: 0, disablekb: 1, modestbranding: 1, rel: 0, iv_load_policy: 3,
           fs: 0, playsinline: 1, start: Math.round(c.start || 0),
-          ...(c.end ? { end: Math.round(c.end) } : {}), origin: window.location.origin,
+          ...(c.end ? { end: Math.round(c.end) } : {}),
+          ...(captions ? { cc_load_policy: 1, cc_lang_pref: 'en' } : {}),
+          origin: window.location.origin,
         },
         events: {
           onReady: (e) => {
             setReady(true)
             if (muted) e.target.mute()
+            if (c.speed && c.speed !== 1) { try { e.target.setPlaybackRate(c.speed) } catch { /* */ } }
             if (autoplay) { e.target.playVideo() }
             cbRef.current.onReady?.(makeHandle(e.target))
           },
@@ -125,6 +128,7 @@ export function YTPlayer({ clip, autoplay = false, muted = false, interactive = 
     seekTo: (t) => { try { p.seekTo(Math.max(0, t), true) } catch { /* */ } },
     mute: () => { try { p.mute() } catch { /* */ } },
     unMute: () => { try { p.unMute() } catch { /* */ } },
+    setRate: (r) => { try { p.setPlaybackRate(r || 1) } catch { /* */ } },
     duration: () => { try { return p.getDuration?.() || 0 } catch { return 0 } },
     time: () => { try { return p.getCurrentTime?.() || 0 } catch { return 0 } },
     loadClip: (cl, play) => {
@@ -132,6 +136,7 @@ export function YTPlayer({ clip, autoplay = false, muted = false, interactive = 
         const opts = { videoId: cl.youtubeId, startSeconds: Math.round(cl.start || 0), ...(cl.end ? { endSeconds: Math.round(cl.end) } : {}) }
         setCovered(true)
         if (play) p.loadVideoById(opts); else p.cueVideoById(opts)
+        try { p.setPlaybackRate(cl.speed || 1) } catch { /* */ }
       } catch { /* */ }
     },
   })
@@ -146,8 +151,9 @@ export function YTPlayer({ clip, autoplay = false, muted = false, interactive = 
       const opts = { videoId: clip.youtubeId, startSeconds: Math.round(clip.start || 0), ...(clip.end ? { endSeconds: Math.round(clip.end) } : {}) }
       setCovered(true)
       if (autoplay) p.loadVideoById(opts); else p.cueVideoById(opts)
+      try { p.setPlaybackRate(clip.speed || 1) } catch { /* */ }
     } catch { /* */ }
-  }, [clip?.youtubeId, clip?.start, clip?.end]) // eslint-disable-line
+  }, [clip?.youtubeId, clip?.start, clip?.end, clip?.speed]) // eslint-disable-line
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
@@ -197,7 +203,7 @@ function TrimSlider({ start, end, max, onChange }) {
 }
 
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
-export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -285,6 +291,11 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
           Sound on
           <span style={{ color: '#7080a0', fontSize: 11 }}>— off = muted (auto-play is more reliable muted)</span>
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!captions} onChange={e => onToggleCaptions?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
+          Captions (CC)
+          <span style={{ color: '#7080a0', fontSize: 11 }}>— only if the video has them</span>
+        </label>
       </div>
 
       {/* Trim + trigger for the selected clip (preview is the node itself) */}
@@ -313,6 +324,13 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                 onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }} title="seconds" />
             )}
             {cur.trigger === 'delay' && <span>s</span>}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 8 }}>
+            <span>Speed</span>
+            <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }}
+              style={{ ...inp, width: 'auto', textAlign: 'left' }}>
+              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
+            </select>
           </div>
         </div>
       )}
@@ -418,7 +436,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, onExit, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, captions = false, onExit, onReplayDone }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
@@ -482,7 +500,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <YTPlayer key="fs" clip={cur} autoplay muted={muted} interactive externalControl onReady={h => { handleRef.current = h; h.loadClip?.(cur, true) }} onEnded={onEnded} />}
+        {cur && <YTPlayer key={'fs' + (captions ? '-cc' : '')} clip={cur} autoplay muted={muted} captions={captions} interactive externalControl onReady={h => { handleRef.current = h; h.loadClip?.(cur, true) }} onEnded={onEnded} />}
       </div>
       {ended && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
@@ -506,7 +524,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, muted, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
@@ -524,7 +542,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalCo
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <YTPlayer key={node.id} clip={cur} interactive={active} externalControl={externalControl} muted={muted} onReady={onReady} onEnded={onEnded} />
+            ? <YTPlayer key={node.id + (captions ? '-cc' : '')} clip={cur} interactive={active} externalControl={externalControl} muted={muted} captions={captions} onReady={onReady} onEnded={onEnded} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>
