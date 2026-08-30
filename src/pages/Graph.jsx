@@ -8998,7 +8998,13 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   const labelHalfH = shape === 'ellipse' ? halfH / INSET : shape === 'circle' ? r / INSET : shape === 'diamond' ? halfH / 2 : halfH
   // Auto-shrink the font so text fits: round shapes fit the inscribed area; auto-sized
   // rects already grow to fit, so they keep the base size.
-  const fontSize = isAutoSized ? baseFontSize
+  // EXCEPTION — "scale shape only" (Shift-drag) decouples text from the box: it holds the absolute
+  // font size by compensating `fontScale`, so once fontScale ≠ 1 we must NOT re-fit the font to the
+  // box (that would make the text track the box again and defeat the decoupling — the text reflows /
+  // overflows instead, which is the whole point of resizing the shape only).
+  const fontDecoupled = (viewProps.fontScale ?? 1) !== 1
+  const fontSize = fontDecoupled ? baseFontSize
+    : isAutoSized ? baseFontSize
     : isRound ? fitFontToBox(node.label, baseFontSize, (labelHalfW - 4) * 2, (labelHalfH - 4) * 2)
     : (() => {
         const innerW = halfW * 2, innerH = halfH * 2
