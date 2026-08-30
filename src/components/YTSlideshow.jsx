@@ -274,22 +274,26 @@ const miniBtn = { background: 'transparent', border: 'none', color: '#8090b8', c
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the header.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, selected, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, selected, isDropTarget, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx }) {
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
   const W = 480 * (node.__scale || 1), H = 270 * (node.__scale || 1)
   const label = node.label || 'YouTube slideshow'
+  const border = active ? '#4ade80' : (isDropTarget ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a'))
+  const ctlBtn = { pointerEvents: 'auto', width: 26, height: 26, borderRadius: '50%', background: '#12122aee', border: '1px solid #5b6af0', color: '#c5d0ff', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }
+  // Drag from anywhere on the card (when not entered) — start it on the root <g> so it works regardless
+  // of the video foreignObject's paint order. Buttons stopPropagation so they don't start a drag.
   return (
     <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
-      onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.() } }}
+      onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.(); onHeaderDown?.(e) } }}
       onDoubleClick={e => { e.stopPropagation(); onEnter?.() }}>
       {/* Title above */}
       <text x={0} y={-H / 2 - 10} textAnchor="middle" fontSize={15} fill={active ? '#8ecbff' : '#c5d0ff'}
         style={{ userSelect: 'none', fontWeight: 600 }}>{label}{clips.length ? `  ·  ${idx + 1}/${clips.length}` : ''}</text>
       <foreignObject x={-W / 2} y={-H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
-          border: `2px solid ${active ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a')}`, background: '#000', position: 'relative' }}>
+          border: `2px solid ${border}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
             ? <YTPlayer key={node.id} clip={cur} interactive={active} externalControl={externalControl} onReady={onReady} onEnded={onEnded} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
@@ -298,6 +302,11 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalCo
                 <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onEdit?.() }}
                   style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>Add clips…</button>
               </div>}
+          {isDropTarget && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(74,222,128,0.14)', color: '#dcfce7', fontSize: 15, fontWeight: 700, fontFamily: '-apple-system, sans-serif', pointerEvents: 'none' }}>
+              ＋ Add to slideshow
+            </div>
+          )}
           {/* Hint bar while active */}
           {active && (
             <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '4px 8px', background: 'rgba(10,10,24,0.82)', color: '#aab4dd', fontSize: 10.5, textAlign: 'center', fontFamily: '-apple-system, sans-serif', pointerEvents: 'none' }}>
@@ -306,27 +315,27 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalCo
           )}
         </div>
       </foreignObject>
-      {/* Selected (not yet entered): a header drag-bar + Enter/Edit affordances */}
+      {/* Selected controls — rendered in their OWN foreignObject placed AFTER the video, so they paint on
+          top of it (sibling SVG can end up beneath foreignObject content in some browsers). */}
       {selected && !active && (
-        <g>
-          <g onMouseDown={e => { e.stopPropagation(); onHeaderDown?.(e) }} style={{ cursor: 'move' }}>
-            <rect x={-W / 2} y={-H / 2 - 3} width={W} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
-            <text x={0} y={-H / 2 + 8} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag · double-click to play · ⚙ edit</text>
-          </g>
-          <g transform={`translate(${W / 2 - 16},${-H / 2 + 16})`} style={{ cursor: 'pointer' }}
-            onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onEdit?.() }}>
-            <circle r={11} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
-            <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="#c5d0ff" style={{ userSelect: 'none' }}>⚙</text>
-          </g>
-          {clips.length > 1 && (<>
-            <g transform={`translate(${-W / 2 + 18},0)`} style={{ cursor: 'pointer' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSetIdx?.((idx - 1 + clips.length) % clips.length) }}>
-              <circle r={13} fill="#12122acc" stroke="#5b6af0" strokeWidth={1} /><text textAnchor="middle" dominantBaseline="central" fontSize={13} fill="#c5d0ff">‹</text>
-            </g>
-            <g transform={`translate(${W / 2 - 18},0)`} style={{ cursor: 'pointer' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSetIdx?.((idx + 1) % clips.length) }}>
-              <circle r={13} fill="#12122acc" stroke="#5b6af0" strokeWidth={1} /><text textAnchor="middle" dominantBaseline="central" fontSize={13} fill="#c5d0ff">›</text>
-            </g>
-          </>)}
-        </g>
+        <foreignObject x={-W / 2} y={-H / 2 - 6} width={W} height={H + 12} style={{ overflow: 'visible', pointerEvents: 'none' }}>
+          <div style={{ position: 'relative', width: '100%', height: '100%', fontFamily: '-apple-system, sans-serif' }}>
+            {/* Edit + play, top-right */}
+            <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 6 }}>
+              <button title="Edit slideshow" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onEdit?.() }} style={ctlBtn}>⚙</button>
+              <button title="Play (or double-click)" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onEnter?.() }} style={ctlBtn}>▶</button>
+            </div>
+            {/* Prev / next */}
+            {clips.length > 1 && (<>
+              <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSetIdx?.((idx - 1 + clips.length) % clips.length) }}
+                style={{ ...ctlBtn, position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)', width: 30, height: 30 }}>‹</button>
+              <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSetIdx?.((idx + 1) % clips.length) }}
+                style={{ ...ctlBtn, position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', width: 30, height: 30 }}>›</button>
+            </>)}
+            {/* Drag hint, bottom */}
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 4, textAlign: 'center', color: '#aab4dd', fontSize: 10.5, pointerEvents: 'none' }}>drag anywhere to move · double-click to play</div>
+          </div>
+        </foreignObject>
       )}
     </g>
   )

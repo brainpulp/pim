@@ -16,6 +16,7 @@ import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from 
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
 import { YTSlideshowNode, YTSlideshowInspector } from '../components/YTSlideshow'
+import { playDrop } from '../lib/sound'
 
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
 // Channels the parent can map a property to (label + the view prop each writes).
@@ -2749,6 +2750,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
     const _dragShape = (viewNodePropsRef.current[nodeId] || {}).shape
     const isFrame = _dragShape === 'frame' || _dragShape === 'container'   // both drag their contained nodes along
+    // A YouTube video node can be dropped INTO a YouTube slideshow — enable that hover target while dragging one.
+    const _dragMedia = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.media
+    const isDragYtVideo = _dragMedia?.videoKind === 'youtube' && !!_dragMedia?.youtubeId
 
     // Collect drag group
     let dragGroup = [simNode]
@@ -2801,11 +2805,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // Hover-detect: highlight the drop target — a node (reparent) OR a container (toss-in). Prefer an
       // inner node over the container it sits in, so you can still reparent onto a node inside a container.
       if (!isFrame && !multiDrag) {
-        let foundNode = null, foundContainer = null
+        let foundNode = null, foundContainer = null, foundYtss = null
         for (const n of simNodesRef.current) {
           if (n.id === nodeId) continue
           const nvp = viewNodePropsRef.current[n.id] || {}
           if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
+          // A YouTube slideshow node is a drop target only for a dragged YouTube video.
+          if (isDragYtVideo && ytssNodeSet.has(n.id)) {
+            const scale = nvp.ytssScale || 1
+            if (Math.abs((n.x || 0) - sx) < 240 * scale && Math.abs((n.y || 0) - sy) < 135 * scale) { foundYtss = n.id; break }
+            continue
+          }
+          if (ytssNodeSet.has(n.id)) continue
           const nr = NODE_R * (nvp.scale || 1)
           let halfW, halfH
           if (nvp.shape === 'container') {
@@ -2818,7 +2829,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             if (nvp.shape === 'container') { if (!foundContainer) foundContainer = n.id } else { foundNode = n.id; break }
           }
         }
-        const found = foundNode || foundContainer
+        const found = foundYtss || foundNode || foundContainer
         if (found !== dragHoverNodeIdRef.current) {
           dragHoverNodeIdRef.current = found
           setDragHoverNodeId(found)
@@ -2868,30 +2879,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const ddx = sx - startSx, ddy = sy - startSy
 
         // Drop a canvas YouTube video onto a YouTube-slideshow node → append it as a clip and remove
-        // the standalone node from the canvas. Only single-node drags of a youtube media node qualify.
-        if (!isFrame && !multiDrag) {
+        // the standalone node from the canvas. Only single-node drags of a youtube media node qualify;
+        // the target is whatever the hover-highlight settled on.
+        if (isDragYtVideo && hoveredAtDrop && ytssNodeSet.has(hoveredAtDrop) && hoveredAtDrop !== nodeId) {
           const draggedMedia = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.media
-          if (draggedMedia?.videoKind === 'youtube' && draggedMedia?.youtubeId) {
-            const sp = startPositions.find(p => p.node.id === nodeId)
-            const dropX = sp ? sp.ox + ddx : sx, dropY = sp ? sp.oy + ddy : sy
-            let targetYtss = null
-            for (const yn of simNodesRef.current) {
-              if (yn.id === nodeId || !ytssNodeSet.has(yn.id) || !visibleNodeIdsRef.current.has(yn.id)) continue
-              const scale = (viewNodePropsRef.current[yn.id]?.ytssScale) || 1
-              const halfW = 240 * scale, halfH = 135 * scale
-              const inByCenter = Math.abs((yn.x || 0) - dropX) < halfW && Math.abs((yn.y || 0) - dropY) < halfH
-              const inByCursor = Math.abs((yn.x || 0) - sx) < halfW && Math.abs((yn.y || 0) - sy) < halfH
-              if (inByCenter || inByCursor) { targetYtss = yn.id; break }
-            }
-            if (targetYtss) {
-              pushUndo()
-              addClipToYtss(targetYtss, draggedMedia.youtubeId)
-              deleteNode(nodeId)
-              if (selectedRef.current?.id === nodeId) setSelected(null)
-              document.removeEventListener('mousemove', onMove)
-              document.removeEventListener('mouseup', onUp)
-              return
-            }
+          if (draggedMedia?.youtubeId) {
+            pushUndo()
+            addClipToYtss(hoveredAtDrop, draggedMedia.youtubeId)
+            deleteNode(nodeId)
+            if (selectedRef.current?.id === nodeId) setSelected(null)
+            playDrop()
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+            return
           }
         }
 
@@ -2946,6 +2946,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (dropTarget) {
             pushUndo()
             reparentNode(nodeId, dropTarget)
+            playDrop()
             // If the new parent's children are collapsed, the reparented node stays hidden under it
             // (consistent with the collapsed branch) — recover it by expanding the parent. The cycle
             // guard in reparentNode already prevents the branch from being orphaned/lost.
@@ -3018,7 +3019,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               useGraphStore.getState().edges.filter(e => e.target === nodeId).forEach(e => removeEdge(e.id))
             }
           } else {
-            if (newContainerId !== curContainer) pushUndo()
+            if (newContainerId !== curContainer) { pushUndo(); if (newContainerId) playDrop() }
             setContainedIn(nodeId, newContainerId)
             // Dropped INTO a container → release its anchor so the container's centre-gravity drives it
             // (an anchored node is skipped by the bounding force and would just sit where it landed).
@@ -5333,6 +5334,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
                   currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active}
                   selected={selected?.type === 'node' && selected.id === n.id}
+                  isDropTarget={dragHoverNodeId === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onEnter={() => { setSelected({ id: n.id, type: 'node' }); setYtssActiveId(n.id) }}
