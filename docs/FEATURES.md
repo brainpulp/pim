@@ -103,6 +103,15 @@ A container is a shape that holds other nodes inside it.
 - **Attach media to a node** so it moves and deletes together with that node.
 - **Turn a floating image or video into a real node** in the graph.
 
+### YouTube slideshow
+A dedicated player node that plays through a sequence of YouTube clips, cleanly.
+- **Add as many YouTube links as you want**, in order (right-click canvas → Insert → **YouTube slideshow**).
+- **Trim each clip** — set a start and end, by dragging a dual-handle slider or punching in `min:sec`.
+- **Per-clip advance trigger:** play the next clip **automatically** when one ends, **after a delay**, or **on click / keypress**.
+- **Clean playback** — YouTube's own controls, title, and end-screen are hidden before and after each clip; you just see the video.
+- **Inspector** (side panel) to preview, trim, reorder (up/down), delete, and add clips.
+- **Arrow-key control** once you *enter* the slideshow (double-click or Enter; Esc leaves): **←/→** previous/next clip, **Space** play/pause, **Shift+←/→** rewind/forward 10 seconds.
+
 ---
 
 ## 7. Properties, tags & fields

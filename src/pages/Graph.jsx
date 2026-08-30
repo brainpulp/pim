@@ -5251,7 +5251,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onEdit={() => setYtssInspectorId(n.id)}
                   onSetIdx={i => setYtssIdxMap(m => ({ ...m, [n.id]: i }))}
                   onReady={h => { ytssHandlesRef.current[n.id] = h }}
-                  onEnded={() => { /* Stage 3: auto-advance per trigger */ }} />
+                  onEnded={() => {
+                    if (ytssActiveRef.current !== n.id) return   // only the entered slideshow auto-advances
+                    const yn2 = useGraphStore.getState().nodes.find(x => x.id === n.id)
+                    const clips = yn2?.ytss?.clips || []
+                    const cur = Math.max(0, Math.min(ytssIdxMapRef.current[n.id] || 0, clips.length - 1))
+                    const clip = clips[cur]; if (!clip) return
+                    const advance = () => {
+                      const ni = cur + 1
+                      if (ni < clips.length) { setYtssIdxMap(m => ({ ...m, [n.id]: ni })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(clips[ni], true) }
+                      else { ytssPlayingRef.current = false }   // end of the show → stop (Stage 3 will bubble to the next slide)
+                    }
+                    if (clip.trigger === 'auto') advance()
+                    else if (clip.trigger === 'delay') setTimeout(advance, clip.delayMs || 1500)
+                    // 'click' → wait for an arrow / Space
+                  }} />
               )
             })}
 
