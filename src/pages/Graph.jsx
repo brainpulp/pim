@@ -798,7 +798,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Publish node selection to the shared channel so the docked outliner can follow along.
   // NB: `setSelectedNodeId` (a stable zustand action) is intentionally NOT in the deps array — it's
   // declared later in this component, and referencing it here would be a TDZ crash on mount.
-  useEffect(() => { if (selected?.type === 'node') useGraphStore.getState().setSelectedNodeId(selected.id) }, [selected])
+  useEffect(() => { if (selected?.type === 'node') { useGraphStore.getState().setSelectedNodeId(selected.id); useGraphStore.getState().setNavFocusNodeId(null) } }, [selected])
   const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const [isPanning, setIsPanning] = useState(false)
   const [depthExpand, setDepthExpand] = useState(null) // null = off, { nodeId, radius } = expand from node
@@ -2127,6 +2127,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
   const ytssEndedRef = useRef(null); useEffect(() => { ytssEndedRef.current = ytssEndedId }, [ytssEndedId])
+  // Leaving a slideshow (nav away, deselect, Esc, end-ladder) resets it to clip 0, so returning replays
+  // from the beginning rather than resuming where it was.
+  const prevYtssActiveRef = useRef(null)
+  useEffect(() => {
+    const prev = prevYtssActiveRef.current
+    if (prev && prev !== ytssActiveId) { setYtssIdxMap(m => ({ ...m, [prev]: 0 })); ytssHandlesRef.current[prev]?.pause?.() }
+    prevYtssActiveRef.current = ytssActiveId
+  }, [ytssActiveId])
   // Enter a slideshow and start playing its current clip (used by double-click, ▶, and arrow-nav arrival).
   // If the slideshow is set to play fullscreen, go straight to the fullscreen player instead of inline.
   const enterYtssAndPlay = useCallback((nodeId) => {
@@ -2494,25 +2502,33 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const clips = yn?.ytss?.clips || []
         const h = ytssHandlesRef.current[nid]
         const cur = Math.max(0, Math.min(ytssIdxMapRef.current[nid] || 0, clips.length - 1))
-        const goClip = (ni) => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true; h?.loadClip?.(clips[ni], true) }
-        if (e.key === 'Escape') { e.preventDefault(); h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null); return }
-        if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(10); return }
-        if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(-10); return }
-        if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
         const presenting = presentingSlideIdxRef.current !== null
         const atEnd = ytssEndedRef.current === nid
-        if (e.key === 'ArrowRight') {
-          e.preventDefault()
-          if (cur < clips.length - 1) goClip(cur + 1)
-          else if (presenting) advanceBuild(1)
-          else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
-          else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null) }   // → show the node on canvas
+        const goClip = (ni) => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true; h?.loadClip?.(clips[ni], true) }
+        // ↑/↓ (outside a presentation) ABANDON the slideshow and resume normal arrow-nav (↑ parent, ↓ child).
+        // We exit here but do NOT return, so the event falls through to the nav handler below.
+        if (!presenting && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          h?.pause?.(); ytssPlayingRef.current = false
+          setYtssActiveId(null); setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [nid]: 0 }))
+          ytssActiveRef.current = null   // treat as not-active for the rest of this keypress
+        } else {
+          if (e.key === 'Escape') { e.preventDefault(); h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null); return }
+          if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(10); return }
+          if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); h?.seekBy?.(-10); return }
+          if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
+          if (e.key === 'ArrowRight') {
+            e.preventDefault()
+            if (cur < clips.length - 1) goClip(cur + 1)
+            else if (presenting) advanceBuild(1)
+            else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
+            else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null) }   // → show the node on canvas
+            return
+          }
+          if (e.key === 'ArrowLeft') { e.preventDefault(); if (atEnd) { setYtssEndedId(null); h?.play?.(); ytssPlayingRef.current = true } else if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
+          if (e.key === 'ArrowUp') { e.preventDefault(); jumpSlide(-1); return }
+          if (e.key === 'ArrowDown') { e.preventDefault(); jumpSlide(1); return }
           return
         }
-        if (e.key === 'ArrowLeft') { e.preventDefault(); if (atEnd) { setYtssEndedId(null); h?.play?.(); ytssPlayingRef.current = true } else if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
-        if (e.key === 'ArrowUp') { e.preventDefault(); if (presenting) jumpSlide(-1); return }
-        if (e.key === 'ArrowDown') { e.preventDefault(); if (presenting) jumpSlide(1); return }
-        return
       }
 
       if (e.key === 'Escape') {
@@ -2691,12 +2707,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const pool = roots.length ? roots : cand
             cur = pool.reduce((best, n) => { const d = Math.hypot((n.x || 0) - wx, (n.y || 0) - wy); return !best || d < best.d ? { id: n.id, d } : best }, null)?.id || null
           }
-          if (cur) { e.preventDefault(); navFocusRef.current = cur; navOutRef.current = 0; zoomNavRef.current?.(cur, navDepthRef.current) }
+          if (cur) { e.preventDefault(); navFocusRef.current = cur; navOutRef.current = 0; useGraphStore.getState().setNavFocusNodeId(cur); zoomNavRef.current?.(cur, navDepthRef.current) }
           return
         }
         const goTo = (id, viaIds) => {
           if (!id) return
-          navFocusRef.current = id; navOutRef.current = 0; zoomNavRef.current?.(id, navDepthRef.current, viaIds)
+          navFocusRef.current = id; navOutRef.current = 0; useGraphStore.getState().setNavFocusNodeId(id); zoomNavRef.current?.(id, navDepthRef.current, viaIds)
           // Landing on a YouTube slideshow auto-enters it and starts playing (arrows then drive the clips).
           if (ytssNodeSet.has(id) && ytssActiveRef.current !== id) enterYtssAndPlay(id)
         }
@@ -6497,8 +6513,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)
+              setYtssIdxMap(m => ({ ...m, [id]: 0 }))   // returning replays from the beginning
               // Back to the node on the canvas: focus + zoom it (not "entered", so the next arrow resumes nav).
-              navFocusRef.current = id; navOutRef.current = 0
+              navFocusRef.current = id; navOutRef.current = 0; useGraphStore.getState().setNavFocusNodeId(id)
               zoomNavRef.current?.(id, navDepthRef.current)
             }} />
         )

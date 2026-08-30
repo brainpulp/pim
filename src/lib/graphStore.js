@@ -258,6 +258,8 @@ const useGraphStore = create((set, get) => ({
   // outliner. Not persisted; ephemeral UI state.
   selectedNodeId: null,
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
+  navFocusNodeId: null,   // node the keyboard arrow-nav is focused on (highlighted distinctly in the outliner)
+  setNavFocusNodeId: (id) => set({ navFocusNodeId: id }),
 
   // Shared canvas-panel toggles (Draw / Slides / Views). Lifted out of Graph.jsx so the nav "View" menu
   // in App.jsx can drive them too. Setters accept a value OR a React-style updater fn, so existing

@@ -119,6 +119,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const setNodeField = useGraphStore(s => s.setNodeField)
   const removeNodeField = useGraphStore(s => s.removeNodeField)
   const selectedNodeId = useGraphStore(s => s.selectedNodeId)
+  const navFocusNodeId = useGraphStore(s => s.navFocusNodeId)
   const setSelectedNodeId = useGraphStore(s => s.setSelectedNodeId)
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setDrillRoot = useGraphStore(s => s.setDrillRoot)
@@ -261,6 +262,14 @@ export default function Writer({ projectName, embedded = false, maximized = fals
     setFocusId(selectedNodeId)
     requestAnimationFrame(() => { const el = inputs.current[selectedNodeId]; if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }) })
   }, [selectedNodeId]) // eslint-disable-line
+
+  // Follow the keyboard arrow-nav focus: reveal + scroll to that row (highlighted green), without
+  // stealing focus into its textarea (the canvas keeps the keys).
+  useEffect(() => {
+    if (!navFocusNodeId || !byId[navFocusNodeId]) return
+    setCollapsed(s => { const n = new Set(s); ancestorsOf(navFocusNodeId).forEach(a => n.delete(a)); return n })
+    requestAnimationFrame(() => { const el = inputs.current[navFocusNodeId]; if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }) })
+  }, [navFocusNodeId]) // eslint-disable-line
 
   const addSiblingAfter = (id) => {
     const p = parentOf[id] || null
@@ -736,7 +745,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
             }
             return (
               <div key={r.id} style={{ marginLeft: (flatMode ? 0 : r.depth * 26) + 46 }}>
-                <div className="wr-row" style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
+                <div className="wr-row" style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 4, padding: '0', borderRadius: 6, background: navFocusNodeId === r.id ? (dark ? '#1e2a1c' : '#e9f7ea') : (focusId === r.id || selectedNodeId === r.id) ? (dark ? '#1b2236' : '#eef1fb') : 'transparent', boxShadow: navFocusNodeId === r.id ? 'inset 3px 0 0 #4ade80' : (selectedNodeId === r.id && focusId !== r.id) ? 'inset 3px 0 0 #5b6af0' : 'none' }}>
                   {/* Normally only the chevron shows. On row hover, eye / target / delete appear to its LEFT.
                       All boxed to the first text-line height so they align vertically with the label. */}
                   {(() => {
