@@ -15,7 +15,7 @@ import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
-import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer } from '../components/YTSlideshow'
+import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions } from '../components/YTSlideshow'
 import { playDrop } from '../lib/sound'
 
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
@@ -2120,6 +2120,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [ytssIdxMap, setYtssIdxMap] = useState({})              // current clip index per ytss node id
   const [ytssEndedId, setYtssEndedId] = useState(null)         // the entered ytss that has reached its end (shows replay)
   const [ytssFullscreenId, setYtssFullscreenId] = useState(null)   // ytss playing in real browser fullscreen
+  const [videoEdit, setVideoEdit] = useState(null)                 // { kind:'image'|'media', id } — a single YouTube video's options panel
+  const [videoFullscreen, setVideoFullscreen] = useState(null)     // a single YouTube clip playing fullscreen: {youtubeId,start,end,muted}
   const ytssHandlesRef = useRef({})                            // { [nodeId]: live player handle }
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
@@ -5117,6 +5119,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onMouseDown={handleImageMouseDown}
                   mediaPlay={mediaPlay}
                   onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
+                  onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
                   onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
                   onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) updateImage(img.id, { caption: next }) }}
                 />
@@ -5395,6 +5398,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     isCropping={false}
                     mediaPlay={mediaPlay}
                     onToggleMedia={prop => setNodeMeta(n.id, { [prop]: !meta[prop] })}
+                    onEditVideo={() => setVideoEdit({ kind: 'media', id: n.id })}
                     onMouseDown={handleMediaNodeMouseDown} />
                 </g>
               )
@@ -6499,6 +6503,42 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }} />
         )
       })()}
+
+      {videoEdit && (() => {
+        const T = zoomTransformRef.current, rect = svgRef.current?.getBoundingClientRect()
+        let video = null, onPatch = null, anchor = null
+        if (videoEdit.kind === 'image') {
+          const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
+          if (!img || img.videoKind !== 'youtube') return null
+          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted }
+          onPatch = patch => updateImage(videoEdit.id, patch)
+          if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
+        } else {
+          const node = storeNodes.find(n => n.id === videoEdit.id)
+          const m = node?.media; if (!m || m.videoKind !== 'youtube') return null
+          const meta = node.meta || {}
+          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted }
+          onPatch = patch => {
+            const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
+            const mp = {}, dp = {}
+            Object.entries(patch).forEach(([k, v]) => { (metaKeys.includes(k) ? mp : dp)[k] = v })
+            if (Object.keys(mp).length) setNodeMeta(videoEdit.id, mp)
+            if (Object.keys(dp).length) updateNodeMedia(videoEdit.id, dp)
+          }
+          const sn = simNodesRef.current.find(x => x.id === videoEdit.id)
+          if (sn && rect) anchor = { x: rect.left + T.x + (sn.x + (m.width || 0) / 2) * T.k + 14, y: rect.top + T.y + sn.y * T.k }
+        }
+        return (
+          <YTVideoOptions video={video} anchor={anchor} onPatch={onPatch}
+            onClose={() => setVideoEdit(null)}
+            onPlayFullscreen={() => setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true })} />
+        )
+      })()}
+
+      {videoFullscreen?.youtubeId && (
+        <YTFullscreenPlayer clips={[{ id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, trigger: 'click' }]}
+          startIndex={0} muted={videoFullscreen.muted} onExit={() => setVideoFullscreen(null)} />
+      )}
     </div>
   )
 }
@@ -8481,7 +8521,7 @@ function VideoEmbed({ img, play }) {
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
@@ -8726,6 +8766,13 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           return (<>
             {pill(vL, !!img.autoplayOnZoom, '⚡ On zoom', 'autoplayOnZoom')}
             {pill(vL + 92, !!img.autoplayOnSlide, '▷ On slide', 'autoplayOnSlide')}
+            {isVideo && img.videoKind === 'youtube' && (
+              <g transform={`translate(${vL + 184},${py})`} style={{ cursor: 'pointer' }} onMouseDown={e => { e.stopPropagation(); onEditVideo?.() }}>
+                <rect x={0} y={0} width={58} height={20} rx={10} fill="#12122a" stroke="#2d3a6a" strokeWidth={1.1} />
+                <g transform="translate(13,10)"><IconGlyph name="edit" size={12} color="#aeb8ff" /></g>
+                <text x={24} y={13.5} fontSize={10.5} fill="#aeb8ff" style={{ userSelect: 'none' }}>Edit</text>
+              </g>
+            )}
           </>)
         })()}
         {/* Video: the body pans/zooms with the canvas until you "arm" the player. Double-clicking the
