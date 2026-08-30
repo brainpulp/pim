@@ -197,7 +197,7 @@ function TrimSlider({ start, end, max, onChange }) {
 }
 
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
-export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -273,6 +273,20 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
 
+      {/* Playback options */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', borderBottom: '1px solid #23234a' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
+          Play in fullscreen
+          <span style={{ color: '#7080a0', fontSize: 11 }}>— entering opens fullscreen</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={sound !== false} onChange={e => onToggleSound?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
+          Sound on
+          <span style={{ color: '#7080a0', fontSize: 11 }}>— off = muted (auto-play is more reliable muted)</span>
+        </label>
+      </div>
+
       {/* Trim + trigger for the selected clip (preview is the node itself) */}
       {cur && (
         <div style={{ padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
@@ -337,7 +351,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, onExit, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, onExit, onReplayDone }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
@@ -401,7 +415,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, onExit, onRepla
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <YTPlayer key="fs" clip={cur} autoplay muted={false} interactive externalControl onReady={h => { handleRef.current = h; h.loadClip?.(cur, true) }} onEnded={onEnded} />}
+        {cur && <YTPlayer key="fs" clip={cur} autoplay muted={muted} interactive externalControl onReady={h => { handleRef.current = h; h.loadClip?.(cur, true) }} onEnded={onEnded} />}
       </div>
       {ended && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
@@ -425,7 +439,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, onExit, onRepla
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, muted, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
@@ -443,7 +457,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalCo
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <YTPlayer key={node.id} clip={cur} interactive={active} externalControl={externalControl} onReady={onReady} onEnded={onEnded} />
+            ? <YTPlayer key={node.id} clip={cur} interactive={active} externalControl={externalControl} muted={muted} onReady={onReady} onEnded={onEnded} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>

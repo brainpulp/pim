@@ -1020,6 +1020,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addAudio        = useGraphStore(s => s.addAudio)
   const addYtssNode     = useGraphStore(s => s.addYtssNode)
   const setYtssClips    = useGraphStore(s => s.setYtssClips)
+  const setYtssProp     = useGraphStore(s => s.setYtssProp)
   const addLink         = useGraphStore(s => s.addLink)
   const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
   const copyChildrenInto = useGraphStore(s => s.copyChildrenInto)
@@ -2125,10 +2126,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
   const ytssEndedRef = useRef(null); useEffect(() => { ytssEndedRef.current = ytssEndedId }, [ytssEndedId])
   // Enter a slideshow and start playing its current clip (used by double-click, ▶, and arrow-nav arrival).
+  // If the slideshow is set to play fullscreen, go straight to the fullscreen player instead of inline.
   const enterYtssAndPlay = useCallback((nodeId) => {
+    const yss = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.ytss
+    const clips = yss?.clips || []
+    if (!clips.length) { setYtssActiveId(nodeId); setYtssEndedId(null); return }
+    if (yss.fullscreen) { ytssHandlesRef.current[nodeId]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(nodeId); return }
     setYtssActiveId(nodeId); setYtssEndedId(null)
-    const clips = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.ytss?.clips || []
-    if (!clips.length) return
     const i = Math.max(0, Math.min(ytssIdxMapRef.current[nodeId] || 0, clips.length - 1))
     ytssPlayingRef.current = true
     // The handle may not be ready this tick (player still mounting) — retry briefly.
@@ -5405,13 +5409,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               return (
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
                   currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active || inspecting}
+                  muted={nd.ytss.muted === true}
                   ended={ytssEndedId === n.id}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onEnter={() => { setSelected({ id: n.id, type: 'node' }); enterYtssAndPlay(n.id) }}
-                  onFullscreen={() => setYtssFullscreenId(n.id)}
+                  onFullscreen={() => { ytssHandlesRef.current[n.id]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(n.id) }}
                   onReplay={() => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [n.id]: 0 })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(nd.ytss.clips[0], true) }}
                   onEdit={() => setYtssInspectorId(n.id)}
                   onSetIdx={i => setYtssIdxMap(m => ({ ...m, [n.id]: i }))}
@@ -6467,6 +6472,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               pause: () => ytssHandlesRef.current[ytssInspectorId]?.pause?.(),
               duration: () => ytssHandlesRef.current[ytssInspectorId]?.duration?.() || 0,
             }}
+            fullscreen={!!yn.ytss.fullscreen}
+            onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
+            sound={yn.ytss.muted !== true}
+            onToggleSound={v => { setYtssProp(ytssInspectorId, { muted: !v }); const h = ytssHandlesRef.current[ytssInspectorId]; if (v) h?.unMute?.(); else h?.mute?.() }}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); dropYoutube(clip.youtubeId, (s?.x || 0) + 340, (s?.y || 0)) }}
             onClose={() => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }}
@@ -6480,7 +6489,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!clips.length) return null
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
-          <YTFullscreenPlayer clips={clips} startIndex={start}
+          <YTFullscreenPlayer clips={clips} startIndex={start} muted={yn?.ytss?.muted === true}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)
