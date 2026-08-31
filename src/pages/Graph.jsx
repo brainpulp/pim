@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
@@ -794,6 +794,41 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
   )
 }
 const ctrlBtn = { width: 28, height: 28, borderRadius: 7, border: '1px solid #2d3a6a', background: '#1a1f4a', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+
+// A cascading submenu row: hovering it opens the child panel to the side; leaving the row+panel closes
+// it after a short delay (standard cascading-menu behavior). The panel flips to the left near the screen edge.
+function MenuFlyout({ icon, label, children, minWidth = 168 }) {
+  const [open, setOpen] = useState(false)
+  const [flip, setFlip] = useState(false)
+  const flyRef = useRef(null)
+  const timer = useRef(null)
+  const enter = () => { clearTimeout(timer.current); setOpen(true) }
+  const leave = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setOpen(false), 260) }
+  useLayoutEffect(() => {
+    if (!open || !flyRef.current) return
+    const r = flyRef.current.getBoundingClientRect()
+    setFlip(r.right > window.innerWidth - 8)
+  }, [open])
+  useEffect(() => () => clearTimeout(timer.current), [])
+  return (
+    <div style={{ position: 'relative' }} onMouseEnter={enter} onMouseLeave={leave}>
+      <div style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16, background: open ? '#23234a' : 'transparent' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          {icon && <span style={{ width: 16, textAlign: 'center', fontSize: '0.88rem', opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
+          <span>{label}</span>
+        </span>
+        <span style={{ color: '#8090b8' }}>›</span>
+      </div>
+      {open && (
+        <div ref={flyRef} onMouseEnter={enter} onMouseLeave={leave}
+          style={{ position: 'absolute', top: -5, [flip ? 'right' : 'left']: '100%', [flip ? 'marginRight' : 'marginLeft']: 3, zIndex: 40,
+            background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function Graph({ projectId, projectName, readOnly = false, sharedData = null }) {
   const svgRef = useRef()
@@ -5646,92 +5681,76 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4,
                   boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 160,
                 }}>
-                {ctxColors ? (
-                  <>
-                    {item(null, <span style={{ color: '#8090b8' }}>‹ Background color</span>, () => setCtxColors(false))}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 168, padding: '4px 8px 6px' }}>
-                      {[...BG_COLORS, ...COLOR_PALETTE].map(c => (
-                        <div key={c} title={c} onClick={() => { setViewBgColor(c); close() }}
-                          style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer',
-                            border: bgColor === c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
-                      ))}
-                    </div>
-                  </>
-                ) : ctxPanel === 'insert' ? (
-                  <>
-                    {item(null, <span style={{ color: '#8090b8' }}>‹ Insert</span>, () => setCtxPanel(null))}
-                    {item('▭', 'Frame', () => {
-                      pushUndo()
-                      const { sx, sy } = contextMenu
-                      const id = addNode('Frame', drillRoot || null, sx, sy)
-                      setNodeViewProp(id, 'shape', 'frame'); setNodeViewProp(id, 'fillColor', 'none'); setNodeViewProp(id, 'strokeColor', null)
-                      addSlide(id)
-                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
-                      close()
-                    })}
-                    {item('✚', 'Node', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
-                    {item('▦', 'Table', () => {
-                      pushUndo()
-                      const { sx, sy } = contextMenu
-                      const id = addTableNode(sx, sy)
-                      if (drillRoot) addEdge(drillRoot, id)
-                      setSelected({ id, type: 'node' })
-                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
-                      close()
-                    })}
-                    {item('🗂️', 'Kanban board', () => {
-                      pushUndo()
-                      const { sx, sy } = contextMenu
-                      const id = addKanbanNode(sx, sy)
-                      if (drillRoot) addEdge(drillRoot, id)
-                      setSelected({ id, type: 'node' })
-                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
-                      close()
-                    })}
-                    {item('⬭', 'Container', () => {
-                      pushUndo()
-                      const { sx, sy } = contextMenu
-                      const id = addNode('Container', drillRoot || null, sx, sy)
-                      setNodeViewProp(id, 'shape', 'container'); setNodeViewProp(id, 'containerShape', 'rect')
-                      setSelected({ id, type: 'node' })
-                      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
-                      close()
-                    })}
-                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
-                    {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
-                    {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
-                    {item('🎬', <>Video<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('video'))}
-                    {item('🎵', <>Audio<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('audio'))}
-                    {item('📺', 'Slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
-                    {item('🔗', 'Link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
-                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
-                    {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
-                  </>
-                ) : ctxPanel === 'video' ? (
-                  <>
-                    {item(null, <span style={{ color: '#8090b8' }}>‹ Video</span>, () => setCtxPanel('insert'))}
+                <MenuFlyout icon="＋" label="Insert">
+                  {item('▭', 'Frame', () => {
+                    pushUndo()
+                    const { sx, sy } = contextMenu
+                    const id = addNode('Frame', drillRoot || null, sx, sy)
+                    setNodeViewProp(id, 'shape', 'frame'); setNodeViewProp(id, 'fillColor', 'none'); setNodeViewProp(id, 'strokeColor', null)
+                    addSlide(id)
+                    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                    close()
+                  })}
+                  {item('✚', 'Node', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
+                  {item('▦', 'Table', () => {
+                    pushUndo()
+                    const { sx, sy } = contextMenu
+                    const id = addTableNode(sx, sy)
+                    if (drillRoot) addEdge(drillRoot, id)
+                    setSelected({ id, type: 'node' })
+                    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                    close()
+                  })}
+                  {item('🗂️', 'Kanban board', () => {
+                    pushUndo()
+                    const { sx, sy } = contextMenu
+                    const id = addKanbanNode(sx, sy)
+                    if (drillRoot) addEdge(drillRoot, id)
+                    setSelected({ id, type: 'node' })
+                    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                    close()
+                  })}
+                  {item('⬭', 'Container', () => {
+                    pushUndo()
+                    const { sx, sy } = contextMenu
+                    const id = addNode('Container', drillRoot || null, sx, sy)
+                    setNodeViewProp(id, 'shape', 'container'); setNodeViewProp(id, 'containerShape', 'rect')
+                    setSelected({ id, type: 'node' })
+                    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+                    close()
+                  })}
+                  <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                  {item('🖼️', 'Image…', () => { const { sx, sy } = contextMenu; close(); addImageFileAt(sx, sy) })}
+                  {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
+                  <MenuFlyout icon="🎬" label="Video">
                     {item('⤒', 'Upload a file', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
                     {item('🔗', 'Paste a YouTube link', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
-                  </>
-                ) : ctxPanel === 'audio' ? (
-                  <>
-                    {item(null, <span style={{ color: '#8090b8' }}>‹ Audio</span>, () => setCtxPanel('insert'))}
+                  </MenuFlyout>
+                  <MenuFlyout icon="🎵" label="Audio">
                     {item('⤒', 'Upload a file', () => { const { sx, sy } = contextMenu; close(); addAudioFileAt(sx, sy) })}
                     {item('🔗', 'Paste a link', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste an audio link (mp3, etc.):'); if (url && url.trim()) addAudioUrlAt(url.trim(), sx, sy) })}
-                  </>
-                ) : (
-                  <>
-                    {item('＋', <>Insert<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('insert'))}
-                    {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
-                    <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
-                    {item('🎨', <>Background color<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxColors(true))}
-                    {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
-                    {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
-                    {item('⊙', 'Release all anchors', () => { handleReleaseAll(); close() })}
-                    {item(hideFrameOutlines ? '⊞' : '⊟', hideFrameOutlines ? 'Show frame outlines' : 'Hide frame outlines', () => { setHideFrameOutlines(v => !v); close() })}
-                    {item('⤳', showFlowchart ? 'Hide flowchart' : 'Flowchart (Mermaid)', () => { setShowFlowchart(v => !v); close() })}
-                  </>
-                )}
+                  </MenuFlyout>
+                  {item('📺', 'Slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
+                  {item('🔗', 'Link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
+                  <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                  {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
+                </MenuFlyout>
+                {item('🎞️', 'Make current view a slide', () => { makeCurrentViewAsSlide(); close() })}
+                <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                <MenuFlyout icon="🎨" label="Background color">
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 168, padding: '4px 8px 6px' }}>
+                    {[...BG_COLORS, ...COLOR_PALETTE].map(c => (
+                      <div key={c} title={c} onClick={() => { setViewBgColor(c); close() }}
+                        style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer',
+                          border: bgColor === c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
+                    ))}
+                  </div>
+                </MenuFlyout>
+                {item('▣', 'Select all nodes', () => { setSelectedNodeIds(new Set([...visibleNodeIds])); setSelected(null); close() })}
+                {item('⤢', 'Fit to view', () => { zoomExtents(); close() })}
+                {item('⊙', 'Release all anchors', () => { handleReleaseAll(); close() })}
+                {item(hideFrameOutlines ? '⊞' : '⊟', hideFrameOutlines ? 'Show frame outlines' : 'Hide frame outlines', () => { setHideFrameOutlines(v => !v); close() })}
+                {item('⤳', showFlowchart ? 'Hide flowchart' : 'Flowchart (Mermaid)', () => { setShowFlowchart(v => !v); close() })}
               </div>
             </>
           )
