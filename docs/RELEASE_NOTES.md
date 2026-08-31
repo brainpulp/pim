@@ -6,9 +6,14 @@
 
 ## Unreleased (current branch)
 
-### 📺 YouTube slideshow
-A new player object that plays through a sequence of YouTube clips, cleanly.
-- Add as many YouTube links as you want — **right-click the canvas → Insert → YouTube slideshow**.
+### 📺 Slideshow (mixed media)
+A player object that plays through a sequence of slides — **YouTube clips, uploaded videos, audio, and images** — cleanly.
+- **Right-click the canvas → Insert → Slideshow.** Add YouTube links, or **upload images / audio / video**.
+- **Drag media in and out:** drop any canvas video, image, or audio onto a slideshow to fold it in; pop a slide back onto the canvas from the inspector.
+- **Loop** any video/audio/YouTube slide; set a **display duration** for image slides.
+- Per-slide **trim, speed, captions, advance trigger**; slideshow-level **fullscreen / sound**.
+- (Was "YouTube slideshow" — now handles all media.)
+- Add as many YouTube links as you want — **right-click the canvas → Insert → Slideshow**.
 - **Trim** each clip (start/end) with a dual-handle slider or by punching in `min:sec`.
 - Choose how each clip **advances**: automatically when it ends, after a delay, or on click/keypress.
 - **Clean playback** — YouTube's controls, title, and end-screen are hidden before and after each clip.

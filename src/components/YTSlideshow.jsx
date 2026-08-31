@@ -78,12 +78,13 @@ function loadYTApi() {
 
 // A single reusable YT player. Exposes an imperative handle via onReady(api). `clip` = {youtubeId,start,end}.
 // While not playing, a poster (thumbnail) covers the iframe so no YouTube UI shows. On end, calls onEnded.
-export function YTPlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, externalControl = false, onReady, onEnded, onStateChange, style }) {
+export function YTPlayer({ clip, autoplay = false, muted = false, captions = false, loop = false, interactive = true, externalControl = false, onReady, onEnded, onStateChange, style }) {
   const holderRef = useRef(null)
   const playerRef = useRef(null)
   const [ready, setReady] = useState(false)
   const [covered, setCovered] = useState(true)   // poster over the player until it actually plays
   const clipRef = useRef(clip); clipRef.current = clip
+  const loopRef = useRef(loop); loopRef.current = loop
   const cbRef = useRef({}); cbRef.current = { onReady, onEnded, onStateChange }
 
   useEffect(() => {
@@ -109,9 +110,12 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
             cbRef.current.onReady?.(makeHandle(e.target))
           },
           onStateChange: (e) => {
-            // 1 = playing → drop the poster; 0 = ended → advance; 2 = paused
+            // 1 = playing → drop the poster; 0 = ended → loop or advance; 2 = paused
             if (e.data === 1) setCovered(false)
-            if (e.data === 0) { setCovered(true); cbRef.current.onEnded?.() }
+            if (e.data === 0) {
+              if (loopRef.current) { try { e.target.seekTo(Math.round(clipRef.current?.start || 0), true); e.target.playVideo() } catch { /* */ } }
+              else { setCovered(true); cbRef.current.onEnded?.() }
+            }
             cbRef.current.onStateChange?.(e.data)
           },
         },
@@ -172,6 +176,88 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
   )
 }
 
+// ── A slide's kind: youtube | video | audio | image (legacy clips with a youtubeId are 'youtube') ──
+export const clipKind = (c) => c?.kind || (c?.youtubeId ? 'youtube' : (c?.src ? 'video' : 'youtube'))
+export const isTimeMedia = (c) => { const k = clipKind(c); return k === 'youtube' || k === 'video' || k === 'audio' }
+
+// ── Native <video>/<audio> file player with a YT-compatible handle ────────────────────────────
+function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interactive = true, onReady, onEnded, style }) {
+  const ref = useRef(null)
+  const start = clip.start || 0
+  const end = (clip.end && clip.end > start) ? clip.end : 0
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    el.playbackRate = clip.speed || 1
+    el.loop = !!clip.loop
+    let ended = false
+    const seekStart = () => { if (start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
+    const onLoaded = () => { seekStart(); el.playbackRate = clip.speed || 1 }
+    const onTime = () => {
+      if (end && el.currentTime >= end) {
+        if (clip.loop) { try { el.currentTime = start } catch { /* */ } el.play().catch(() => {}) }
+        else if (!ended) { ended = true; el.pause(); onEnded?.() }
+      }
+    }
+    const onNativeEnded = () => { if (!clip.loop && !ended) { ended = true; onEnded?.() } }
+    el.addEventListener('loadedmetadata', onLoaded)
+    el.addEventListener('timeupdate', onTime)
+    el.addEventListener('ended', onNativeEnded)
+    if (el.readyState >= 1) onLoaded()
+    // Autoplay: try with sound; if the browser blocks it, fall back to muted.
+    if (autoplay) { el.muted = !!muted; el.play().catch(() => { el.muted = true; el.play().catch(() => {}) }) }
+    else el.muted = !!muted
+    onReady?.({
+      play: () => el.play().catch(() => {}), pause: () => el.pause(),
+      seekBy: (d) => { try { el.currentTime = Math.max(start, (el.currentTime || 0) + d) } catch { /* */ } },
+      seekTo: (t) => { try { el.currentTime = Math.max(0, t) } catch { /* */ } },
+      mute: () => { el.muted = true }, unMute: () => { el.muted = false },
+      setRate: (r) => { el.playbackRate = r || 1 },
+      duration: () => el.duration || 0, time: () => el.currentTime || 0,
+    })
+    return () => { el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
+  }, [clip.src, clip.start, clip.end, clip.speed, clip.loop]) // eslint-disable-line
+
+  if (kind === 'audio') {
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%', background: 'linear-gradient(135deg,#1a1f3a,#0e0e1c)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, overflow: 'hidden', ...style }}>
+        <div style={{ width: 84, height: 84, borderRadius: '50%', background: 'rgba(91,106,240,0.18)', border: '1px solid #3a4a8a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c5d0ff' }}>
+          <svg width={40} height={40} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l10-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="16" cy="16" r="3" /></svg>
+        </div>
+        <div style={{ color: '#c5d0ff', fontSize: 13, fontFamily: '-apple-system, sans-serif', maxWidth: '80%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title || 'Audio'}</div>
+        <audio ref={ref} src={clip.src} preload="metadata" style={{ display: 'none' }} />
+      </div>
+    )
+  }
+  return <video ref={ref} src={clip.src} playsInline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', pointerEvents: interactive ? 'auto' : 'none', ...style }} />
+}
+
+// ── Image slide: shown for `duration` seconds, then "ends" so the show can advance ────────────
+function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
+  const timer = useRef(null)
+  const remaining = useRef((clip.duration || 5) * 1000)
+  const startedAt = useRef(0)
+  useEffect(() => {
+    const arm = (ms) => { clearTimeout(timer.current); startedAt.current = Date.now(); timer.current = setTimeout(() => onEnded?.(), ms) }
+    if (autoplay && !clip.loop) arm((clip.duration || 5) * 1000)
+    onReady?.({
+      play: () => { if (!clip.loop) arm(remaining.current) },
+      pause: () => { clearTimeout(timer.current); remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt.current)) },
+      seekBy: () => {}, seekTo: () => {}, mute: () => {}, unMute: () => {}, setRate: () => {},
+      duration: () => clip.duration || 5, time: () => 0,
+    })
+    return () => clearTimeout(timer.current)
+  }, [clip.src, clip.duration, clip.loop, autoplay]) // eslint-disable-line
+  return <div style={{ width: '100%', height: '100%', background: `#000 center/contain no-repeat url("${clip.src}")`, ...style }} />
+}
+
+// ── Polymorphic slide player: dispatches to the right engine by kind, one uniform handle ──────
+export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, onReady, onEnded, style }) {
+  const kind = clipKind(clip)
+  if (kind === 'image') return <ImageSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
+  if (kind === 'video' || kind === 'audio') return <MediaFilePlayer clip={clip} kind={kind} autoplay={autoplay} muted={muted} interactive={interactive} onReady={onReady} onEnded={onEnded} style={style} />
+  return <YTPlayer clip={clip} autoplay={autoplay} muted={muted} captions={captions} loop={clip.loop} interactive={interactive} externalControl={false} onReady={onReady} onEnded={onEnded} style={style} />
+}
+
 // ── Dual-handle trim slider ───────────────────────────────────────────────────
 // onChange(start, end, which) — `which` is 'start' | 'end', so the caller can scrub the preview to
 // whichever edge is being moved.
@@ -203,7 +289,7 @@ function TrimSlider({ start, end, max, onChange }) {
 }
 
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
-export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions, onUpload }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -217,7 +303,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   const addUrl = () => {
     const id = parseYoutubeId(urlInput)
     if (!id) { alert('Not a YouTube link/ID.'); return }
-    onChange([...clips, { id: uid(), youtubeId: id, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }])
+    onChange([...clips, { id: uid(), kind: 'youtube', youtubeId: id, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }])
     setUrlInput(''); setSel(clips.length)
   }
   const del = (i) => { onChange(clips.filter((_, j) => j !== i)); setSel(s => Math.max(0, Math.min(s, clips.length - 2))) }
@@ -274,7 +360,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
     <div style={{ ...pos, background: '#12122a', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
       onMouseDown={e => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
-        <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>YouTube slideshow</div>
+        <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>Slideshow</div>
         <span style={{ color: '#7080a0', fontSize: 11 }}>previewing on the node →</span>
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
@@ -298,25 +384,36 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         </label>
       </div>
 
-      {/* Trim + trigger for the selected clip (preview is the node itself) */}
-      {cur && (
+      {/* Per-clip settings (preview is the node itself). Trim/speed only for timed media; images get a duration. */}
+      {cur && (() => {
+        const k = clipKind(cur), timed = isTimeMedia(cur)
+        return (
         <div style={{ padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
-          <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} onChange={onTrim} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 2 }}>
-            <span>Start</span>
-            <input style={inp} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
-              onBlur={e => { const v = parseTime(e.target.value); if (v != null) { patch(sel, { start: v }); preview?.seek?.(v); preview?.play?.() } }} />
-            <span style={{ flex: 1 }} />
-            <span>End</span>
-            <input style={inp} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
-              onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
-          </div>
+          {timed && <>
+            <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} onChange={onTrim} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 2 }}>
+              <span>Start</span>
+              <input style={inp} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
+                onBlur={e => { const v = parseTime(e.target.value); if (v != null) { patch(sel, { start: v }); preview?.seek?.(v); preview?.play?.() } }} />
+              <span style={{ flex: 1 }} />
+              <span>End</span>
+              <input style={inp} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
+                onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
+            </div>
+          </>}
+          {k === 'image' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8' }}>
+              <span>Show for</span>
+              <input style={{ ...inp, width: 54 }} defaultValue={String(cur.duration || 5)} key={'dur' + cur.id}
+                onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 10 }}>
             <span>Advance</span>
             <select value={cur.trigger || 'click'} onChange={e => patch(sel, { trigger: e.target.value })}
               style={{ ...inp, width: 'auto', textAlign: 'left', flex: 1 }}>
               <option value="click">On click / key</option>
-              <option value="auto">Automatically (when it ends)</option>
+              <option value="auto">Automatically{timed ? ' (when it ends)' : ''}</option>
               <option value="delay">After a delay</option>
             </select>
             {cur.trigger === 'delay' && (
@@ -325,15 +422,23 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
             )}
             {cur.trigger === 'delay' && <span>s</span>}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 8 }}>
-            <span>Speed</span>
-            <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }}
-              style={{ ...inp, width: 'auto', textAlign: 'left' }}>
-              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
-            </select>
-          </div>
+          {timed && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11.5, color: '#8fa0d8', marginTop: 8 }}>
+              {(k === 'youtube' || k === 'video') && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Speed
+                  <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
+                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
+                  </select>
+                </span>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
+                <input type="checkbox" checked={!!cur.loop} onChange={e => patch(sel, { loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Loop
+              </label>
+            </div>
+          )}
         </div>
-      )}
+        )
+      })()}
 
       {/* Clips column — drag a row to reorder */}
       <div ref={rowsRef} style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
@@ -345,23 +450,35 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               borderTop: `2px solid ${dropIdx === i && dragIdx != null ? '#5b6af0' : 'transparent'}`,
               border: `1px solid ${i === sel ? '#3a4a8a' : 'transparent'}` }}>
             <span onMouseDown={rowDrag(i)} title="Drag to reorder" style={{ color: '#7d84a4', cursor: 'grab', display: 'flex', flex: '0 0 auto' }}><Icon name="drag" size={16} /></span>
-            <img src={ytThumb(c.youtubeId)} alt="" width={62} height={35} style={{ borderRadius: 4, objectFit: 'cover', flexShrink: 0, background: '#000' }} />
+            {(() => {
+              const k = clipKind(c)
+              const thumbSrc = k === 'youtube' ? ytThumb(c.youtubeId) : (k === 'image' ? c.src : null)
+              if (thumbSrc) return <img src={thumbSrc} alt="" width={62} height={35} style={{ borderRadius: 4, objectFit: 'cover', flexShrink: 0, background: '#000' }} />
+              return <div style={{ width: 62, height: 35, borderRadius: 4, flexShrink: 0, background: '#0e0e1c', border: '1px solid #23234a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d84a4', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 }}>{k === 'audio' ? 'Audio' : 'Video'}</div>
+            })()}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: '#c5d0ff', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title || c.youtubeId}</div>
-              <div style={{ color: '#7080a0', fontSize: 10.5 }}>{fmtTime(c.start || 0)}–{c.end ? fmtTime(c.end) : 'end'} · {c.trigger || 'click'}</div>
+              <div style={{ color: '#c5d0ff', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title || (clipKind(c) === 'youtube' ? c.youtubeId : clipKind(c))}</div>
+              <div style={{ color: '#7080a0', fontSize: 10.5 }}>{clipKind(c) === 'image' ? `${c.duration || 5}s image` : `${fmtTime(c.start || 0)}–${c.end ? fmtTime(c.end) : 'end'}`} · {c.trigger || 'click'}{c.loop ? ' · loop' : ''}</div>
             </div>
             {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={22} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}
             <IconBtn name="trash" title="Delete" size={22} tone="danger" onClick={() => del(i)} />
           </div>
         ))}
-        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No clips yet. Paste a YouTube link below.</div>}
+        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No slides yet. Paste a YouTube link or upload media below.</div>}
       </div>
 
       {/* Add */}
-      <div style={{ display: 'flex', gap: 6, padding: 10, borderTop: '1px solid #23234a' }}>
-        <input value={urlInput} onChange={e => setUrlInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addUrl() }}
-          placeholder="Paste a YouTube link…" style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left' }} />
-        <button onClick={addUrl} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}><Icon name="add" size={13} />Add</button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, borderTop: '1px solid #23234a' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input value={urlInput} onChange={e => setUrlInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addUrl() }}
+            placeholder="Paste a YouTube link…" style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left' }} />
+          <button onClick={addUrl} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}><Icon name="add" size={13} />Add</button>
+        </div>
+        {onUpload && (
+          <button onClick={onUpload} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5 }}>
+            <Icon name="add" size={13} /> Upload image, audio, or video…
+          </button>
+        )}
       </div>
     </div>
   )
@@ -470,10 +587,11 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     }
   }, []) // eslint-disable-line
 
-  const goto = (i, play = true) => { setEnded(false); setIdx(i); handleRef.current?.loadClip?.(clips[i], play) }
+  const fsPlaying = useRef(true)
+  const goto = (i) => { setEnded(false); fsPlaying.current = true; setIdx(i) }   // remount → autoplay the new slide
   const advance = () => {
     const i = idxRef.current
-    if (i < clips.length - 1) goto(i + 1, true)
+    if (i < clips.length - 1) goto(i + 1)
     else { setEnded(true); handleRef.current?.pause?.() }
   }
   const onEnded = () => {
@@ -492,16 +610,16 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       if (e.key === 'Escape') { e.preventDefault(); onExit?.(); return }
       if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(10); return }
       if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(-10); return }
-      if (e.key === ' ') { e.preventDefault(); handleRef.current?.play?.(); return }
+      if (e.key === ' ') { e.preventDefault(); if (fsPlaying.current) { handleRef.current?.pause?.(); fsPlaying.current = false } else { handleRef.current?.play?.(); fsPlaying.current = true } return }
       if (e.key === 'ArrowRight') {
         e.preventDefault()
         const i = idxRef.current
-        if (i < clips.length - 1) goto(i + 1, true)
+        if (i < clips.length - 1) goto(i + 1)
         else if (!endedRef.current) { setEnded(true); handleRef.current?.pause?.() }   // to last frame + replay
         else onExit?.()   // already at the end → leave fullscreen, back to the node
         return
       }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); const i = idxRef.current; if (i > 0) goto(i - 1, true); return }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); const i = idxRef.current; if (i > 0) goto(i - 1); return }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -510,7 +628,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <YTPlayer key={'fs' + (captions ? '-cc' : '')} clip={cur} autoplay muted={muted} captions={captions} interactive externalControl onReady={h => { handleRef.current = h; h.loadClip?.(cur, true) }} onEnded={onEnded} />}
+        {cur && <SlidePlayer key={idx + '-' + (captions ? 'cc' : '')} clip={cur} autoplay muted={muted} captions={captions} interactive onReady={h => { handleRef.current = h }} onEnded={onEnded} />}
       </div>
       {ended && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
@@ -534,12 +652,12 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalControl, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
   const W = 480 * (node.__scale || 1), H = 270 * (node.__scale || 1)
-  const label = node.label || 'YouTube slideshow'
+  const label = node.label || 'Slideshow'
   const bd = active ? '#4ade80' : (isDropTarget ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a'))
   return (
     <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
@@ -552,12 +670,12 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, externalCo
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <YTPlayer key={node.id + (captions ? '-cc' : '')} clip={cur} interactive={active} externalControl={externalControl} muted={muted} captions={captions} onReady={onReady} onEnded={onEnded} />
+            ? <SlidePlayer key={cur.id + (captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={muted} captions={captions} onReady={onReady} onEnded={onEnded} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>
                 <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onEdit?.() }}
-                  style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>Add clips…</button>
+                  style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>Add media…</button>
               </div>}
           {isDropTarget && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: 'rgba(74,222,128,0.14)', color: '#dcfce7', fontSize: 15, fontWeight: 700, fontFamily: '-apple-system, sans-serif', pointerEvents: 'none' }}>

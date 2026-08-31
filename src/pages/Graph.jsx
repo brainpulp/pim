@@ -115,6 +115,19 @@ const youtubeEmbedUrl = (img) => {
   return `https://www.youtube-nocookie.com/embed/${img.youtubeId}?${p.toString()}`
 }
 
+// Convert a canvas media element (a node's `media`, or a free `view.images` entry) into a slideshow
+// slide. Media nodes carry `kind`; free images carry `type`. Returns null if it isn't playable media.
+function elementToSlide(o, label) {
+  if (!o) return null
+  const title = label || o.title || ''
+  const t = o.type || o.kind   // free images use `type`, media nodes use `kind`
+  if (o.videoKind === 'youtube' && o.youtubeId) return { kind: 'youtube', youtubeId: o.youtubeId, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, trigger: 'click' }
+  if (t === 'audio') return { kind: 'audio', src: o.src, title, start: o.start || 0, end: o.end || 0, trigger: 'click' }
+  if (t === 'video' || o.videoKind === 'file') return { kind: 'video', src: o.src, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, loop: !!o.loop, trigger: 'click' }
+  if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5 }
+  return null
+}
+
 // Centered inline-SVG icon for SVG-space circular badges. Authored in a 24×24 box; a nested <svg> with
 // x/y = -size/2 puts the glyph's centre (12,12) exactly at (0,0), so it sits dead-center in a <circle> —
 // unlike emoji/text glyphs, whose optical centre drifts under dominantBaseline. Stroke stays ~constant
@@ -2143,13 +2156,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const clips = yss?.clips || []
     if (!clips.length) { setYtssActiveId(nodeId); setYtssEndedId(null); return }
     if (yss.fullscreen) { ytssHandlesRef.current[nodeId]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(nodeId); return }
-    setYtssActiveId(nodeId); setYtssEndedId(null)
-    const i = Math.max(0, Math.min(ytssIdxMapRef.current[nodeId] || 0, clips.length - 1))
+    // Marking active makes the node autoplay its current slide. The current slide's player is already
+    // mounted (cued) while idle, so calling play() here — inside the user gesture — starts it WITH sound.
     ytssPlayingRef.current = true
-    // The handle may not be ready this tick (player still mounting) — retry briefly.
-    let tries = 0
-    const kick = () => { const h = ytssHandlesRef.current[nodeId]; if (h?.loadClip) h.loadClip(clips[i], true); else if (tries++ < 20) setTimeout(kick, 120) }
-    kick()
+    setYtssActiveId(nodeId); setYtssEndedId(null)
+    ytssHandlesRef.current[nodeId]?.play?.()
   }, [])
   // The slideshow a pasted/dropped YouTube link should land in: the entered one, or a selected ytss node.
   const ytssTargetRef = useRef(null)
@@ -2157,10 +2168,43 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const st = useGraphStore.getState(); const node = st.nodes.find(n => n.id === nodeId)
     if (!node?.ytss) return
     const clips = node.ytss.clips || []
-    const nc = { id: crypto.randomUUID(), youtubeId, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }
+    const nc = { id: crypto.randomUUID(), kind: 'youtube', youtubeId, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }
     setYtssClips(nodeId, [...clips, nc])
     setYtssIdxMap(m => ({ ...m, [nodeId]: clips.length }))
   }, [setYtssClips])
+  // Append any media slide (image/audio/video/youtube) to a slideshow.
+  const addSlideToYtss = useCallback((nodeId, slide) => {
+    const st = useGraphStore.getState(); const node = st.nodes.find(n => n.id === nodeId)
+    if (!node?.ytss) return
+    const clips = node.ytss.clips || []
+    const defaults = slide.kind === 'image' ? { trigger: 'auto', duration: 5 } : { trigger: 'click', start: 0, end: 0 }
+    setYtssClips(nodeId, [...clips, { id: crypto.randomUUID(), title: '', delayMs: 1500, ...defaults, ...slide }])
+    setYtssIdxMap(m => ({ ...m, [nodeId]: clips.length }))
+  }, [setYtssClips])
+  // Upload an image / audio / video file and append it as a slide (swaps the temp src for the hosted URL).
+  const swapClipSrc = useCallback((nodeId, from, to) => {
+    const cur = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+    if (cur?.ytss && to) setYtssClips(nodeId, (cur.ytss.clips || []).map(c => c.src === from ? { ...c, src: to } : c))
+  }, [setYtssClips])
+  const uploadSlideToYtss = useCallback((nodeId) => {
+    const input = document.createElement('input')
+    input.type = 'file'; input.accept = 'image/*,audio/*,video/*'
+    input.onchange = () => {
+      const file = input.files?.[0]; if (!file) return
+      const title = file.name.replace(/\.[^/.]+$/, '')
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader()
+        reader.onload = () => { addSlideToYtss(nodeId, { kind: 'image', src: reader.result, title }); uploadImageDataUrl(reader.result, projectId).then(url => swapClipSrc(nodeId, reader.result, url && url !== reader.result ? url : null)) }
+        reader.readAsDataURL(file)
+      } else {
+        const kind = file.type.startsWith('audio/') ? 'audio' : 'video'
+        const blobUrl = URL.createObjectURL(file)
+        addSlideToYtss(nodeId, { kind, src: blobUrl, title })
+        uploadMediaFile(file, projectId).then(url => { if (url) { swapClipSrc(nodeId, blobUrl, url); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+      }
+    }
+    input.click()
+  }, [addSlideToYtss, swapClipSrc, projectId])
   useEffect(() => { ytssTargetRef.current = ytssActiveId || (selected?.type === 'node' && ytssNodeSet.has(selected.id) ? selected.id : null) }, [ytssActiveId, selected, ytssNodeSet])
   // Selecting something else exits the active slideshow (arrows go back to normal nav) — but not during
   // a presentation, where a slideshow is auto-entered without being "selected".
@@ -2505,7 +2549,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const cur = Math.max(0, Math.min(ytssIdxMapRef.current[nid] || 0, clips.length - 1))
         const presenting = presentingSlideIdxRef.current !== null
         const atEnd = ytssEndedRef.current === nid
-        const goClip = (ni) => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true; h?.loadClip?.(clips[ni], true) }
+        const goClip = (ni) => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [nid]: ni })); ytssPlayingRef.current = true }   // idx change → node remounts+autoplays the slide
         // ↑/↓ (outside a presentation) ABANDON the slideshow and resume normal arrow-nav (↑ parent, ↓ child).
         // We exit here but do NOT return, so the event falls through to the nav handler below.
         if (!presenting && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -2846,7 +2890,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const isFrame = _dragShape === 'frame' || _dragShape === 'container'   // both drag their contained nodes along
     // A YouTube video node can be dropped INTO a YouTube slideshow — enable that hover target while dragging one.
     const _dragMedia = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.media
-    const isDragYtVideo = _dragMedia?.videoKind === 'youtube' && !!_dragMedia?.youtubeId
+    // Any media node (youtube/video/audio/image) can be dropped INTO a slideshow.
+    const isDragMedia = !!_dragMedia && (!!_dragMedia.youtubeId || !!_dragMedia.src)
 
     // Collect drag group
     let dragGroup = [simNode]
@@ -2904,8 +2949,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (n.id === nodeId) continue
           const nvp = viewNodePropsRef.current[n.id] || {}
           if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
-          // A YouTube slideshow node is a drop target only for a dragged YouTube video.
-          if (isDragYtVideo && ytssNodeSet.has(n.id)) {
+          // A slideshow node is a drop target for any dragged media (youtube/video/audio/image).
+          if (isDragMedia && ytssNodeSet.has(n.id)) {
             const scale = nvp.ytssScale || 1
             if (Math.abs((n.x || 0) - sx) < 240 * scale && Math.abs((n.y || 0) - sy) < 135 * scale) { foundYtss = n.id; break }
             continue
@@ -2972,14 +3017,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
         const ddx = sx - startSx, ddy = sy - startSy
 
-        // Drop a canvas YouTube video onto a YouTube-slideshow node → append it as a clip and remove
-        // the standalone node from the canvas. Only single-node drags of a youtube media node qualify;
-        // the target is whatever the hover-highlight settled on.
-        if (isDragYtVideo && hoveredAtDrop && ytssNodeSet.has(hoveredAtDrop) && hoveredAtDrop !== nodeId) {
-          const draggedMedia = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.media
-          if (draggedMedia?.youtubeId) {
+        // Drop a canvas media node onto a slideshow → append it as a slide and remove the standalone
+        // node from the canvas. Any media kind qualifies; the target is the hover-highlighted slideshow.
+        if (isDragMedia && hoveredAtDrop && ytssNodeSet.has(hoveredAtDrop) && hoveredAtDrop !== nodeId) {
+          const dn = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+          const slide = elementToSlide(dn?.media, dn?.label)
+          if (slide) {
             pushUndo()
-            addClipToYtss(hoveredAtDrop, draggedMedia.youtubeId)
+            addSlideToYtss(hoveredAtDrop, slide)
             deleteNode(nodeId)
             if (selectedRef.current?.id === nodeId) setSelected(null)
             playDrop()
@@ -3133,7 +3178,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage, removeEdge, pushUndo, addClipToYtss, deleteNode, ytssNodeSet, setSelected])
+  }, [clientToSim, setAnchor, setContainedIn, reparentNode, releaseAnchor, storeEdges, setNodeProp, scheduleRender, updateImage, removeEdge, pushUndo, addClipToYtss, addSlideToYtss, deleteNode, ytssNodeSet, setSelected])
 
   const handleConnectorMouseDown = useCallback((e, sourceId) => {
     if (e.button !== 0) return
@@ -4365,6 +4410,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       .then(r => r.ok ? r.json() : null).then(d => { if (d?.title) updateImage(id, { title: d.title }) }).catch(() => {})
   }, [addVideo, updateImage])
 
+  // Pop a slideshow slide back onto the canvas as the matching element (youtube/video/audio/image).
+  const extractSlide = useCallback((clip, sx, sy) => {
+    const k = clip.kind || (clip.youtubeId ? 'youtube' : 'video')
+    if (k === 'youtube') { dropYoutube(clip.youtubeId, sx, sy); return }
+    if (k === 'audio') { addAudio({ src: clip.src, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
+    if (k === 'image') { addImage(clip.src, sx, sy, 360, 240); return }
+    const W = 320   // uploaded video file
+    addVideo({ videoKind: 'file', src: clip.src, title: clip.title || 'Video', start: clip.start || 0, end: clip.end || 0, speed: clip.speed || 1, loop: !!clip.loop }, sx, sy, W, Math.round(W * 9 / 16))
+  }, [dropYoutube, addAudio, addImage, addVideo])
+
   const addYoutubeAt = useCallback(async (sx, sy) => {
     // Save a click: if the clipboard already holds a YouTube link, use it directly — no prompt.
     try {
@@ -4435,6 +4490,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [])
 
   // â"€â"€ Image interaction (drag / resize / rotate) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // The slideshow node (if any) whose card covers a world point — for dropping media into a slideshow.
+  const ytssHitAt = useCallback((pt) => {
+    if (!pt) return null
+    for (const yn of simNodesRef.current) {
+      if (!ytssNodeSet.has(yn.id) || !visibleNodeIdsRef.current.has(yn.id)) continue
+      const scale = (viewNodePropsRef.current[yn.id]?.ytssScale) || 1
+      if (Math.abs((yn.x || 0) - pt.x) < 240 * scale && Math.abs((yn.y || 0) - pt.y) < 135 * scale) return yn.id
+    }
+    return null
+  }, [ytssNodeSet])
+
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag', arg) => {
     e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
@@ -4524,11 +4590,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (!origins[id]) return
           updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy })
         })
-        // Feedback: highlight the node this media would attach to (drop = becomes its child).
+        // Feedback: highlight the node this media would attach to (drop = becomes its child), OR the
+        // slideshow it would be added to (drop = becomes a slide).
         if (canAttach) {
           lastCursor = { x: sx, y: sy }
           lastCenter = { x: origins[imageId].x + dx, y: origins[imageId].y + dy }
-          const hit = attachTargetAt(lastCursor, lastCenter)
+          const hit = ytssHitAt(lastCursor) || attachTargetAt(lastCursor, lastCenter)
           if (hit !== dragHoverNodeIdRef.current) { dragHoverNodeIdRef.current = hit; setDragHoverNodeId(hit) }
         }
       }
@@ -4536,6 +4603,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
         hideDragShield()
+        // Dropped onto a slideshow → add this media as a slide and remove the free image from the canvas.
+        if (canAttach) {
+          const ytssHit = ytssHitAt(lastCursor)
+          if (ytssHit) {
+            const img = (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).find(i => i.id === imageId)
+            const slide = elementToSlide(img, img?.title)
+            if (slide) {
+              pushUndo(); addSlideToYtss(ytssHit, slide); deleteImage(imageId)
+              setSelectedImageIds(new Set()); playDrop()
+              if (dragHoverNodeIdRef.current !== null) { dragHoverNodeIdRef.current = null; setDragHoverNodeId(null) }
+              return
+            }
+          }
+        }
         if (canAttach) {
           const target = attachTargetAt(lastCursor, lastCenter)
           if (target) {
@@ -4643,7 +4724,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       showDragShield('grabbing')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
     }
-  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId, nodeUnderPoint, setAnchor, convertImageToNode, pushUndo, scheduleRender])
+  }, [drilledImageId, updateImage, expandGroup, clientToSim, cropImageId, nodeUnderPoint, setAnchor, convertImageToNode, pushUndo, scheduleRender, ytssHitAt, addSlideToYtss, deleteImage])
 
   const T = zoomTransformRef.current
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
@@ -5429,7 +5510,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const inspecting = ytssInspectorId === n.id
               return (
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
-                  currentIdx={ytssIdxMap[n.id] || 0} active={active} externalControl={active || inspecting}
+                  currentIdx={ytssIdxMap[n.id] || 0} active={active} playing={active || inspecting}
                   muted={nd.ytss.muted === true}
                   captions={nd.ytss.captions === true}
                   ended={ytssEndedId === n.id}
@@ -5439,7 +5520,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onEnter={() => { setSelected({ id: n.id, type: 'node' }); enterYtssAndPlay(n.id) }}
                   onFullscreen={() => { ytssHandlesRef.current[n.id]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(n.id) }}
-                  onReplay={() => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [n.id]: 0 })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(nd.ytss.clips[0], true) }}
+                  onReplay={() => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [n.id]: 0 })); ytssPlayingRef.current = true }}
                   onEdit={() => setYtssInspectorId(n.id)}
                   onSetIdx={i => setYtssIdxMap(m => ({ ...m, [n.id]: i }))}
                   onReady={h => { ytssHandlesRef.current[n.id] = h }}
@@ -5451,12 +5532,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     const clip = clips[cur]; if (!clip) return
                     const advance = () => {
                       const ni = cur + 1
-                      if (ni < clips.length) { setYtssIdxMap(m => ({ ...m, [n.id]: ni })); ytssPlayingRef.current = true; ytssHandlesRef.current[n.id]?.loadClip?.(clips[ni], true) }
+                      if (ni < clips.length) { setYtssIdxMap(m => ({ ...m, [n.id]: ni })); ytssPlayingRef.current = true }
                       else { ytssPlayingRef.current = false; if (presentingSlideIdxRef.current !== null) advanceBuild(1); else setYtssEndedId(n.id) }   // end of show → next slide when presenting, else show replay
                     }
                     if (clip.trigger === 'auto') advance()
                     else if (clip.trigger === 'delay') setTimeout(advance, clip.delayMs || 1500)
-                    else if (cur === clips.length - 1) setYtssEndedId(n.id)   // 'click' on the last clip → end state
+                    else if (cur === clips.length - 1) setYtssEndedId(n.id)   // 'click' on the last slide → end state
                     // other 'click' → wait for an arrow / Space
                   }} />
               )
@@ -5621,7 +5702,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {item('📋', 'Paste image', () => { const { sx, sy } = contextMenu; close(); pasteImageAt(sx, sy) })}
                     {item('🎬', <>Video<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('video'))}
                     {item('🎵', <>Audio<span style={{ color: '#8090b8' }}>›</span></>, () => setCtxPanel('audio'))}
-                    {item('📺', 'YouTube slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
+                    {item('📺', 'Slideshow', () => { const { sx, sy } = contextMenu; close(); pushUndo(); const id = addYtssNode(sx, sy); setTimeout(() => { const sn = simNodesRef.current.find(m => m.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0); setYtssInspectorId(id) })}
                     {item('🔗', 'Link…', () => { const { sx, sy } = contextMenu; close(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), sx, sy) })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('🗂️', 'View', () => { pushUndo(); addView(); close() })}
@@ -6488,7 +6569,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             clips={yn.ytss.clips || []}
             anchor={anchor}
             preview={{
-              select: (i, clip) => { setYtssIdxMap(m => ({ ...m, [ytssInspectorId]: i })); ytssHandlesRef.current[ytssInspectorId]?.loadClip?.(clip, true) },
+              select: (i) => { setYtssIdxMap(m => ({ ...m, [ytssInspectorId]: i })) },   // idx change → node shows+plays it
               seek: t => ytssHandlesRef.current[ytssInspectorId]?.seekTo?.(t),
               play: () => ytssHandlesRef.current[ytssInspectorId]?.play?.(),
               pause: () => ytssHandlesRef.current[ytssInspectorId]?.pause?.(),
@@ -6502,7 +6583,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             captions={yn.ytss.captions === true}
             onToggleCaptions={v => setYtssProp(ytssInspectorId, { captions: v })}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
-            onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); dropYoutube(clip.youtubeId, (s?.x || 0) + 340, (s?.y || 0)) }}
+            onUpload={() => uploadSlideToYtss(ytssInspectorId)}
+            onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); extractSlide(clip, (s?.x || 0) + 340, (s?.y || 0)) }}
             onClose={() => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }}
           />
         )
