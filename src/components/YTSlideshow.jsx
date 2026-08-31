@@ -315,20 +315,37 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   const del = (i) => { onChange(clips.filter((_, j) => j !== i)); setSel(s => Math.max(0, Math.min(s, clips.length - 2))) }
 
   // Selecting a clip auto-plays it on the node from its trimmed start, and we poll its duration for the slider.
+  const [previewPlaying, setPreviewPlaying] = useState(true)
+  const endLoopRef = useRef(null)
+  const clearEndLoop = () => { if (endLoopRef.current) { clearInterval(endLoopRef.current); endLoopRef.current = null } }
+  // Preview the END edge: jump to the last ~2s and keep looping there so you can see exactly where it ends.
+  const loopEnd = (e) => {
+    clearEndLoop()
+    const lo = Math.max(cur?.start || 0, e - 2)
+    preview?.seek?.(lo); preview?.play?.(); setPreviewPlaying(true)
+    endLoopRef.current = setInterval(() => { const t = preview?.time?.() || 0; if (t >= e - 0.12 || t < lo - 0.4) preview?.seek?.(lo) }, 200)
+  }
+
   useEffect(() => {
-    setDur(0)
+    setDur(0); clearEndLoop(); setPreviewPlaying(true)
     if (!cur) return
     preview?.select?.(sel, cur)
     let n = 0
     const t = setInterval(() => { const d = preview?.duration?.() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 30) clearInterval(t) }, 300)
     return () => clearInterval(t)
   }, [cur?.id]) // eslint-disable-line
+  useEffect(() => () => clearEndLoop(), [])
 
-  // Trim edits scrub the preview: moving START restarts play from there; moving END seeks to it.
+  // Trim edits scrub the preview: START restarts play from there; END loops the last ~2s so you can see it.
   const onTrim = (s, e, which) => {
     patch(sel, { start: s, end: e >= max ? 0 : e })
-    if (which === 'start') { preview?.seek?.(s); preview?.play?.() }
-    else preview?.seek?.(Math.min(e, max))
+    if (which === 'start') { clearEndLoop(); preview?.seek?.(s); preview?.play?.(); setPreviewPlaying(true) }
+    else loopEnd(Math.min(e, max))
+  }
+  const togglePreview = () => {
+    clearEndLoop()
+    if (previewPlaying) { preview?.pause?.(); setPreviewPlaying(false) }
+    else { preview?.play?.(); setPreviewPlaying(true) }
   }
 
   // Mouse-drag reorder of the clips column (no up/down buttons).
@@ -367,7 +384,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
       onMouseDown={e => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
         <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>Slideshow</div>
-        <span style={{ color: '#7080a0', fontSize: 11 }}>previewing on the node →</span>
+        {cur && isTimeMedia(cur) && <IconBtn name={previewPlaying ? 'pause' : 'play'} title={previewPlaying ? 'Pause preview' : 'Play preview'} onClick={togglePreview} size={26} />}
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
 
@@ -447,13 +464,13 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
       {/* Clips column — drag a row to reorder */}
       <div ref={rowsRef} style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
         {clips.map((c, i) => (
-          <div key={c.id} data-cliprow onClick={() => setSel(i)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, borderRadius: 7, marginBottom: 4, cursor: 'pointer',
+          <div key={c.id} data-cliprow onMouseDown={rowDrag(i)}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, borderRadius: 7, marginBottom: 4, cursor: 'grab',
               opacity: dragIdx === i ? 0.4 : 1,
               background: i === sel ? '#1c2148' : 'transparent',
               borderTop: `2px solid ${dropIdx === i && dragIdx != null ? '#5b6af0' : 'transparent'}`,
               border: `1px solid ${i === sel ? '#3a4a8a' : 'transparent'}` }}>
-            <span onMouseDown={rowDrag(i)} title="Drag to reorder" style={{ color: '#7d84a4', cursor: 'grab', display: 'flex', flex: '0 0 auto' }}><Icon name="drag" size={16} /></span>
+            <span title="Drag to reorder" style={{ color: '#7d84a4', display: 'flex', flex: '0 0 auto' }}><Icon name="drag" size={16} /></span>
             {(() => {
               const k = clipKind(c)
               const thumbSrc = k === 'youtube' ? ytThumb(c.youtubeId) : (k === 'image' ? c.src : null)

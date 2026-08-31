@@ -6593,6 +6593,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               setRate: r => ytssHandlesRef.current[ytssInspectorId]?.setRate?.(r),
               mute: () => ytssHandlesRef.current[ytssInspectorId]?.mute?.(),
               unMute: () => ytssHandlesRef.current[ytssInspectorId]?.unMute?.(),
+              time: () => ytssHandlesRef.current[ytssInspectorId]?.time?.() || 0,
               duration: () => ytssHandlesRef.current[ytssInspectorId]?.duration?.() || 0,
             }}
             fullscreen={!!yn.ytss.fullscreen}
