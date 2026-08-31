@@ -106,6 +106,7 @@ const youtubeEmbedUrl = (img) => {
   if (img.loop) { p.set('loop', '1'); p.set('playlist', img.youtubeId) }
   p.set('controls', img.controls === false ? '0' : '1')
   if (img.hideRelated) { p.set('rel', '0'); p.set('modestbranding', '1'); p.set('iv_load_policy', '3') }
+  if (img.captions) { p.set('cc_load_policy', '1'); p.set('cc_lang_pref', 'en') }
   if (img.start) p.set('start', String(Math.max(0, Math.round(img.start))))
   if (img.end && img.end > (img.start || 0)) p.set('end', String(Math.round(img.end)))
   p.set('enablejsapi', '1')   // lets us drive play/pause/speed via postMessage
@@ -6531,14 +6532,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
           if (!img || img.videoKind !== 'youtube') return null
-          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted }
+          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions }
           onPatch = patch => updateImage(videoEdit.id, patch)
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
         } else {
           const node = storeNodes.find(n => n.id === videoEdit.id)
           const m = node?.media; if (!m || m.videoKind !== 'youtube') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted }
+          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions }
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
             const mp = {}, dp = {}
@@ -6552,13 +6553,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return (
           <YTVideoOptions video={video} anchor={anchor} onPatch={onPatch}
             onClose={() => setVideoEdit(null)}
-            onPlayFullscreen={() => setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true })} />
+            onPlayFullscreen={() => setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true, speed: video.speed || 1, captions: video.captions === true })} />
         )
       })()}
 
       {videoFullscreen?.youtubeId && (
-        <YTFullscreenPlayer clips={[{ id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, trigger: 'click' }]}
-          startIndex={0} muted={videoFullscreen.muted} onExit={() => setVideoFullscreen(null)} />
+        <YTFullscreenPlayer clips={[{ id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
+          startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} onExit={() => setVideoFullscreen(null)} />
       )}
     </div>
   )
