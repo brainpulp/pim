@@ -263,14 +263,20 @@ export function SlidePlayer({ clip, autoplay = false, muted = false, captions = 
 // whichever edge is being moved.
 function TrimSlider({ start, end, max, onChange }) {
   const trackRef = useRef(null)
+  // Keep the live values in a ref so an in-flight drag never reads a stale closure (which made the
+  // OTHER handle jump on re-render / when the duration poll changed `max` mid-interaction).
+  const stateRef = useRef({ start, end, max })
+  stateRef.current = { start, end, max }
   const drag = (which) => (e) => {
     e.preventDefault(); e.stopPropagation()
+    const frozenMax = stateRef.current.max || 1   // freeze the scale for the whole drag
     const move = (ev) => {
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const t = Math.round(frac * max)
-      if (which === 'start') onChange(Math.min(t, (end || max) - 1), end, 'start')
-      else onChange(start, Math.max(t, (start || 0) + 1), 'end')
+      const t = Math.round(frac * frozenMax)
+      const { start: cs, end: ce } = stateRef.current   // always the current other-edge value
+      if (which === 'start') onChange(Math.min(t, (ce || frozenMax) - 1), ce, 'start')
+      else onChange(cs, Math.max(t, (cs || 0) + 1), 'end')
     }
     const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
