@@ -164,7 +164,7 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
       <div ref={holderRef} style={{ width: '100%', height: '100%', pointerEvents: interactive ? 'auto' : 'none' }} />
       {/* Poster hides YouTube's own chrome (big play button, title, end-screen) until/after playback. */}
       {covered && clip?.youtubeId && (
-        <div onMouseDown={e => e.stopPropagation()} onClick={() => { if (interactive) playerRef.current?.playVideo?.() }}
+        <div onMouseDown={e => { if (interactive) e.stopPropagation() }} onClick={() => { if (interactive) playerRef.current?.playVideo?.() }}
           style={{ position: 'absolute', inset: 0, background: `#000 center/cover no-repeat url("${ytThumb(clip.youtubeId)}")`,
             cursor: interactive ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: 54, height: 54, borderRadius: '50%', background: 'rgba(12,12,26,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.35)', color: '#fff' }}>
@@ -365,22 +365,12 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
 
-      {/* Playback options */}
+      {/* Slideshow-level playback options (per-slide sound/loop/captions live in each slide's settings) */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', borderBottom: '1px solid #23234a' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
           <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
           Play in fullscreen
           <span style={{ color: '#7080a0', fontSize: 11 }}>— entering opens fullscreen</span>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
-          <input type="checkbox" checked={sound !== false} onChange={e => onToggleSound?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
-          Sound on
-          <span style={{ color: '#7080a0', fontSize: 11 }}>— off = muted (auto-play is more reliable muted)</span>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!captions} onChange={e => onToggleCaptions?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
-          Captions (CC)
-          <span style={{ color: '#7080a0', fontSize: 11 }}>— only if the video has them</span>
         </label>
       </div>
 
@@ -423,7 +413,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
             {cur.trigger === 'delay' && <span>s</span>}
           </div>
           {timed && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11.5, color: '#8fa0d8', marginTop: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px 14px', fontSize: 11.5, color: '#8fa0d8', marginTop: 8 }}>
               {(k === 'youtube' || k === 'video') && (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Speed
                   <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
@@ -434,6 +424,14 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
                 <input type="checkbox" checked={!!cur.loop} onChange={e => patch(sel, { loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Loop
               </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
+                <input type="checkbox" checked={cur.muted !== true} onChange={e => { patch(sel, { muted: !e.target.checked }); if (e.target.checked) preview?.unMute?.(); else preview?.mute?.() }} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Sound
+              </label>
+              {(k === 'youtube' || k === 'video') && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
+                  <input type="checkbox" checked={!!cur.captions} onChange={e => patch(sel, { captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Captions
+                </label>
+              )}
             </div>
           )}
         </div>
@@ -628,7 +626,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <SlidePlayer key={idx + '-' + (captions ? 'cc' : '')} clip={cur} autoplay muted={muted} captions={captions} interactive onReady={h => { handleRef.current = h }} onEnded={onEnded} />}
+        {cur && <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive onReady={h => { handleRef.current = h }} onEnded={onEnded} />}
       </div>
       {ended && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
@@ -670,7 +668,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <SlidePlayer key={cur.id + (captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={muted} captions={captions} onReady={onReady} onEnded={onEnded} />
+            ? <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} onReady={onReady} onEnded={onEnded} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>

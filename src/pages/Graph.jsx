@@ -5546,8 +5546,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               return (
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
                   currentIdx={ytssIdxMap[n.id] || 0} active={active} playing={active || inspecting}
-                  muted={nd.ytss.muted === true}
-                  captions={nd.ytss.captions === true}
                   ended={ytssEndedId === n.id}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
@@ -5783,25 +5781,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
           const listPanel = (opts, onPick) => opts.map(([label, val], i) => <div key={i}>{item(null, label, () => { onPick(val); close() })}</div>)
           const PANELS = {
-            fill:   () => <>{back('Fill color')}{swatchGrid(true, c => setAll('fillColor', c === '__none__' ? 'none' : c))}</>,
-            text:   () => <>{back('Text color')}{swatchGrid(false, c => setAll('textColor', c))}</>,
-            stroke: () => <>{back('Border color')}{swatchGrid(true, c => setAll('strokeColor', c === '__none__' ? null : c))}</>,
-            shape:  () => <>{back('Shape')}{listPanel([['● Circle', 'circle'], ['⬭ Ellipse', 'ellipse'], ['▢ Rounded', 'roundrect'], ['▮ Rectangle', 'rect'], ['◆ Diamond', 'diamond']], v => setAll('shape', v))}</>,
-            width:  () => <>{back('Border width')}{listPanel([['None', 0], ['Thin', 1], ['Medium', 2], ['Thick', 3.5]], v => setAll('strokeWidth', v))}</>,
-            dash:   () => <>{back('Border style')}{listPanel([['Solid', 'solid'], ['Dashed', 'dashed'], ['Dotted', 'dotted']], v => setAll('strokeDash', v))}</>,
-            opacity:() => <>{back('Opacity')}{listPanel([['100%', 1], ['75%', 0.75], ['50%', 0.5], ['25%', 0.25]], v => setAll('opacity', v))}</>,
-            size:   () => <>{back('Size')}{listPanel([['Small', 0.6], ['Medium', 1], ['Large', 1.5], ['Extra large', 2.2]], v => setAll('scale', v))}</>,
-            motion: () => <>{back('Motion')}{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
-            style:  () => <>{back('Apply style')}{storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(null, st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>}</>,
+            fill:   () => <>{swatchGrid(true, c => setAll('fillColor', c === '__none__' ? 'none' : c))}</>,
+            text:   () => <>{swatchGrid(false, c => setAll('textColor', c))}</>,
+            stroke: () => <>{swatchGrid(true, c => setAll('strokeColor', c === '__none__' ? null : c))}</>,
+            shape:  () => <>{listPanel([['● Circle', 'circle'], ['⬭ Ellipse', 'ellipse'], ['▢ Rounded', 'roundrect'], ['▮ Rectangle', 'rect'], ['◆ Diamond', 'diamond']], v => setAll('shape', v))}</>,
+            width:  () => <>{listPanel([['None', 0], ['Thin', 1], ['Medium', 2], ['Thick', 3.5]], v => setAll('strokeWidth', v))}</>,
+            dash:   () => <>{listPanel([['Solid', 'solid'], ['Dashed', 'dashed'], ['Dotted', 'dotted']], v => setAll('strokeDash', v))}</>,
+            opacity:() => <>{listPanel([['100%', 1], ['75%', 0.75], ['50%', 0.5], ['25%', 0.25]], v => setAll('opacity', v))}</>,
+            size:   () => <>{listPanel([['Small', 0.6], ['Medium', 1], ['Large', 1.5], ['Extra large', 2.2]], v => setAll('scale', v))}</>,
+            motion: () => <>{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
+            style:  () => storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(null, st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>,
           }
-          const row = (icon, label, panel) => item(icon, <>{label}<span style={{ color: '#8090b8' }}>›</span></>, () => setBulkPanel(panel))
+          const row = (icon, label, panel) => <MenuFlyout icon={icon} label={label} minWidth={190}>{PANELS[panel]()}</MenuFlyout>
           return (
             <>
               <div onMouseDown={close} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div data-graphmenu onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
                 style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto' }}>
                 <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
-                {bulkPanel && PANELS[bulkPanel] ? PANELS[bulkPanel]() : (
+                {(
                   <>
                     {row('🎨', 'Fill color', 'fill')}
                     {row('🅰️', 'Text color', 'text')}
@@ -6593,14 +6591,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               play: () => ytssHandlesRef.current[ytssInspectorId]?.play?.(),
               pause: () => ytssHandlesRef.current[ytssInspectorId]?.pause?.(),
               setRate: r => ytssHandlesRef.current[ytssInspectorId]?.setRate?.(r),
+              mute: () => ytssHandlesRef.current[ytssInspectorId]?.mute?.(),
+              unMute: () => ytssHandlesRef.current[ytssInspectorId]?.unMute?.(),
               duration: () => ytssHandlesRef.current[ytssInspectorId]?.duration?.() || 0,
             }}
             fullscreen={!!yn.ytss.fullscreen}
             onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
-            sound={yn.ytss.muted !== true}
-            onToggleSound={v => { setYtssProp(ytssInspectorId, { muted: !v }); const h = ytssHandlesRef.current[ytssInspectorId]; if (v) h?.unMute?.(); else h?.mute?.() }}
-            captions={yn.ytss.captions === true}
-            onToggleCaptions={v => setYtssProp(ytssInspectorId, { captions: v })}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onUpload={() => uploadSlideToYtss(ytssInspectorId)}
             onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); extractSlide(clip, (s?.x || 0) + 340, (s?.y || 0)) }}
@@ -6615,7 +6611,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!clips.length) return null
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
-          <YTFullscreenPlayer clips={clips} startIndex={start} muted={yn?.ytss?.muted === true} captions={yn?.ytss?.captions === true}
+          <YTFullscreenPlayer clips={clips} startIndex={start}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)
