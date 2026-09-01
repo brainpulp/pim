@@ -4447,15 +4447,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       .then(r => r.ok ? r.json() : null).then(d => { if (d?.title) updateImage(id, { title: d.title }) }).catch(() => {})
   }, [addVideo, updateImage])
 
-  // Pop a slideshow slide back onto the canvas as the matching element (youtube/video/audio/image).
+  // Pop a slideshow slide back onto the canvas as the matching element, KEEPING its settings
+  // (trim / speed / loop / muted / captions), so it plays the same as it did in the slideshow.
   const extractSlide = useCallback((clip, sx, sy) => {
     const k = clip.kind || (clip.youtubeId ? 'youtube' : 'video')
-    if (k === 'youtube') { dropYoutube(clip.youtubeId, sx, sy); return }
-    if (k === 'audio') { addAudio({ src: clip.src, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
+    const timed = { start: clip.start || 0, end: clip.end || 0, muted: clip.muted === true, loop: !!clip.loop, title: clip.title || '' }
     if (k === 'image') { addImage(clip.src, sx, sy, 360, 240); return }
-    const W = 320   // uploaded video file
-    addVideo({ videoKind: 'file', src: clip.src, title: clip.title || 'Video', start: clip.start || 0, end: clip.end || 0, speed: clip.speed || 1, loop: !!clip.loop }, sx, sy, W, Math.round(W * 9 / 16))
-  }, [dropYoutube, addAudio, addImage, addVideo])
+    if (k === 'audio') { addAudio({ src: clip.src, ...timed, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
+    const W = 320
+    if (k === 'youtube') { addVideo({ videoKind: 'youtube', youtubeId: clip.youtubeId, speed: clip.speed || 1, captions: !!clip.captions, ...timed }, sx, sy, W, Math.round(W * 9 / 16)); return }
+    addVideo({ videoKind: 'file', src: clip.src, speed: clip.speed || 1, ...timed, title: clip.title || 'Video' }, sx, sy, W, Math.round(W * 9 / 16))
+  }, [addAudio, addImage, addVideo])
 
   const addYoutubeAt = useCallback(async (sx, sy) => {
     // Save a click: if the clipboard already holds a YouTube link, use it directly — no prompt.
@@ -6632,14 +6634,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
           if (!img || img.videoKind !== 'youtube') return null
-          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions }
+          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop }
           onPatch = patch => updateImage(videoEdit.id, patch)
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
         } else {
           const node = storeNodes.find(n => n.id === videoEdit.id)
           const m = node?.media; if (!m || m.videoKind !== 'youtube') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions }
+          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop }
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
             const mp = {}, dp = {}
