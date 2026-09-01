@@ -150,6 +150,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   // Items freshly created by Enter that were never typed into — discarded on blur so pressing Enter
   // and then clicking away doesn't leave an empty line item behind.
   const freshEmptyRef = useRef(new Set())
+  const committedRef = useRef(new Set())   // rows whose typed text was committed by a first Enter (2nd Enter adds a sibling)
   const [framesOpen, setFramesOpen] = useState(false)   // collapsible "Frames" section
   const [search, setSearch] = useState('')
   const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
@@ -352,6 +353,11 @@ export default function Writer({ projectName, embedded = false, maximized = fals
     if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
       if (e.shiftKey) return          // let the textarea insert a soft line break
       e.preventDefault()
+      // First Enter on a row with unsaved text just COMMITS it (no new node); a second Enter — or Enter
+      // on an already-committed/empty row — adds a sibling. Editing the text re-arms this.
+      const hasText = (el.value || '').trim() !== ''
+      if (hasText && !committedRef.current.has(id)) { committedRef.current.add(id); return }
+      committedRef.current.delete(id)
       const nid = addSiblingAfter(id)
       if (nid) freshEmptyRef.current.add(nid)
       return
@@ -780,7 +786,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <textarea ref={el => { if (el) { inputs.current[r.id] = el; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }} value={n.label || ''} rows={1}
-                    onChange={e => { if (e.target.value !== '') freshEmptyRef.current.delete(r.id); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target) }} onFocus={() => selectRow(r.id)}
+                    onChange={e => { if (e.target.value !== '') freshEmptyRef.current.delete(r.id); committedRef.current.delete(r.id); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChangeLabel(r.id, e.target.value, e.target.selectionStart, e.target) }} onFocus={() => selectRow(r.id)}
                     onBlur={e => {
                       const empty = e.target.value.trim() === '' && !r.hasChildren
                       if (!empty) { freshEmptyRef.current.delete(r.id); return }
