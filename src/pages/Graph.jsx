@@ -799,19 +799,29 @@ const ctrlBtn = { width: 28, height: 28, borderRadius: 7, border: '1px solid #2d
 // it after a short delay (standard cascading-menu behavior). The panel flips to the left near the screen edge.
 function MenuFlyout({ icon, label, children, minWidth = 168 }) {
   const [open, setOpen] = useState(false)
-  const [flip, setFlip] = useState(false)
+  const [pos, setPos] = useState(null)   // { left, top } in viewport (fixed) coords
+  const rowRef = useRef(null)
   const flyRef = useRef(null)
   const timer = useRef(null)
   const enter = () => { clearTimeout(timer.current); setOpen(true) }
   const leave = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setOpen(false), 260) }
+  // Position the submenu with `position: fixed` off the row's rect so it escapes any
+  // ancestor with `overflow` clipping (e.g. a scrollable menu) instead of being cut off.
   useLayoutEffect(() => {
-    if (!open || !flyRef.current) return
-    const r = flyRef.current.getBoundingClientRect()
-    setFlip(r.right > window.innerWidth - 8)
-  }, [open])
+    if (!open || !rowRef.current) { setPos(null); return }
+    const rr = rowRef.current.getBoundingClientRect()
+    const fr = flyRef.current?.getBoundingClientRect()
+    const fw = fr?.width || minWidth
+    const fh = fr?.height || 0
+    const flip = rr.right + fw + 6 > window.innerWidth - 8
+    const left = flip ? Math.max(8, rr.left - fw - 3) : rr.right + 3
+    let top = rr.top - 5
+    if (fh && top + fh > window.innerHeight - 8) top = Math.max(8, window.innerHeight - 8 - fh)
+    setPos({ left, top })
+  }, [open]) // eslint-disable-line
   useEffect(() => () => clearTimeout(timer.current), [])
   return (
-    <div style={{ position: 'relative' }} onMouseEnter={enter} onMouseLeave={leave}>
+    <div ref={rowRef} style={{ position: 'relative' }} onMouseEnter={enter} onMouseLeave={leave}>
       <div style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16, background: open ? '#23234a' : 'transparent' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           {icon && <span style={{ width: 16, textAlign: 'center', fontSize: '0.88rem', opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
@@ -821,8 +831,9 @@ function MenuFlyout({ icon, label, children, minWidth = 168 }) {
       </div>
       {open && (
         <div ref={flyRef} onMouseEnter={enter} onMouseLeave={leave}
-          style={{ position: 'absolute', top: -5, [flip ? 'right' : 'left']: '100%', [flip ? 'marginRight' : 'marginLeft']: 3, zIndex: 40,
-            background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth }}>
+          style={{ position: 'fixed', left: pos ? pos.left : -9999, top: pos ? pos.top : -9999,
+            visibility: pos ? 'visible' : 'hidden', zIndex: 60,
+            background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth, maxHeight: '80vh', overflowY: 'auto', overflowX: 'hidden' }}>
           {children}
         </div>
       )}
@@ -5801,7 +5812,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <>
               <div onMouseDown={close} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div data-graphmenu onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
-                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto' }}>
+                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto', overflowX: 'hidden' }}>
                 <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
                 {(
                   <>
