@@ -5547,6 +5547,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     mediaPlay={mediaPlay}
                     onToggleMedia={prop => setNodeMeta(n.id, { [prop]: !meta[prop] })}
                     onEditVideo={() => setVideoEdit({ kind: 'media', id: n.id })}
+                    onMediaTitle={() => { const next = prompt('Title', storeNodeById[n.id]?.label || m.title || ''); if (next !== null) updateLabel(n.id, next.trim()) }}
                     onMouseDown={handleMediaNodeMouseDown} />
                 </g>
               )
@@ -6642,17 +6643,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {videoEdit && (() => {
         const T = zoomTransformRef.current, rect = svgRef.current?.getBoundingClientRect()
         let video = null, onPatch = null, anchor = null
+        let onPatchPoster = null
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
           if (!img || img.videoKind !== 'youtube') return null
-          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop }
+          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster }
           onPatch = patch => updateImage(videoEdit.id, patch)
+          onPatchPoster = url => updateImage(videoEdit.id, { poster: url })
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
         } else {
           const node = storeNodes.find(n => n.id === videoEdit.id)
           const m = node?.media; if (!m || m.videoKind !== 'youtube') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop }
+          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster }
+          onPatchPoster = url => updateNodeMedia(videoEdit.id, { poster: url })
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
             const mp = {}, dp = {}
@@ -6666,6 +6670,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return (
           <YTVideoOptions video={video} anchor={anchor} onPatch={onPatch}
             onClose={() => setVideoEdit(null)}
+            onUploadPoster={() => {
+              const inp = document.createElement('input')
+              inp.type = 'file'; inp.accept = 'image/*'
+              inp.onchange = () => {
+                const f = inp.files?.[0]; if (!f) return
+                const reader = new FileReader()
+                reader.onload = () => {
+                  onPatchPoster?.(reader.result)   // instant local preview
+                  uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) onPatchPoster?.(url) })
+                }
+                reader.readAsDataURL(f)
+              }
+              inp.click()
+            }}
+            onResetPoster={() => onPatchPoster?.(null)}
             onPlayFullscreen={() => setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true, speed: video.speed || 1, captions: video.captions === true })} />
         )
       })()}
@@ -8687,6 +8706,14 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   // YouTube iframe otherwise swallows the scroll wheel so the canvas can't zoom over it (Miro-style).
   const [videoActive, setVideoActive] = useState(false)
   useEffect(() => { if (!isSelected) setVideoActive(false) }, [isSelected])
+  // YouTube videos show a clean, user-pickable POSTER frame (no YouTube chrome) until played — we
+  // only mount the iframe on demand. `playing` is set by the play button / double-click / autoplay.
+  const isYT = isVideo && img.videoKind === 'youtube'
+  const [playing, setPlaying] = useState(false)
+  useEffect(() => { if (!isSelected && !mediaPlay) setPlaying(false) }, [isSelected, mediaPlay])
+  const ytPoster = isYT && img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : null
+  const posterSrc = (isVideo && img.poster) || ytPoster
+  const ytPosterMode = isYT && !(playing || mediaPlay)   // poster shown; iframe not yet mounted
   const isLink = img.type === 'link'
   // Audio autoplay: when a card is flagged for zoom/slide autoplay, the parent's `audioPlay` signal
   // drives play/pause. Manual native controls still work when neither flag is on.
@@ -8804,13 +8831,32 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             </div>
           </a>
         </foreignObject>
+      ) : (isVideo && ytPosterMode) ? (
+        // YouTube poster frame — our OWN image (default: the video thumbnail; overridable via the
+        // edit dialog), with a play button + title bar drawn by us. No YouTube iframe is mounted yet,
+        // so there is zero YouTube chrome. It's pass-through, so the canvas pans/zooms over it; the
+        // play button (SVG, below) and double-click both mount the player.
+        <>
+          {posterSrc
+            ? <image href={posterSrc} x={-hw} y={-hh} width={width} height={height} preserveAspectRatio="xMidYMid slice"
+                style={{ pointerEvents: 'none' }} onError={e => { e.currentTarget.style.display = 'none' }} />
+            : <rect x={-hw} y={-hh} width={width} height={height} rx={4} fill="#0b0b18" style={{ pointerEvents: 'none' }} />}
+          {/* Title bar across the top of the poster — editable (double-click). */}
+          {(img.title || isSelected) && (
+            <g onMouseDown={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onMediaTitle?.() }} style={{ cursor: onMediaTitle ? 'text' : 'default' }}>
+              <rect x={-hw} y={-hh} width={width} height={22} fill="rgba(8,8,20,0.62)" />
+              <text x={-hw + 8} y={-hh + 15} fontSize={11.5} fill="#eef1ff" style={{ userSelect: 'none' }}>
+                {(() => { const t = img.title || 'Untitled video'; const max = Math.max(6, Math.floor((width - 20) / 6.6)); return t.length > max ? t.slice(0, max - 1) + '…' : t })()}
+              </text>
+            </g>
+          )}
+        </>
       ) : isVideo ? (
-        // Video body. The player captures events (so you can scrub/click controls) ONLY once activated;
-        // until then it's pass-through so canvas pan/zoom work over it (a YouTube iframe would otherwise
-        // eat the scroll wheel). Activate with the ▶ button when selected.
+        // Player mounted (played, autoplaying, or a file video). Captures events (so you can scrub /
+        // click controls) once activated; file videos stay pass-through until armed with videoActive.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
-          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && videoActive) ? 'auto' : 'none' }}>
-            <VideoEmbed img={img} play={mediaPlay} />
+          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && (isYT || videoActive)) ? 'auto' : 'none' }}>
+            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay} />
           </div>
         </foreignObject>
       ) : isAudio ? (
@@ -8854,13 +8900,25 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           which otherwise lets clicks (incl. ctrl-click to multi-select) fall through instead of hitting
           the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
           while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
-      {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected) || (isAudio && !isSelected)) && (
+      {((isVideo && (isYT ? ytPosterMode : !(isSelected && videoActive))) || (isLink && !isSelected) || (isAudio && !isSelected)) && (
         <rect x={-hw} y={-hh} width={width} height={height} fill="transparent"
-          onDoubleClick={isVideo ? (e => { e.stopPropagation(); setVideoActive(true) }) : undefined}
+          onDoubleClick={isVideo ? (e => { e.stopPropagation(); if (isYT) setPlaying(true); else setVideoActive(true) }) : undefined}
           style={{ cursor: 'move' }}>
-          {isVideo && <title>{img.title ? `${img.title} — double-click to play/pause` : 'Double-click to play/pause'}</title>}
+          {isVideo && <title>{img.title ? `${img.title} — double-click to play` : 'Double-click to play'}</title>}
         </rect>
       )}
+
+      {/* Play button on the YouTube poster — always visible so an unselected poster reads as a video.
+          Clicking it mounts the player (a real user gesture, so it plays with sound). */}
+      {isVideo && ytPosterMode && (() => {
+        const R = Math.max(15, Math.min(30, Math.min(cw, ch) * 0.16))
+        return (
+          <g onMouseDown={e => { e.stopPropagation(); setPlaying(true) }} style={{ cursor: 'pointer' }}>
+            <circle cx={0} cy={0} r={R} fill="rgba(8,8,20,0.55)" stroke="#fff" strokeWidth={1.6} />
+            <path d={`M ${-R * 0.32} ${-R * 0.5} L ${-R * 0.32} ${R * 0.5} L ${R * 0.6} 0 Z`} fill="#fff" />
+          </g>
+        )
+      })()}
 
       {/* Caption — editable text beneath the photo (any non-link media). Always visible when set;
           a "＋ caption" hint shows when selected and empty. Click it (or double-click the photo) to edit. */}
@@ -8888,8 +8946,8 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
-        {/* Video name caption (so you can tell which clip it is) — shown below the box when selected. */}
-        {isVideo && img.title && (
+        {/* Video name caption (file videos only — YouTube shows an editable title bar on the poster). */}
+        {isVideo && img.title && !isYT && (
           <text x={0} y={hh + 14} textAnchor="middle" fontSize={11} fill="#c5d0ff"
             style={{ userSelect: 'none', pointerEvents: 'none' }}>
             {img.title.length > 40 ? img.title.slice(0, 40) + '…' : img.title}
@@ -8902,8 +8960,9 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             <IconGlyph name="link" size={12} color="#9fb0e8" />
           </g>
         )}
-        {/* Video/Link/Audio: a top drag-bar to move it (the body's pointer events belong to the player/link) */}
-        {(isVideo || isLink || isAudio) && (
+        {/* Top drag-bar to move it (the body's pointer events belong to the player/link). Not needed on
+            a YouTube poster — the whole poster is pass-through, so dragging anywhere moves the node. */}
+        {((isVideo && !ytPosterMode) || isLink || isAudio) && (
           <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
             <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
@@ -8936,14 +8995,21 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         {/* Video: the body pans/zooms with the canvas until you "arm" the player. Double-clicking the
             video activates it (handled on the hit rect); when idle we show only a low-key play glyph so
             it isn't a big clunky button. Once active, a small ✕ (top-right) releases it to the canvas. */}
-        {isVideo && !videoActive && (
+        {isVideo && !isYT && !videoActive && (
           <g transform={`translate(0,${vB - 16})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
             <rect x={-52} y={-9} width={104} height={18} rx={9} fill="#0c0c1acc" />
             <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9.5} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ double-click to play/pause</text>
           </g>
         )}
-        {isVideo && videoActive && (
+        {isVideo && !isYT && videoActive && (
           <g transform={`translate(${vR - 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(false) }} style={{ cursor: 'pointer' }}>
+            <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
+            <IconGlyph name="close" size={13} color="#c5d0ff" />
+          </g>
+        )}
+        {/* YouTube playing → a ✕ to return to the clean poster frame. */}
+        {isVideo && isYT && !ytPosterMode && (
+          <g transform={`translate(${vR - 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setPlaying(false) }} style={{ cursor: 'pointer' }}>
             <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
             <IconGlyph name="close" size={13} color="#c5d0ff" />
           </g>

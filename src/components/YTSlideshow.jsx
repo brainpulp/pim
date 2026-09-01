@@ -506,7 +506,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 }
 
 // ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
-export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen }) {
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster }) {
   const [dur, setDur] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const handleRef = useRef(null)
@@ -566,6 +566,42 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
             </select>
           </div>
         )}
+        {/* Poster frame — the still shown on the canvas before playing (clean, no YouTube chrome).
+            YouTube auto-generates real frames of the video: a cover frame plus three stills sampled
+            across it (~25/50/75%). Pick one, or upload your own. (An embed is cross-origin, so an
+            arbitrary frame at an exact time can't be captured — these are the frames YouTube exposes.) */}
+        {yt && onUploadPoster && (() => {
+          const frames = [
+            { url: `https://img.youtube.com/vi/${yt}/hqdefault.jpg`, label: 'Cover' },
+            { url: `https://img.youtube.com/vi/${yt}/1.jpg`, label: '¼' },
+            { url: `https://img.youtube.com/vi/${yt}/2.jpg`, label: '½' },
+            { url: `https://img.youtube.com/vi/${yt}/3.jpg`, label: '¾' },
+          ]
+          const current = video.poster || `https://img.youtube.com/vi/${yt}/hqdefault.jpg`
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 11.5, color: '#8fa0d8' }}>Poster frame {video.poster ? '(custom)' : '(from the video)'}</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {frames.map(f => {
+                  const sel = current === f.url
+                  return (
+                    <button key={f.url} onClick={() => onResetPoster ? (f.label === 'Cover' ? onResetPoster() : onPatch({ poster: f.url })) : onPatch({ poster: f.url })}
+                      title={`Use the ${f.label} frame`}
+                      style={{ position: 'relative', flex: 1, aspectRatio: '16 / 9', borderRadius: 5, overflow: 'hidden', cursor: 'pointer', padding: 0,
+                        border: sel ? '2px solid #5b6af0' : '1px solid #23234a',
+                        background: `#0e0e1c center/cover no-repeat url("${f.url}")` }}>
+                      <span style={{ position: 'absolute', left: 3, bottom: 2, fontSize: 9.5, color: '#eef1ff', background: 'rgba(8,8,20,0.6)', borderRadius: 3, padding: '0 3px' }}>{f.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={onUploadPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Upload image…</button>
+                {video.poster && <button onClick={onResetPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Reset to cover</button>}
+              </div>
+            </div>
+          )
+        })()}
         {/* Toggles */}
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.autoplayOnZoom} onChange={e => onPatch({ autoplayOnZoom: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Autoplay on zoom / arrow-nav</label>
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.autoplayOnSlide} onChange={e => onPatch({ autoplayOnSlide: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Autoplay on slide</label>
