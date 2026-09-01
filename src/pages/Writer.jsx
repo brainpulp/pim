@@ -346,6 +346,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   }
   const onKey = (e, id) => {
     const el = e.currentTarget
+    e.stopPropagation()   // outliner edits must never bubble to the canvas keyboard handler
     // Enter rules: plain Enter = new item (empty ones auto-discard on blur); Shift+Enter = line break;
     // Ctrl/Cmd+Enter = new item too (kept via the keymap below).
     if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
@@ -773,8 +774,9 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                       {isTask && <span style={{ ...ctl, width: 18 }}><input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} /></span>}
                     </>)
                   })()}
-                  {/* media node marker (video/image child) */}
-                  {n.media && <span title={n.media.kind === 'video' ? 'Video' : 'Image'} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{n.media.kind === 'video' ? '🎬' : '🖼️'}</span>}
+                  {/* media / slideshow node marker */}
+                  {n.media && <span title={n.media.kind === 'video' ? 'Video' : n.media.kind === 'audio' ? 'Audio' : 'Image'} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{n.media.kind === 'video' ? '🎬' : n.media.kind === 'audio' ? '🎵' : '🖼️'}</span>}
+                  {n.ytss && <span title="Slideshow" style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>📺</span>}
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
                   <textarea ref={el => { if (el) { inputs.current[r.id] = el; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }} value={n.label || ''} rows={1}

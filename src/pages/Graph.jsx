@@ -1584,6 +1584,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const lbl = (n.label || '').trim().toLowerCase()
         if (lbl === '' || lbl === 'video') fetchTitle('node:' + n.id, n.media.youtubeId, t => updateLabel(n.id, t))
       }
+      // Retire the old default slideshow name so it doesn't read "YouTube slideshow" in the outliner.
+      if (n.ytss && (n.label || '').trim() === 'YouTube slideshow') updateLabel(n.id, '')
       // YouTube-slideshow clips: backfill each clip's real title (shown in the inspector list).
       if (n.ytss?.clips?.length) {
         n.ytss.clips.forEach(cl => {

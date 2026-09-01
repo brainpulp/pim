@@ -1222,7 +1222,7 @@ const useGraphStore = create((set, get) => ({
   addYtssNode: (x = null, y = null) => {
     const id = uid()
     set(s => ({
-      nodes: [...s.nodes, { id, label: 'YouTube slideshow', notes: '', ytss: { clips: [] } }],
+      nodes: [...s.nodes, { id, label: '', notes: '', ytss: { clips: [] } }],
       views: s.views.map(v => v.id !== s.activeViewId ? v : {
         ...v, nodeProps: { ...v.nodeProps, [id]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
       }),
