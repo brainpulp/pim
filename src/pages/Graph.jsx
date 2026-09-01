@@ -8614,6 +8614,29 @@ function VideoEmbed({ img, play }) {
     return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [speed, img.videoKind, img.youtubeId, img.autoplay, img.muted, img.loop, img.controls, img.hideRelated, img.start, img.end])
 
+  // Watchdog for a trimmed END: YouTube's own `end` param only fires from the start of playback (scrub
+  // past it and it won't stop). Listen to the player's currentTime stream and enforce the end ourselves —
+  // pause there, or loop back to the start.
+  useEffect(() => {
+    if (img.videoKind !== 'youtube') return
+    const endT = (img.end && img.end > (img.start || 0)) ? img.end : 0
+    if (!endT) return
+    const f = ref.current; if (!f) return
+    const post = (msg) => { try { f.contentWindow?.postMessage(JSON.stringify(msg), '*') } catch { /* ignore */ } }
+    const t = setTimeout(() => post({ event: 'listening', id: 1, channel: 'widget' }), 800)   // start the state stream
+    const onMsg = (e) => {
+      if (e.source !== f.contentWindow) return
+      let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
+      if (d?.event !== 'infoDelivery' || !d.info || typeof d.info.currentTime !== 'number') return
+      if (d.info.currentTime >= endT - 0.25) {
+        if (img.loop) { post({ event: 'command', func: 'seekTo', args: [img.start || 0, true] }); post({ event: 'command', func: 'playVideo', args: [] }) }
+        else post({ event: 'command', func: 'pauseVideo', args: [] })
+      }
+    }
+    window.addEventListener('message', onMsg)
+    return () => { clearTimeout(t); window.removeEventListener('message', onMsg) }
+  }, [img.videoKind, img.youtubeId, img.start, img.end, img.loop])
+
   if (img.videoKind === 'youtube') {
     return <iframe ref={ref} src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
