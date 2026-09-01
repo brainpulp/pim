@@ -9265,6 +9265,19 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
     }
   }, [editing])
 
+  // Click anywhere outside the edit box → commit. Some targets (other nodes, SVG
+  // elements) don't blur the textarea on click, so drive the commit from a
+  // document-level mousedown and let the textarea's own onBlur do the work.
+  useEffect(() => {
+    if (!editing) return
+    const onDocDown = e => {
+      const el = inputRef.current
+      if (el && !el.contains(e.target)) el.blur()
+    }
+    document.addEventListener('mousedown', onDocDown, true)
+    return () => document.removeEventListener('mousedown', onDocDown, true)
+  }, [editing])
+
   const commitEdit = () => { onLabelChange(node.id, draft.trim() || 'New node'); setEditing(false) }
 
   const isAnchored = node.fx != null
@@ -9792,26 +9805,41 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         </foreignObject>
       )}
 
-      {/* Edit input — for 3D nodes render at caption position below box (inside box is covered by 3D div) */}
+      {/* Edit affordance — draws the node's REAL shape as an accent ring (unless the
+          selection ring is already showing) so editing reads as "editing this shape",
+          not an arbitrary rounded patch. 3D nodes edit their caption below the box. */}
+      {editing && shape !== '3d' && !isSelected && (
+        shape === 'none'
+          ? <rect x={-(bodyHalfW+4)} y={-(bodyHalfH+4)} width={(bodyHalfW+4)*2} height={(bodyHalfH+4)*2} rx={4} fill="none" stroke="#5b6af0" strokeWidth={2} strokeDasharray="5,3" />
+          : <ShapeBody shape={shape} halfW={bodyHalfW + 4} halfH={bodyHalfH + 4} r={bodyR + 4} fill="none" stroke="#5b6af0" strokeWidth={2.5} />
+      )}
+
+      {/* Edit input — transparent so the node's real shape/fill shows through; sits in the
+          same inscribed area the label uses, so text lands where it reads. 3D nodes edit
+          their caption below the box (the box itself is covered by the live 3D canvas). */}
       {editing && (() => {
-        const foX = -halfW
-        const foY = shape === '3d' ? halfH + 2 : -halfH
-        const foW = halfW * 2
-        const foH = shape === '3d' ? 26 : halfH * 2
+        const is3D = shape === '3d'
+        const foX = is3D ? -halfW : -labelHalfW
+        const foY = is3D ? halfH + 2 : -labelHalfH
+        const foW = is3D ? halfW * 2 : labelHalfW * 2
+        const foH = is3D ? 26 : labelHalfH * 2
+        const textColor = viewProps.textColor || '#fff'
         return (
           <foreignObject x={foX} y={foY} width={foW} height={foH}
             onMouseDown={e => e.stopPropagation()}>
-            <textarea ref={inputRef} value={draft} autoFocus
-              onChange={e => setDraft(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitEdit() }
-                if (e.key === 'Enter' && e.shiftKey) { e.stopPropagation() }
-                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
-                if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(); onTab?.(node.id) }
-              }}
-              style={{ width:'100%', height:'100%', background:'#1e1e3a', border:'none', outline:'1px solid #5b6af0', borderRadius:4, color:'#fff', textAlign:'center', fontSize: fontSize-1, padding:'2px 4px', boxSizing:'border-box', resize:'none', fontFamily:'inherit', overflow:'hidden' }}
-            ></textarea>
+            <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box' }}>
+              <textarea ref={inputRef} value={draft} autoFocus
+                onChange={e => setDraft(e.target.value)}
+                onBlur={commitEdit}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitEdit() }
+                  if (e.key === 'Enter' && e.shiftKey) { e.stopPropagation() }
+                  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
+                  if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(); onTab?.(node.id) }
+                }}
+                style={{ width:'100%', height:'100%', background: is3D ? '#1e1e3a' : 'transparent', border:'none', outline: is3D ? '1px solid #5b6af0' : 'none', borderRadius:4, color: is3D ? '#fff' : textColor, textAlign:'center', fontSize: fontSize-1, lineHeight:1.15, padding:'0 2px', boxSizing:'border-box', resize:'none', fontFamily:'inherit', overflow:'hidden', caretColor: is3D ? '#fff' : textColor }}
+              ></textarea>
+            </div>
           </foreignObject>
         )
       })()}
