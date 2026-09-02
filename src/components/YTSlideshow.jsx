@@ -262,35 +262,90 @@ export function SlidePlayer({ clip, autoplay = false, muted = false, captions = 
 // ── Dual-handle trim slider ───────────────────────────────────────────────────
 // onChange(start, end, which) — `which` is 'start' | 'end', so the caller can scrub the preview to
 // whichever edge is being moved.
-function TrimSlider({ start, end, max, onChange }) {
+const trimBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '1px 7px', cursor: 'pointer', fontSize: 10.5, whiteSpace: 'nowrap' }
+// Trim slider with a ZOOMABLE timeline (so a 1-min clip is placeable inside a 1-hour video), plus live
+// preview callbacks: onScrub(time, which) fires while dragging (parent seeks a paused frame there);
+// onLoop(start, end) fires on release (parent plays the trimmed selection on a loop).
+function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
   const trackRef = useRef(null)
-  // Keep the live values in a ref so an in-flight drag never reads a stale closure (which made the
-  // OTHER handle jump on re-render / when the duration poll changed `max` mid-interaction).
-  const stateRef = useRef({ start, end, max })
-  stateRef.current = { start, end, max }
+  const [win, setWin] = useState(null)   // [w0,w1] visible time window, or null = whole video
+  const stateRef = useRef({ start, end, max, win })
+  stateRef.current = { start, end, max, win }
+  const M = Math.max(max || 1, 1)
+  const clampWin = (a, b) => { a = Math.max(0, a); b = Math.min(M, b); if (b - a < 1) { if (a > 0) a = b - 1; else b = a + 1 } return [a, b] }
+  const w0 = win ? Math.max(0, Math.min(win[0], M - 1)) : 0
+  const w1 = win ? Math.max(w0 + 1, Math.min(win[1], M)) : M
+  const span = Math.max(1, w1 - w0)
+  const zoomed = w0 > 0 || w1 < M
+
   const drag = (which) => (e) => {
     e.preventDefault(); e.stopPropagation()
-    const frozenMax = stateRef.current.max || 1   // freeze the scale for the whole drag
+    let edgeTimer = null
+    const clearEdge = () => { if (edgeTimer) { clearInterval(edgeTimer); edgeTimer = null } }
+    const apply = (t) => {
+      const { start: cs, end: ce } = stateRef.current
+      const eNow = ce || M
+      if (which === 'start') { const nv = Math.max(0, Math.min(Math.round(t), eNow - 1)); onChange(nv, ce, 'start'); onScrub?.(nv, 'start') }
+      else { const nv = Math.min(M, Math.max(Math.round(t), (cs || 0) + 1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
+    }
     const move = (ev) => {
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const t = Math.round(frac * frozenMax)
-      const { start: cs, end: ce } = stateRef.current   // always the current other-edge value
-      if (which === 'start') onChange(Math.min(t, (ce || frozenMax) - 1), ce, 'start')
-      else onChange(cs, Math.max(t, (cs || 0) + 1), 'end')
+      const c = stateRef.current.win
+      const cw0 = c ? c[0] : 0, cw1 = c ? c[1] : M, cspan = Math.max(1, cw1 - cw0)
+      clearEdge()
+      // Push a handle hard against its edge to zoom the timeline back OUT toward that end.
+      if (which === 'start' && frac <= 0.03 && cw0 > 0) {
+        edgeTimer = setInterval(() => {
+          const cc = stateRef.current.win; const a = cc ? cc[0] : 0, b = cc ? cc[1] : M
+          if (a <= 0) { clearEdge(); return }
+          const nw = clampWin(a - Math.max(1, (b - a) * 0.2), b); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw); apply(nw[0])
+        }, 140)
+      } else if (which === 'end' && frac >= 0.97 && cw1 < M) {
+        edgeTimer = setInterval(() => {
+          const cc = stateRef.current.win; const a = cc ? cc[0] : 0, b = cc ? cc[1] : M
+          if (b >= M) { clearEdge(); return }
+          const nw = clampWin(a, b + Math.max(1, (b - a) * 0.2)); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw); apply(nw[1])
+        }, 140)
+      }
+      apply(cw0 + frac * cspan)
     }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+    const up = () => {
+      clearEdge()
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      const { start: cs, end: ce, win: cwin } = stateRef.current
+      const eNow = ce || M
+      const a = cwin ? cwin[0] : 0, b = cwin ? cwin[1] : M
+      const selLen = Math.max(0, eNow - cs)
+      // Auto-zoom-in: released with a selection filling less than a third of the window → fit to it.
+      if (selLen > 0 && selLen < (b - a) * 0.3) { const pad = Math.max(1, selLen * 0.4); const nw = clampWin(cs - pad, eNow + pad); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw) }
+      onLoop?.(cs, eNow)
+    }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
-  const sPct = max ? (start / max) * 100 : 0
-  const ePct = max ? ((end || max) / max) * 100 : 100
+
+  const fitToSelection = () => { const eNow = end || M; const selLen = Math.max(1, eNow - start); const pad = Math.max(1, selLen * 0.4); const nw = clampWin(start - pad, eNow + pad); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw) }
+  const pct = (t) => Math.max(0, Math.min(1, (t - w0) / span)) * 100
+  const sPct = pct(start), ePct = pct(end || M)
   return (
-    <div ref={trackRef} style={{ position: 'relative', height: 26, margin: '4px 8px' }}>
-      <div style={{ position: 'absolute', top: 11, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
-      <div style={{ position: 'absolute', top: 11, left: `${sPct}%`, width: `${ePct - sPct}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
-      {[['start', sPct], ['end', ePct]].map(([w, pct]) => (
-        <div key={w} onMouseDown={drag(w)} style={{ position: 'absolute', top: 3, left: `calc(${pct}% - 7px)`, width: 14, height: 20, borderRadius: 4, background: '#c5d0ff', border: '1px solid #5b6af0', cursor: 'ew-resize' }} />
-      ))}
+    <div style={{ margin: '2px 8px' }}>
+      <div ref={trackRef} style={{ position: 'relative', height: 24 }}>
+        <div style={{ position: 'absolute', top: 10, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
+        {/* faint edge cues when zoomed — push a handle here to zoom back out */}
+        {w0 > 0 && <div style={{ position: 'absolute', top: 7, left: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
+        {w1 < M && <div style={{ position: 'absolute', top: 7, right: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
+        <div style={{ position: 'absolute', top: 10, left: `${sPct}%`, width: `${Math.max(0, ePct - sPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
+        {[['start', sPct], ['end', ePct]].map(([w, p]) => (
+          <div key={w} onMouseDown={drag(w)} style={{ position: 'absolute', top: 2, left: `calc(${p}% - 7px)`, width: 14, height: 20, borderRadius: 4, background: '#c5d0ff', border: '1px solid #5b6af0', cursor: 'ew-resize' }} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, color: '#8fa0d8', marginTop: 2 }}>
+        <span>{fmtTime(start)}–{fmtTime(end || M)}</span>
+        {zoomed && <span style={{ color: '#7080a0' }}>· {fmtTime(w0)}–{fmtTime(w1)}</span>}
+        <span style={{ flex: 1 }} />
+        <button onMouseDown={e => e.stopPropagation()} onClick={fitToSelection} style={trimBtn} title="Zoom the timeline in to the selection for fine control">⤢ Fit</button>
+        {zoomed && <button onMouseDown={e => e.stopPropagation()} onClick={() => setWin(null)} style={trimBtn} title="Zoom the timeline out to the whole video">⤡ Full</button>}
+      </div>
     </div>
   )
 }
@@ -321,13 +376,16 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   const [previewPlaying, setPreviewPlaying] = useState(true)
   const endLoopRef = useRef(null)
   const clearEndLoop = () => { if (endLoopRef.current) { clearInterval(endLoopRef.current); endLoopRef.current = null } }
-  // Preview the END edge: jump to the last ~2s and keep looping there so you can see exactly where it ends.
-  const loopEnd = (e) => {
+  // While dragging a handle: show a paused frame at that exact time (frame-accurate, precise for long clips).
+  const scrubTo = (t) => { clearEndLoop(); preview?.seek?.(t); preview?.pause?.(); setPreviewPlaying(false) }
+  // On release: play the trimmed selection on a loop so you keep seeing exactly what you picked.
+  const loopSel = (s, e) => {
     clearEndLoop()
-    const lo = Math.max(cur?.start || 0, e - 2)
-    preview?.seek?.(lo); preview?.play?.(); setPreviewPlaying(true)
-    endLoopRef.current = setInterval(() => { const t = preview?.time?.() || 0; if (t >= e - 0.12 || t < lo - 0.4) preview?.seek?.(lo) }, 200)
+    const hi = (e && e > s) ? e : (stateMax())
+    preview?.seek?.(s); preview?.play?.(); setPreviewPlaying(true)
+    endLoopRef.current = setInterval(() => { const t = preview?.time?.() || 0; if (t >= hi - 0.12 || t < s - 0.4) preview?.seek?.(s) }, 180)
   }
+  const stateMax = () => Math.max(dur || 0, cur?.end || 0, 30)
 
   useEffect(() => {
     setDur(0); clearEndLoop(); setPreviewPlaying(true)
@@ -339,12 +397,8 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   }, [cur?.id]) // eslint-disable-line
   useEffect(() => () => clearEndLoop(), [])
 
-  // Trim edits scrub the preview: START restarts play from there; END loops the last ~2s so you can see it.
-  const onTrim = (s, e, which) => {
-    patch(sel, { start: s, end: e >= max ? 0 : e })
-    if (which === 'start') { clearEndLoop(); preview?.seek?.(s); preview?.play?.(); setPreviewPlaying(true) }
-    else loopEnd(Math.min(e, max))
-  }
+  // Trim edits persist immediately (the scrub/loop preview is driven by the slider's onScrub/onLoop).
+  const onTrimChange = (s, e) => { patch(sel, { start: s, end: e >= max ? 0 : e }) }
   const togglePreview = () => {
     clearEndLoop()
     if (previewPlaying) { preview?.pause?.(); setPreviewPlaying(false) }
@@ -406,7 +460,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         return (
         <div style={{ padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
           {timed && <>
-            <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} onChange={onTrim} />
+            <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 2 }}>
               <span>Start</span>
               <input style={inp} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
@@ -510,7 +564,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 }
 
 // ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
-export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrub, getDuration }) {
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, getDuration }) {
   const [dur, setDur] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const yt = video.youtubeId
@@ -553,7 +607,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         </div>
         {/* Trim */}
         {yt && <>
-          <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e, which) => { onPatch({ start: s, end: e >= max ? 0 : e }); onScrub?.(s, e, which) }} />
+          <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })} onScrub={onScrubTime} onLoop={onLoopSel} />
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Start</span>
             <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + yt + (video.start || 0)} onBlur={e => { const v = parseTime(e.target.value); if (v != null) onPatch({ start: v }) }} />

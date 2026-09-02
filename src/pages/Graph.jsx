@@ -2273,18 +2273,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const videoPreviewHandleRef = useRef(null)                   // live handle of the video being trim-edited (previews on its node)
   const videoEndLoopRef = useRef(null)                         // interval looping the last ~2s while dragging the END handle
   const clearVideoEndLoop = () => { if (videoEndLoopRef.current) { clearInterval(videoEndLoopRef.current); videoEndLoopRef.current = null } }
-  const setVideoPreviewHandle = useCallback(h => { videoPreviewHandleRef.current = h }, [])
-  // Trim scrubbing previews on the node: START restarts play there; END jumps to the last ~2s and loops.
-  const videoTrimScrub = useCallback((s, e, which) => {
+  const videoEditSelRef = useRef({ start: 0, end: 0 })            // current trim of the video being edited
+  // While dragging a trim handle: show a paused frame at that exact time on the node (frame-accurate).
+  const videoScrubTo = useCallback((t) => { const h = videoPreviewHandleRef.current; if (!h) return; clearVideoEndLoop(); h.seek?.(t); h.pause?.() }, [])
+  // On release (and on open): play the trimmed selection on a loop so the selection stays visible.
+  const videoLoopSel = useCallback((s, e) => {
     const h = videoPreviewHandleRef.current; if (!h) return
     clearVideoEndLoop()
-    if (which === 'start') { h.seek?.(s); h.play?.() }
-    else {
-      const lo = Math.max(s || 0, (e || 0) - 2)
-      h.seek?.(lo); h.play?.()
-      videoEndLoopRef.current = setInterval(() => { const t = h.time?.() || 0; if (t >= e - 0.12 || t < lo - 0.4) h.seek?.(lo) }, 200)
-    }
+    const lo = s || 0, hi = (e && e > lo) ? e : 0
+    h.seek?.(lo); h.play?.()
+    if (hi) videoEndLoopRef.current = setInterval(() => { const t = h.time?.() || 0; if (t >= hi - 0.12 || t < lo - 0.4) h.seek?.(lo) }, 180)
   }, [])
+  const setVideoPreviewHandle = useCallback(h => {
+    videoPreviewHandleRef.current = h
+    if (h) { const sel = videoEditSelRef.current; setTimeout(() => videoLoopSel(sel.start || 0, sel.end || 0), 350) }
+  }, [videoLoopSel])
   useEffect(() => { if (!videoEdit) { clearVideoEndLoop(); videoPreviewHandleRef.current = null } }, [videoEdit])
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
@@ -6879,10 +6882,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const sn = simNodesRef.current.find(x => x.id === videoEdit.id)
           if (sn && rect) anchor = { x: rect.left + T.x + (sn.x + (m.width || 0) / 2) * T.k + 14, y: rect.top + T.y + sn.y * T.k }
         }
+        videoEditSelRef.current = { start: video?.start || 0, end: video?.end || 0 }
         return (
           <YTVideoOptions video={video} anchor={anchor} onPatch={onPatch}
             onClose={() => setVideoEdit(null)}
-            onScrub={videoTrimScrub}
+            onScrubTime={videoScrubTo}
+            onLoopSel={videoLoopSel}
             getDuration={() => videoPreviewHandleRef.current?.duration?.() || 0}
             onUploadPoster={() => {
               const inp = document.createElement('input')
