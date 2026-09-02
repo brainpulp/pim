@@ -752,9 +752,11 @@ function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, 
 // rename, × to delete; the badge sets each stage's advance trigger (click vs timed). Editing the frame's
 // contents auto-records into the current stage (parent wires that up), so there's no Capture button.
 function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPulse,
-  onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onSetSpeed, onPlay, onStop, onNext, onExit, onRefit }) {
+  onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onSetSpeed, onPlay, onStop, onNext, onExit, onRefit,
+  onSetCam, onFrameSelectionCam, onGotoCam, onClearCam }) {
   const [editingIdx, setEditingIdx] = useState(null)
   const [advOpen, setAdvOpen] = useState(null)
+  const [camOpen, setCamOpen] = useState(null)
   const [drag, setDrag] = useState(null)   // { from, x } while dragging a marker
   const [pulse, setPulse] = useState(false)
   const stripRef = useRef(null)
@@ -818,6 +820,12 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
                   {timed ? `⏱ ${s.advance.after}s` : '▸ click'}
                 </button>
               )}
+              {/* Camera badge (every stage) — set a focus shot for this build step */}
+              <button onClick={e => { e.stopPropagation(); setCamOpen(camOpen === i ? null : i) }}
+                title={s.cam ? 'Camera set for this stage — click to edit' : 'Set a camera focus for this stage'}
+                style={{ background: s.cam ? '#171c3f' : 'transparent', border: `1px solid ${camOpen === i ? '#8ea2ff' : (s.cam ? '#5b6af0' : '#2d3a6a')}`, borderRadius: 8, padding: '1px 6px', fontSize: 9.5, lineHeight: 1.5, color: s.cam ? '#8ea2ff' : '#7c86ad', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                📷{s.cam ? '' : '+'}
+              </button>
               {/* Delete — small × above the dot */}
               {n > 1 && (
                 <button onClick={e => { e.stopPropagation(); onDelete(i) }} title="Delete stage"
@@ -855,6 +863,25 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
                 </div>
               </div>
             </>)}
+            {/* Camera popover */}
+            {camOpen === i && (<>
+              <div onMouseDown={e => { e.stopPropagation(); setCamOpen(null) }} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
+              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H + 2, left: '50%', transform: 'translateX(-50%)', zIndex: 71, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 7, width: 218, boxShadow: '0 12px 30px rgba(0,0,0,.65)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>📷 Stage {i + 1} camera</span>
+                  <button onClick={() => setCamOpen(null)} title="Close" style={{ background: 'transparent', border: 'none', color: '#8ea2ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>✕</button>
+                </div>
+                <div style={{ fontSize: 10.5, color: '#7c86ad', lineHeight: 1.4 }}>
+                  {s.cam ? 'A custom shot is set — the view moves here on this step.' : (i > 0 ? 'Inherits the previous camera. Set one to move the shot here.' : 'No camera — fits the whole frame. Set one for the opening shot.')}
+                </div>
+                <button onClick={() => onSetCam(i)} style={camBtn}>📷 Set to current view</button>
+                <button onClick={() => onFrameSelectionCam(i)} style={camBtn}>▢ Frame selected elements</button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => onGotoCam(i)} style={{ ...camBtn, flex: 1 }}>⤢ Go to</button>
+                  {s.cam && <button onClick={() => { onClearCam(i); setCamOpen(null) }} style={{ ...camBtn, flex: 1, color: '#f0a0a0', borderColor: '#5a2a3a' }}>Clear</button>}
+                </div>
+              </div>
+            </>)}
           </div>
         )
       })}
@@ -878,6 +905,7 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
   )
 }
 const ctrlBtn = { width: 28, height: 28, borderRadius: 7, border: '1px solid #2d3a6a', background: '#1a1f4a', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+const camBtn = { textAlign: 'left', fontSize: 11.5, color: '#c5d0ff', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 7, padding: '6px 9px', cursor: 'pointer' }
 
 // A cascading submenu row: hovering it opens the child panel to the side; leaving the row+panel closes
 // it after a short delay (standard cascading-menu behavior). The panel flips to the left near the screen edge.
@@ -3938,6 +3966,53 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     scheduleRender()
   }, [scheduleRender])
 
+  // ── Stage cameras ────────────────────────────────────────────────────────────────
+  // A stage camera is a world-space focus rect { cx, cy, w, h }. Fit it to the viewport (same math as
+  // zoomToFrame, pointed at a sub-region), so it survives window/viewport resizes. Animate over durMs.
+  const applyCamRect = useCallback((cam, animate = true, durMs = 340) => {
+    if (!cam || !svgRef.current || !zoomBehaviorRef.current) return
+    const svgW = svgRef.current.clientWidth, svgH = svgRef.current.clientHeight
+    const pad = 24
+    const w = Math.max(1, cam.w), h = Math.max(1, cam.h)
+    const k = Math.min((svgW - pad * 2) / w, (svgH - pad * 2) / h, 4)
+    const t = d3.zoomIdentity.translate(svgW / 2 - k * cam.cx, svgH / 2 - k * cam.cy).scale(k)
+    const sel = d3.select(svgRef.current)
+    if (animate && durMs > 0) sel.transition().duration(durMs).call(zoomBehaviorRef.current.transform, t)
+    else sel.call(zoomBehaviorRef.current.transform, t)
+    zoomTransformRef.current = t
+    setAutoHideFrames(true)
+    scheduleRender()
+  }, [scheduleRender])
+  // The world rect currently visible in the viewport — what "Set camera to current view" captures.
+  const currentViewRect = useCallback(() => {
+    if (!svgRef.current) return null
+    const svgW = svgRef.current.clientWidth, svgH = svgRef.current.clientHeight
+    const T = zoomTransformRef.current
+    const [x0, y0] = T.invert([0, 0]); const [x1, y1] = T.invert([svgW, svgH])
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) }
+  }, [])
+  // Bounding rect (world) of the currently-selected nodes, padded — for "Frame selection".
+  const selectionCamRect = useCallback(() => {
+    const ids = new Set(selectedNodeIdsRef.current)
+    if (selectedRef.current?.type === 'node') ids.add(selectedRef.current.id)
+    if (!ids.size) return null
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    ids.forEach(id => {
+      const sn = simNodesRef.current.find(n => n.id === id); if (!sn) return
+      const vp = getVP(id); const nr = NODE_R * (vp.scale || 1)
+      const { halfW, halfH } = shapeDims(vp.shape || 'circle', nr, sn.label || '', Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
+      x0 = Math.min(x0, sn.x - halfW); x1 = Math.max(x1, sn.x + halfW)
+      y0 = Math.min(y0, sn.y - halfH); y1 = Math.max(y1, sn.y + halfH)
+    })
+    if (!isFinite(x0)) return null
+    const padX = (x1 - x0) * 0.18 + 20, padY = (y1 - y0) * 0.18 + 20
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: (x1 - x0) + padX * 2, h: (y1 - y0) + padY * 2 }
+  }, [getVP])
+  // Effective camera for a stage index: the nearest camera at or before it (inheritance). null = keep
+  // the current view (fit-frame was already applied on enter/present).
+  const effectiveCam = (stages, idx) => { for (let i = Math.min(idx, stages.length - 1); i >= 0; i--) { if (stages[i]?.cam) return stages[i].cam } return null }
+  const moveCamForStage = useCallback((stages, idx, animate, durMs) => { const cam = effectiveCam(stages, idx); if (cam) applyCamRect(cam, animate, durMs) }, [applyCamRect])
+
   // â"€â"€ Node search / spotlight (Cmd/Ctrl+K or "/") â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   // Pan/zoom the canvas to center a node by id, keeping the current zoom (min 1.2x).
   const focusNode = useCallback((nodeId) => {
@@ -4093,8 +4168,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const dur = stage.dur != null ? stage.dur : 300
     if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
+    moveCamForStage(getFrameStages(frameId), idx, animate, dur > 0 ? dur : 340)
     scheduleRender()
-  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs])
+  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs, moveCamForStage])
 
   const writeStageSnap = useCallback((frameId, idx, snap) => {
     const stages = getFrameStages(frameId)
@@ -4168,6 +4244,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const stages = getFrameStages(frameId)
     setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, name } : s))
   }, [getFrameStages, setNodeViewProp])
+
+  // Per-stage camera (a world focus rect, or undefined to clear/inherit).
+  const setTimelineStageCam = useCallback((idx, cam) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId); if (!stages[idx]) return
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, cam: cam || undefined } : s))
+  }, [getFrameStages, setNodeViewProp])
+  const gotoTimelineStageCam = useCallback((idx) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const cam = effectiveCam(getFrameStages(frameId), idx)
+    if (cam) applyCamRect(cam, true, 420)
+    else { const fn = simNodesRef.current.find(n => n.id === frameId); if (fn) zoomToFrame(fn, true) }
+  }, [getFrameStages, applyCamRect, zoomToFrame])
 
   // Advance trigger: 'click' (wait for Next) or { after: seconds } (auto-play). Only used in Play mode.
   const setTimelineStageAdvance = useCallback((idx, advance) => {
@@ -5087,9 +5176,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
     setPresentingSlideIdx(idx)
     simRef.current?.stop()
-    zoomToFrame(slideSimNodes[idx])
     const stages = slideStages(idx)
     const sIdx = stages.length ? (direction === 'back' ? stages.length - 1 : 0) : 0
+    // Open on this slide's camera if it has one, else fit the whole frame.
+    const camNow = stages.length ? effectiveCam(stages, sIdx) : null
+    if (camNow) applyCamRect(camNow, true, 550); else zoomToFrame(slideSimNodes[idx])
     setPresentStage(sIdx)
     if (stages.length) setTimeout(() => applyStage(slideSimNodes[idx].id, sIdx), 60)
 
@@ -5113,6 +5204,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (next < 0) { presentSlide(cur - 1, 'back'); return }
     setPresentStage(next)
     applyStage(frame.id, next)
+    moveCamForStage(stages, next, true, stages[next]?.dur ?? 340)
   }
   const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
 
@@ -6563,6 +6655,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               stages={stages} currentIdx={timelineStageIdx} playing={timelinePlaying} recordPulse={timelineRecordPulse}
               onGoto={gotoTimelineStage} onAdd={addTimelineStage} onDelete={deleteTimelineStage}
               onRename={renameTimelineStage} onReorder={reorderTimelineStage} onSetAdvance={setTimelineStageAdvance} onSetSpeed={setTimelineStageSpeed}
+              onSetCam={(i) => { const r = currentViewRect(); if (r) setTimelineStageCam(i, r) }}
+              onFrameSelectionCam={(i) => { const r = selectionCamRect(); if (r) setTimelineStageCam(i, r); else alert('Select one or more elements on the canvas first, then use Frame selection.') }}
+              onGotoCam={gotoTimelineStageCam} onClearCam={(i) => setTimelineStageCam(i, undefined)}
               onPlay={startTimelinePlay} onStop={stopTimelinePlay} onNext={timelinePlayNext}
               onExit={exitTimeline} onRefit={() => { const fn = simNodesRef.current.find(n => n.id === timelineFrameId); if (fn) zoomToFrame(fn, true) }}
             />
