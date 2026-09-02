@@ -753,7 +753,7 @@ function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, 
 // contents auto-records into the current stage (parent wires that up), so there's no Capture button.
 function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPulse,
   onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onSetSpeed, onPlay, onStop, onNext, onExit, onRefit,
-  onSetCam, onFrameSelectionCam, onGotoCam, onClearCam }) {
+  onSetCam, onFrameSelectionCam, onGotoCam, onClearCam, onSetFade }) {
   const [editingIdx, setEditingIdx] = useState(null)
   const [advOpen, setAdvOpen] = useState(null)
   const [camOpen, setCamOpen] = useState(null)
@@ -857,6 +857,19 @@ function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPul
                       return (
                         <button key={label} onClick={() => onSetSpeed(i, ms === 340 ? undefined : ms)}
                           style={{ fontSize: 10.5, padding: '3px 7px', borderRadius: 6, cursor: 'pointer', color: on ? '#dbe4ff' : '#9fb0e8', background: on ? '#1e2547' : '#12122a', border: `1px solid ${on ? '#5b6af0' : '#2d3a6a'}` }}>{label}</button>
+                      )
+                    })}
+                  </div>
+                </div>
+                {/* Show/hide style — cut (instant) vs fade */}
+                <div style={{ borderTop: '1px solid #20233f', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>Show / hide</span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {[['Cut', false], ['Fade', true]].map(([label, val]) => {
+                      const on = !!s.fade === val
+                      return (
+                        <button key={label} onClick={() => onSetFade?.(i, val)}
+                          style={{ fontSize: 10.5, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', color: on ? '#dbe4ff' : '#9fb0e8', background: on ? '#1e2547' : '#12122a', border: `1px solid ${on ? '#5b6af0' : '#2d3a6a'}` }}>{label}</button>
                       )
                     })}
                   </div>
@@ -1120,6 +1133,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // to visibleNodeIds; stageBasePosRef remembers member positions to restore on exit.
   const [stagePreview, setStagePreview] = useState(null)
   const [stageOverlay, setStageOverlay] = useState(null)
+  const stageOverlayRef = useRef(null)
+  useEffect(() => { stageOverlayRef.current = stageOverlay }, [stageOverlay])
   const stageBasePosRef = useRef(null)
   // On-frame timeline ("builds") editor: keyframe model — the canvas shows the current stage and edits
   // auto-record into it. timelineFrameId = the frame being authored; timelineStageIdx = current stage;
@@ -3700,6 +3715,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     requestAnimationFrame(step)
   }, [scheduleRender])
 
+  // Fade nodes in/out by animating a transient `__fadeOp` on the sim node (read by NodeShape). Fade-out
+  // nodes are kept rendered by the caller during the fade; onHideDone fires when they should really hide.
+  const fadeRunRef = useRef(0)
+  const animateFadeOps = useCallback((fadeInIds, fadeOutIds, dur, onHideDone) => {
+    const run = ++fadeRunRef.current
+    const setOp = (id, v) => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) sn.__fadeOp = v }
+    fadeInIds.forEach(id => setOp(id, 0)); fadeOutIds.forEach(id => setOp(id, 1))
+    scheduleRender()
+    const t0 = performance.now(), D = Math.max(1, dur)
+    const step = () => {
+      if (run !== fadeRunRef.current) return
+      const t = Math.min(1, (performance.now() - t0) / D)
+      const e = 1 - Math.pow(1 - t, 3)
+      fadeInIds.forEach(id => setOp(id, e)); fadeOutIds.forEach(id => setOp(id, 1 - e))
+      scheduleRender()
+      if (t < 1) requestAnimationFrame(step)
+      else { fadeInIds.forEach(id => setOp(id, undefined)); fadeOutIds.forEach(id => setOp(id, undefined)); onHideDone?.(); scheduleRender() }
+    }
+    requestAnimationFrame(step)
+  }, [scheduleRender])
+  const clearFades = useCallback(() => { fadeRunRef.current++; simNodesRef.current.forEach(n => { n.__fadeOp = undefined }) }, [])
+
   const getDescendantIds = useCallback((nodeId) => {
     const desc = [], seen = new Set(), q = [nodeId]
     while (q.length) {
@@ -3871,12 +3908,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (s.fill !== undefined || s.stroke !== undefined || s.shp !== undefined) style[id] = { fill: s.fill, stroke: s.stroke, shape: s.shp }
       targets[id] = { x: s.x, y: s.y }
     })
-    setStageOverlay({ vis, collapse, scale, style })
     const dur = stage.dur != null ? stage.dur : 340
+    // Fade visibility instead of cutting (opt-in per stage). Keep fade-out nodes visible during the fade.
+    if (stage.fade && animate && dur > 0) {
+      const prevOv = stageOverlayRef.current
+      const wasVis = id => prevOv?.vis && id in prevOv.vis ? prevOv.vis[id] : (getVP(id).visible !== false)
+      const fadeIn = ids.filter(id => stage.snap[id] && stage.snap[id].v && !wasVis(id))
+      const fadeOut = ids.filter(id => stage.snap[id] && !stage.snap[id].v && wasVis(id))
+      fadeOut.forEach(id => { vis[id] = true })   // hold visible through the fade
+      setStageOverlay({ vis, collapse, scale, style })
+      animateNodesTo(Object.keys(targets), targets, dur)
+      animateFadeOps(fadeIn, fadeOut, dur, () => setStageOverlay(prev => prev ? { ...prev, vis: { ...prev.vis, ...Object.fromEntries(fadeOut.map(id => [id, false])) } } : prev))
+      scheduleRender()
+      return
+    }
+    setStageOverlay({ vis, collapse, scale, style })
     if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
     scheduleRender()
-  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender, flagShapeMorphs])
+  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender, flagShapeMorphs, animateFadeOps, getVP])
 
   const enterStagePreview = useCallback((frameId, idx = 0) => {
     if (!getFrameStages(frameId).length) return
@@ -3897,6 +3947,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const exitStagePreview = useCallback(() => {
     const bp = stageBasePosRef.current
+    clearFades()
     setStageOverlay(null)
     if (bp) {
       const ids = Object.keys(bp.pos)
@@ -3908,7 +3959,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       })
     }
     setStagePreview(null)
-  }, [animateNodesTo])
+  }, [animateNodesTo, clearFades])
 
   // Leaving the frame (deselect / select something else) ends the preview and restores the base.
   useEffect(() => {
@@ -4160,17 +4211,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // written to the store atomically, and the sim nodes glide to match. This is what makes selecting a
   // stage actually move the frame's contents, so editing = editing that stage.
   const applyStageToDoc = useCallback((frameId, idx, animate = true) => {
-    const stage = getFrameStages(frameId)[idx]; if (!stage) return
+    const stages = getFrameStages(frameId); const stage = stages[idx]; if (!stage) return
     const snap = stage.snap || {}
     flagShapeMorphs(snap)
-    applyStagePose(snap)
-    const targets = {}; Object.entries(snap).forEach(([id, s]) => { targets[id] = { x: s.x, y: s.y } })
     const dur = stage.dur != null ? stage.dur : 300
+    // Fade visibility instead of cutting (opt-in per stage). Keep fade-out nodes visible during the fade,
+    // then commit their hidden state when it finishes.
+    if (stage.fade && animate && dur > 0) {
+      const wasVis = id => getVP(id).visible !== false
+      const fadeIn = Object.keys(snap).filter(id => snap[id].v && !wasVis(id))
+      const fadeOut = Object.keys(snap).filter(id => !snap[id].v && wasVis(id))
+      const held = { ...snap }; fadeOut.forEach(id => { held[id] = { ...snap[id], v: true } })
+      applyStagePose(held)
+      animateFadeOps(fadeIn, fadeOut, dur, () => fadeOut.forEach(id => setNodeViewProp(id, 'visible', false)))
+    } else {
+      applyStagePose(snap)
+    }
+    const targets = {}; Object.entries(snap).forEach(([id, s]) => { targets[id] = { x: s.x, y: s.y } })
     if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
-    moveCamForStage(getFrameStages(frameId), idx, animate, dur > 0 ? dur : 340)
+    moveCamForStage(stages, idx, animate, dur > 0 ? dur : 340)
     scheduleRender()
-  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs, moveCamForStage])
+  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs, moveCamForStage, animateFadeOps, getVP, setNodeViewProp])
 
   const writeStageSnap = useCallback((frameId, idx, snap) => {
     const stages = getFrameStages(frameId)
@@ -4196,11 +4258,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const exitTimeline = useCallback(() => {
     if (timelinePlayTimerRef.current) { clearTimeout(timelinePlayTimerRef.current); timelinePlayTimerRef.current = null }
+    clearFades()
     setStageOverlay(null)
     stageBasePosRef.current = null
     setTimelinePlaying(false)
     setTimelineFrameId(null)
-  }, [])
+  }, [clearFades])
 
   // Go to (and edit) a stage: pose the doc to it. `record` first flushes the current arrangement into
   // the stage we're leaving, so an un-saved tweak isn't lost when jumping away quickly.
@@ -4257,6 +4320,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (cam) applyCamRect(cam, true, 420)
     else { const fn = simNodesRef.current.find(n => n.id === frameId); if (fn) zoomToFrame(fn, true) }
   }, [getFrameStages, applyCamRect, zoomToFrame])
+  // Fade (vs cut) the visibility changes when transitioning INTO this stage.
+  const setTimelineStageFade = useCallback((idx, fade) => {
+    const frameId = timelineFrameIdRef.current; if (frameId == null) return
+    const stages = getFrameStages(frameId); if (!stages[idx]) return
+    setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, fade: !!fade } : s))
+  }, [getFrameStages, setNodeViewProp])
 
   // Advance trigger: 'click' (wait for Next) or { after: seconds } (auto-play). Only used in Play mode.
   const setTimelineStageAdvance = useCallback((idx, advance) => {
@@ -5209,7 +5278,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }
   const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
 
-  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } restoreOverlayInstant(); setPresentingSlideIdx(null); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
 
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
@@ -6659,6 +6728,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetCam={(i) => { const r = currentViewRect(); if (r) setTimelineStageCam(i, r) }}
               onFrameSelectionCam={(i) => { const r = selectionCamRect(); if (r) setTimelineStageCam(i, r); else alert('Select one or more elements on the canvas first, then use Frame selection.') }}
               onGotoCam={gotoTimelineStageCam} onClearCam={(i) => setTimelineStageCam(i, undefined)}
+              onSetFade={setTimelineStageFade}
               onPlay={startTimelinePlay} onStop={stopTimelinePlay} onNext={timelinePlayNext}
               onExit={exitTimeline} onRefit={() => { const fn = simNodesRef.current.find(n => n.id === timelineFrameId); if (fn) zoomToFrame(fn, true) }}
             />
@@ -9824,6 +9894,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
   return (
     <g transform={`translate(${x},${y})`}
       data-node="true"
+      opacity={node.__fadeOp != null ? node.__fadeOp : undefined}
       onMouseDown={e => onMouseDown(e, node.id)}
       onClick={e => e.stopPropagation()}
       onDoubleClick={e => { if (!editing) { e.stopPropagation(); setDraft(node.label); setEditing(true); requestAnimationFrame(() => inputRef.current?.select()) } }}
