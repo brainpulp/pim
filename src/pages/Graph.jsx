@@ -8550,8 +8550,20 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
-  const rowHeights = rows.map(r => r.height || 26)
   const colW = c => c.width || 120
+  // Auto-grow a row to fit any wrap-enabled text column's content (estimated), never below its manual/min height.
+  const rowAutoH = (r) => {
+    let need = 26
+    for (const col of columns) {
+      if (!col.wrap || col.type !== 'text') continue
+      const val = r.cells?.[col.id]; if (val == null || val === '') continue
+      const cpl = Math.max(1, Math.floor((colW(col) - 12) / 6.6))
+      const lines = String(val).split('\n').reduce((n, ln) => n + Math.max(1, Math.ceil(ln.length / cpl)), 0)
+      need = Math.max(need, lines * 16 + 8)
+    }
+    return need
+  }
+  const rowHeights = rows.map(r => Math.max(r.height || 0, rowAutoH(r), 26))
   const W = Math.max(80, columns.reduce((a, c) => a + colW(c), 0))
   const H = colHdrH + rowHeights.reduce((a, h) => a + h, 0)
   const bg = fill && fill !== 'none' && fill !== 'transparent' ? fill : null
@@ -8691,6 +8703,10 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
                       <div key={t} style={tc.menuItem(col.type === t)} onClick={() => { onUpdateColumn(col.id, { type: t, ...(t === 'select' && !col.options ? { options: ['Option'] } : {}) }); setMenuCol(null) }}>{TYPE_LABELS[t]}</div>
                     ))}
                     {col.type === 'select' && (<><div style={{ ...tc.menuLabel, marginTop: 4 }}>Options</div><SelectOptionsEditor options={col.options || []} onChange={opts => onUpdateColumn(col.id, { options: opts })} /></>)}
+                    {col.type === 'text' && (<>
+                      <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
+                      <div style={tc.menuItem(!!col.wrap)} onClick={() => { onUpdateColumn(col.id, { wrap: !col.wrap }); setMenuCol(null) }}>{col.wrap ? '✓ ' : ''}Wrap text</div>
+                    </>)}
                     <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
                     <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(col.id); setMenuCol(null) }}>Delete column</div>
                   </div>
@@ -8703,7 +8719,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
           {rows.map((r, ri) => (
             <div key={r.id} data-trow={r.id} className="tc-row" style={{ display: 'flex', height: rowHeights[ri], position: 'relative' }}>
               {columns.map(col => (
-                <div key={col.id} style={cellBox(colW(col))}>
+                <div key={col.id} style={{ ...cellBox(colW(col)), ...(col.wrap && col.type === 'text' ? { alignItems: 'stretch', padding: '3px 5px' } : {}) }}>
                   <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} textColor={txt} />
                 </div>
               ))}
@@ -8773,6 +8789,17 @@ function TableCell({ col, value, onChange, textColor }) {
         <option value="">—</option>
         {(col.options || []).map(o => <option key={o} value={o}>{o}</option>)}
       </select>
+    )
+  }
+  if (col.type === 'text' && col.wrap) {
+    // Wrapping cell: a textarea that wraps to the column width (the row auto-grows to fit). Enter commits;
+    // Shift+Enter inserts a line break.
+    return (
+      <textarea value={draft} onMouseDown={stop} onClick={stop} rows={1}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { if ((draft ?? '') !== (value ?? '')) onChange(draft) }}
+        onKeyDown={e => { stop(e); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur() } }}
+        style={{ ...tc.cellInput, color: col2, height: '100%', resize: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '16px', overflow: 'hidden', font: 'inherit' }} />
     )
   }
   const inputType = col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'
