@@ -5674,6 +5674,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
                   onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
                   onTextChange={html => updateImage(img.id, { html })}
+                  zoomK={T.k}
                   previewing={videoEdit?.kind === 'image' && videoEdit.id === img.id}
                   onPlayerReady={setVideoPreviewHandle}
                   onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
@@ -5958,6 +5959,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     previewing={videoEdit?.kind === 'media' && videoEdit.id === n.id}
                     onPlayerReady={setVideoPreviewHandle}
                     onMediaTitle={() => { const next = prompt('Title', storeNodeById[n.id]?.label || m.title || ''); if (next !== null) updateLabel(n.id, next.trim()) }}
+                    zoomK={T.k}
                     onMouseDown={handleMediaNodeMouseDown} />
                 </g>
               )
@@ -9201,7 +9203,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
 
 // contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
 // when it changes externally (never while focused, so the caret isn't disturbed); saves on input.
-function RichTextBox({ html, editable, bgColor, borderColor, textShadow, halo, fontScale = 1, onChange }) {
+function RichTextBox({ html, editable, selected, bgColor, borderColor, textShadow, halo, fontScale = 1, valign = 'top', zoomK = 1, onChange, onResize }) {
   const ref = useRef(null)
   useEffect(() => {
     const el = ref.current; if (!el) return
@@ -9211,16 +9213,36 @@ function RichTextBox({ html, editable, bgColor, borderColor, textShadow, halo, f
   const shadows = []
   if (halo) { const c = typeof halo === 'string' ? halo : 'rgba(0,0,0,0.9)'; shadows.push(`0 0 2px ${c}`, `0 0 2px ${c}`, `0 0 5px ${c}`) }
   if (textShadow) shadows.push('2px 2px 4px rgba(0,0,0,0.55)')
+  const justify = valign === 'middle' ? 'center' : valign === 'bottom' ? 'flex-end' : 'flex-start'
+  // Handle size: constant on screen (counter-scale the canvas zoom), clamped so it stays grabbable.
+  const hz = Math.max(7, Math.min(46, 11 / (zoomK || 1)))
+  const hzHalf = hz / 2
+  const handle = (extra) => ({ position: 'absolute', background: '#fff', border: `${Math.max(1, 1.4 / (zoomK || 1))}px solid #5b6af0`, borderRadius: hz * 0.16, zIndex: 6, ...extra })
+  const edgeThick = Math.max(6, Math.min(40, 9 / (zoomK || 1)))
   return (
-    <div ref={ref} data-richtext="true" contentEditable={editable} suppressContentEditableWarning
-      onInput={() => onChange?.(ref.current?.innerHTML || '')}
-      onMouseDown={e => { if (editable) e.stopPropagation() }}
-      onKeyDown={e => e.stopPropagation()}
-      onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t) }}
-      style={{ width: '100%', height: '100%', boxSizing: 'border-box', padding: '6px 8px', outline: editable ? '1px solid #5b6af0' : 'none',
-        border: borderColor ? `1.5px solid ${borderColor}` : 'none', borderRadius: 4, background: bgColor || 'transparent',
-        color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: Math.max(6, 15 * (fontScale || 1)), lineHeight: 1.35, textShadow: shadows.join(', ') || 'none',
-        overflow: 'auto', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+    <div style={{ position: 'relative', width: '100%', height: '100%', boxSizing: 'border-box', background: bgColor || 'transparent',
+      border: borderColor ? `1.5px solid ${borderColor}` : 'none', outline: editable ? '1px solid #5b6af0' : 'none', borderRadius: 4, overflow: 'visible' }}>
+      <div ref={ref} data-richtext="true" contentEditable={editable} suppressContentEditableWarning
+        onInput={() => onChange?.(ref.current?.innerHTML || '')}
+        onMouseDown={e => { if (editable) e.stopPropagation() }}
+        onKeyDown={e => e.stopPropagation()}
+        onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t) }}
+        style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', padding: '6px 8px',
+          display: 'flex', flexDirection: 'column', justifyContent: justify,
+          color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: Math.max(6, 15 * (fontScale || 1)), lineHeight: 1.35, textShadow: shadows.join(', ') || 'none',
+          overflow: 'hidden', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+      {selected && onResize && (<>
+        {/* Right edge — reflow width only (no font change) */}
+        <div title="Drag to set width" onMouseDown={e => onResize('textwidth', e)}
+          style={{ position: 'absolute', top: 8, bottom: 8, right: -edgeThick / 2, width: edgeThick, cursor: 'ew-resize', zIndex: 5 }} />
+        {/* Bottom edge — reflow height only */}
+        <div title="Drag to set height" onMouseDown={e => onResize('textheight', e)}
+          style={{ position: 'absolute', left: 8, right: 8, bottom: -edgeThick / 2, height: edgeThick, cursor: 'ns-resize', zIndex: 5 }} />
+        {/* Bottom-right square — scale box + text together */}
+        <div title="Drag to scale box and text" onMouseDown={e => onResize('textscale', e)}
+          style={handle({ right: -hzHalf, bottom: -hzHalf, width: hz, height: hz, cursor: 'nwse-resize' })} />
+      </>)}
+    </div>
   )
 }
 
@@ -9318,11 +9340,16 @@ function TextFormatToolbar({ left, top, box, onBoxStyle }) {
       {box?.borderColor && <button style={{ ...btn, fontSize: 10, color: '#8fa0d8' }} onMouseDown={keep} title="No border" onClick={() => onBoxStyle?.({ borderColor: null })}>✕bd</button>}
       <button style={{ ...btn, background: box?.textShadow ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Drop shadow" onClick={() => onBoxStyle?.({ textShadow: !box?.textShadow })}>⌵</button>
       <button style={{ ...btn, background: box?.halo ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Halo (outline glow for legibility)" onClick={() => onBoxStyle?.({ halo: !box?.halo })}>◎</button>
+      {sep}
+      {/* Vertical alignment (whole box) */}
+      <button style={{ ...btn, background: (box?.valign || 'top') === 'top' ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Align text to top" onClick={() => onBoxStyle?.({ valign: 'top' })}>⤒</button>
+      <button style={{ ...btn, background: box?.valign === 'middle' ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Center vertically" onClick={() => onBoxStyle?.({ valign: 'middle' })}>⇔</button>
+      <button style={{ ...btn, background: box?.valign === 'bottom' ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Align text to bottom" onClick={() => onBoxStyle?.({ valign: 'bottom' })}>⤓</button>
     </div>
   )
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange, zoomK = 1 }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
@@ -9462,9 +9489,10 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // Rich text box — a contentEditable card. Editable when selected; pass-through otherwise so the
         // canvas pans/zooms over it. Content (HTML) saved on input.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
-          <RichTextBox html={img.html} editable={isSelected} bgColor={bgColor}
+          <RichTextBox html={img.html} editable={isSelected} selected={isSelected} bgColor={bgColor}
             borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo} fontScale={img.fontScale}
-            onChange={html => onTextChange?.(html)} />
+            valign={img.valign} zoomK={zoomK}
+            onChange={html => onTextChange?.(html)} onResize={(mode, e) => onMouseDown(e, id, mode)} />
         </foreignObject>
       ) : (isVideo && ytPosterMode) ? (
         // YouTube poster frame — our OWN image (default: the video thumbnail; overridable via the
@@ -9652,23 +9680,17 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             <IconGlyph name="close" size={13} color="#c5d0ff" />
           </g>
         )}
-        {/* Text box: invisible right/bottom edge strips reflow the box (cursor-only, no font change);
-            a single bottom-right square handle scales box + font together. */}
-        {isText ? (<>
-          <rect x={vR - 4} y={vT + 6} width={8} height={Math.max(0, ch - 12)} fill="transparent"
-            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'textwidth') }} style={{ cursor: 'ew-resize' }} />
-          <rect x={vL + 6} y={vB - 4} width={Math.max(0, cw - 12)} height={8} fill="transparent"
-            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'textheight') }} style={{ cursor: 'ns-resize' }} />
-          <rect x={vR - HS} y={vB - HS} {...SQ} rx={1.5}
-            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'textscale') }} style={{ cursor: 'nwse-resize' }} />
-        </>) : (
-          /* Four square corner resize handles — pivot on the opposite corner (Miro style) */
-          corners.map(([c, hx, hy, cur]) => (
-            <rect key={c} x={hx - HS} y={hy - HS} {...SQ} rx={1.5}
+        {/* Text box handles live inside the box (RichTextBox), so nothing here. Photos get corner handles,
+            sized to stay grabbable at any zoom (counter-scale the zoom, clamped). */}
+        {!isText && (() => {
+          const hzS = Math.max(4, Math.min(22, 5 / (zoomK || 1)))   // half-size in canvas units
+          return corners.map(([c, hx, hy, cur]) => (
+            <rect key={c} x={hx - hzS} y={hy - hzS} width={hzS * 2} height={hzS * 2} rx={1.5}
+              fill="#fff" stroke="#5b6af0" strokeWidth={Math.max(1, 1.5 / (zoomK || 1))}
               onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize', c) }}
               style={{ cursor: cur }} />
           ))
-        )}
+        })()}
         {/* Rotate — top-center */}
         <line x1={(vL + vR) / 2} y1={vT} x2={(vL + vR) / 2} y2={vT - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
         <g transform={`translate(${(vL + vR) / 2},${vT - 28})`}
