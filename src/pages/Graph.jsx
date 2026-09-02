@@ -9189,45 +9189,77 @@ function RichTextBox({ html, editable, bgColor, onChange }) {
   )
 }
 
-// Screen-space formatting toolbar for the selected Text element. Buttons keep the editable focused
-// (onMouseDown preventDefault) and drive document.execCommand; an 'input' event is dispatched so the box saves.
-const TEXT_FONTS = ['-apple-system, sans-serif', 'Georgia, serif', 'Times New Roman, serif', 'Courier New, monospace', 'Verdana, sans-serif', 'Comic Sans MS, cursive']
+// Screen-space formatting toolbar for the selected Text element. It tracks the last text selection inside
+// any rich-text box (opening a <select> or color picker steals focus, which would otherwise lose the
+// selection execCommand needs), then restores that range before running each command.
+const TEXT_FONTS = [
+  { label: 'System', exec: '-apple-system, BlinkMacSystemFont, sans-serif' },
+  { label: 'Inter', exec: 'Inter, sans-serif' },
+  { label: 'Roboto', exec: 'Roboto, sans-serif' },
+  { label: 'Poppins', exec: 'Poppins, sans-serif' },
+  { label: 'Montserrat', exec: 'Montserrat, sans-serif' },
+  { label: 'Georgia', exec: 'Georgia, serif' },
+  { label: 'Playfair Display', exec: '"Playfair Display", serif' },
+  { label: 'Merriweather', exec: 'Merriweather, serif' },
+  { label: 'Lora', exec: 'Lora, serif' },
+  { label: 'JetBrains Mono', exec: '"JetBrains Mono", monospace' },
+  { label: 'Courier', exec: '"Courier New", monospace' },
+  { label: 'Bebas Neue', exec: '"Bebas Neue", sans-serif' },
+  { label: 'Pacifico', exec: 'Pacifico, cursive' },
+  { label: 'Caveat', exec: 'Caveat, cursive' },
+]
 function TextFormatToolbar({ left, top }) {
+  const savedRange = useRef(null)
+  useEffect(() => {
+    const onSel = () => {
+      const s = window.getSelection()
+      if (!s || !s.rangeCount || !s.anchorNode) return
+      const el = s.anchorNode.nodeType === 3 ? s.anchorNode.parentElement : s.anchorNode
+      if (el?.closest?.('[data-richtext]')) savedRange.current = s.getRangeAt(0).cloneRange()
+    }
+    document.addEventListener('selectionchange', onSel)
+    return () => document.removeEventListener('selectionchange', onSel)
+  }, [])
   const exec = (cmd, val) => {
+    const r = savedRange.current
+    const node = r && (r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer)
+    const editable = node?.closest?.('[data-richtext]')
+    if (editable) editable.focus()
+    if (r) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(r) }
+    try { document.execCommand('styleWithCSS', false, true) } catch { /* */ }
     document.execCommand(cmd, false, val)
-    const el = document.activeElement
-    if (el && el.isContentEditable) el.dispatchEvent(new Event('input', { bubbles: true }))
+    if (editable) editable.dispatchEvent(new Event('input', { bubbles: true }))
+    const s2 = window.getSelection(); if (s2 && s2.rangeCount) savedRange.current = s2.getRangeAt(0).cloneRange()
   }
   const btn = { background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, padding: '3px 6px', borderRadius: 4, lineHeight: 1 }
+  const selStyle = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 4, fontSize: 11, padding: '2px 3px', cursor: 'pointer' }
   const sep = <span style={{ width: 1, height: 18, background: '#2d3a6a', margin: '0 3px' }} />
-  const keep = e => e.preventDefault()   // don't steal focus from the editable
+  const keep = e => e.preventDefault()   // buttons keep the editable focused
   return (
-    <div onMouseDown={keep} style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 40, display: 'flex', alignItems: 'center', gap: 1,
+    <div style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 40, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', maxWidth: 480,
       background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '4px 6px', boxShadow: '0 8px 24px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
-      <button style={{ ...btn, fontWeight: 800 }} title="Bold" onClick={() => exec('bold')}>B</button>
-      <button style={{ ...btn, fontStyle: 'italic' }} title="Italic" onClick={() => exec('italic')}>I</button>
-      <button style={{ ...btn, textDecoration: 'underline' }} title="Underline" onClick={() => exec('underline')}>U</button>
-      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Text color" onMouseDown={keep}>A
-        <input type="color" defaultValue="#e8ecff" onChange={e => exec('foreColor', e.target.value)} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
+      <button style={{ ...btn, fontWeight: 800 }} onMouseDown={keep} title="Bold" onClick={() => exec('bold')}>B</button>
+      <button style={{ ...btn, fontStyle: 'italic' }} onMouseDown={keep} title="Italic" onClick={() => exec('italic')}>I</button>
+      <button style={{ ...btn, textDecoration: 'underline' }} onMouseDown={keep} title="Underline" onClick={() => exec('underline')}>U</button>
+      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Text color">A
+        <input type="color" defaultValue="#e8ecff" onInput={e => exec('foreColor', e.target.value)} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
       {sep}
-      <select title="Font" defaultValue="" onMouseDown={keep} onChange={e => { exec('fontName', e.target.value); e.target.selectedIndex = 0 }}
-        style={{ ...btn, background: '#0e0e1c', border: '1px solid #2d3a6a', fontSize: 11 }}>
+      <select title="Font" value="" onChange={e => exec('fontName', e.target.value)} style={selStyle}>
         <option value="" disabled>Font</option>
-        {TEXT_FONTS.map(f => <option key={f} value={f} style={{ fontFamily: f }}>{f.split(',')[0]}</option>)}
+        {TEXT_FONTS.map(f => <option key={f.label} value={f.exec} style={{ fontFamily: f.exec }}>{f.label}</option>)}
       </select>
-      <select title="Size" defaultValue="" onMouseDown={keep} onChange={e => { exec('fontSize', e.target.value); e.target.selectedIndex = 0 }}
-        style={{ ...btn, background: '#0e0e1c', border: '1px solid #2d3a6a', fontSize: 11 }}>
+      <select title="Size" value="" onChange={e => exec('fontSize', e.target.value)} style={selStyle}>
         <option value="" disabled>Size</option>
         {[['XS', '1'], ['S', '2'], ['M', '3'], ['L', '4'], ['XL', '5'], ['XXL', '6'], ['Huge', '7']].map(([l, v]) => <option key={v} value={v}>{l}</option>)}
       </select>
       {sep}
-      <button style={btn} title="Align left" onClick={() => exec('justifyLeft')}>⯇</button>
-      <button style={btn} title="Align center" onClick={() => exec('justifyCenter')}>≡</button>
-      <button style={btn} title="Align right" onClick={() => exec('justifyRight')}>⯈</button>
+      <button style={btn} onMouseDown={keep} title="Align left" onClick={() => exec('justifyLeft')}>⯇</button>
+      <button style={btn} onMouseDown={keep} title="Align center" onClick={() => exec('justifyCenter')}>≡</button>
+      <button style={btn} onMouseDown={keep} title="Align right" onClick={() => exec('justifyRight')}>⯈</button>
       {sep}
-      <button style={btn} title="Bulleted list" onClick={() => exec('insertUnorderedList')}>•</button>
-      <button style={btn} title="Numbered list" onClick={() => exec('insertOrderedList')}>1.</button>
-      <button style={btn} title="Link" onClick={() => { const u = window.prompt('Link URL:'); if (u) exec('createLink', u) }}>🔗</button>
+      <button style={btn} onMouseDown={keep} title="Bulleted list" onClick={() => exec('insertUnorderedList')}>•</button>
+      <button style={btn} onMouseDown={keep} title="Numbered list" onClick={() => exec('insertOrderedList')}>1.</button>
+      <button style={btn} onMouseDown={keep} title="Link" onClick={() => { const u = window.prompt('Link URL:'); if (u) exec('createLink', u) }}>🔗</button>
     </div>
   )
 }
