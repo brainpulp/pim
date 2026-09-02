@@ -7028,7 +7028,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
           if (!img || img.videoKind !== 'youtube') return null
-          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster }
+          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, keepPlaying: img.keepPlaying }
           onPatch = patch => updateImage(videoEdit.id, patch)
           onPatchPoster = url => updateImage(videoEdit.id, { poster: url })
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
@@ -7036,7 +7036,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const node = storeNodes.find(n => n.id === videoEdit.id)
           const m = node?.media; if (!m || m.videoKind !== 'youtube') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster }
+          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, keepPlaying: m.keepPlaying }
           onPatchPoster = url => updateNodeMedia(videoEdit.id, { poster: url })
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
@@ -9164,10 +9164,12 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   // only mount the iframe on demand. `playing` is set by the play button / double-click / autoplay.
   const isYT = isVideo && img.videoKind === 'youtube'
   const [playing, setPlaying] = useState(false)
-  useEffect(() => { if (!isSelected && !mediaPlay) setPlaying(false) }, [isSelected, mediaPlay])
+  useEffect(() => { if (!isSelected && !mediaPlay && !img.keepPlaying) setPlaying(false) }, [isSelected, mediaPlay, img.keepPlaying])
   const ytPoster = isYT && img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : null
   const posterSrc = (isVideo && img.poster) || ytPoster
-  const ytPosterMode = isYT && !(playing || mediaPlay || previewing)   // poster shown; iframe not yet mounted
+  const ytPosterMode = isYT && !(playing || mediaPlay || previewing || img.keepPlaying)   // poster shown; iframe not yet mounted
+  // "Keep playing" mounts the player and never reverts to the poster on focus change.
+  useEffect(() => { if (img.keepPlaying && isYT) setPlaying(true) }, [img.keepPlaying, isYT])
   const isLink = img.type === 'link'
   // Audio autoplay: when a card is flagged for zoom/slide autoplay, the parent's `audioPlay` signal
   // drives play/pause. Manual native controls still work when neither flag is on.
