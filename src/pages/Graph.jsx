@@ -6983,6 +6983,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onClose={() => setVideoEdit(null)}
             onScrubTime={videoScrubTo}
             onLoopSel={videoLoopSel}
+            onPreviewPause={() => { clearVideoEndLoop(); videoPreviewHandleRef.current?.pause?.() }}
             getDuration={() => videoPreviewHandleRef.current?.duration?.() || 0}
             onUploadPoster={() => {
               const inp = document.createElement('input')

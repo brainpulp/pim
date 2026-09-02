@@ -263,88 +263,74 @@ export function SlidePlayer({ clip, autoplay = false, muted = false, captions = 
 // onChange(start, end, which) — `which` is 'start' | 'end', so the caller can scrub the preview to
 // whichever edge is being moved.
 const trimBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '1px 7px', cursor: 'pointer', fontSize: 10.5, whiteSpace: 'nowrap' }
-// Trim slider with a ZOOMABLE timeline (so a 1-min clip is placeable inside a 1-hour video), plus live
-// preview callbacks: onScrub(time, which) fires while dragging (parent seeks a paused frame there);
-// onLoop(start, end) fires on release (parent plays the trimmed selection on a loop).
+// Dual-handle trim slider. A SEPARATE zoom slider narrows the visible window (centered on the selection)
+// so a short clip is placeable in a long video — but zoom never moves on its own, and the window is frozen
+// for the duration of a handle drag so handles can't drift. Live preview via onScrub (drag) / onLoop (release).
 function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
   const trackRef = useRef(null)
-  const [win, setWin] = useState(null)   // [w0,w1] visible time window, or null = whole video
-  const stateRef = useRef({ start, end, max, win })
-  stateRef.current = { start, end, max, win }
+  const [zoom, setZoom] = useState(1)   // 1 = whole video; higher = narrower window
+  const [dragging, setDragging] = useState(false)
   const M = Math.max(max || 1, 1)
-  const clampWin = (a, b) => { a = Math.max(0, a); b = Math.min(M, b); if (b - a < 1) { if (a > 0) a = b - 1; else b = a + 1 } return [a, b] }
-  const w0 = win ? Math.max(0, Math.min(win[0], M - 1)) : 0
-  const w1 = win ? Math.max(w0 + 1, Math.min(win[1], M)) : M
-  const span = Math.max(1, w1 - w0)
-  const zoomed = w0 > 0 || w1 < M
-
-  const drag = (which) => (e) => {
-    e.preventDefault(); e.stopPropagation()
-    let edgeTimer = null
-    const clearEdge = () => { if (edgeTimer) { clearInterval(edgeTimer); edgeTimer = null } }
-    const apply = (t) => {
-      const { start: cs, end: ce } = stateRef.current
-      const eNow = ce || M
-      if (which === 'start') { const nv = Math.max(0, Math.min(Math.round(t), eNow - 1)); onChange(nv, ce, 'start'); onScrub?.(nv, 'start') }
-      else { const nv = Math.min(M, Math.max(Math.round(t), (cs || 0) + 1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
+  const s = Math.max(0, Math.min(start || 0, M)), e = Math.min(M, (end && end > s) ? end : M)
+  const stateRef = useRef({ s, e, M })
+  stateRef.current = { s, e, M }
+  const winRef = useRef({ w0: 0, w1: M })
+  // Window follows the selection at the chosen zoom — but only recompute when NOT dragging (frozen mid-drag).
+  if (!dragging) {
+    if (zoom <= 1) winRef.current = { w0: 0, w1: M }
+    else {
+      const width = M / zoom
+      const mid = (s + e) / 2
+      let w0 = Math.max(0, Math.min(mid - width / 2, M - width))
+      winRef.current = { w0, w1: w0 + width }
     }
+  }
+  const { w0, w1 } = winRef.current
+  const span = Math.max(1, w1 - w0)
+
+  const drag = (which) => (ev0) => {
+    ev0.preventDefault(); ev0.stopPropagation()
+    setDragging(true)
     const move = (ev) => {
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const c = stateRef.current.win
-      const cw0 = c ? c[0] : 0, cw1 = c ? c[1] : M, cspan = Math.max(1, cw1 - cw0)
-      clearEdge()
-      // Push a handle hard against its edge to zoom the timeline back OUT toward that end.
-      if (which === 'start' && frac <= 0.03 && cw0 > 0) {
-        edgeTimer = setInterval(() => {
-          const cc = stateRef.current.win; const a = cc ? cc[0] : 0, b = cc ? cc[1] : M
-          if (a <= 0) { clearEdge(); return }
-          const nw = clampWin(a - Math.max(1, (b - a) * 0.2), b); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw); apply(nw[0])
-        }, 140)
-      } else if (which === 'end' && frac >= 0.97 && cw1 < M) {
-        edgeTimer = setInterval(() => {
-          const cc = stateRef.current.win; const a = cc ? cc[0] : 0, b = cc ? cc[1] : M
-          if (b >= M) { clearEdge(); return }
-          const nw = clampWin(a, b + Math.max(1, (b - a) * 0.2)); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw); apply(nw[1])
-        }, 140)
-      }
-      apply(cw0 + frac * cspan)
+      const { w0: a, w1: b } = winRef.current
+      const t = Math.round(a + frac * (b - a))
+      const { s: cs, e: ce, M: m } = stateRef.current
+      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 1)); onChange(nv, end, 'start'); onScrub?.(nv, 'start') }
+      else { const nv = Math.min(m, Math.max(t, cs + 1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
     }
     const up = () => {
-      clearEdge()
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
-      const { start: cs, end: ce, win: cwin } = stateRef.current
-      const eNow = ce || M
-      const a = cwin ? cwin[0] : 0, b = cwin ? cwin[1] : M
-      const selLen = Math.max(0, eNow - cs)
-      // Auto-zoom-in: released with a selection filling less than a third of the window → fit to it.
-      if (selLen > 0 && selLen < (b - a) * 0.3) { const pad = Math.max(1, selLen * 0.4); const nw = clampWin(cs - pad, eNow + pad); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw) }
-      onLoop?.(cs, eNow)
+      setDragging(false)
+      const { s: cs, e: ce } = stateRef.current
+      onLoop?.(cs, ce)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
 
-  const fitToSelection = () => { const eNow = end || M; const selLen = Math.max(1, eNow - start); const pad = Math.max(1, selLen * 0.4); const nw = clampWin(start - pad, eNow + pad); setWin(nw[0] <= 0 && nw[1] >= M ? null : nw) }
   const pct = (t) => Math.max(0, Math.min(1, (t - w0) / span)) * 100
-  const sPct = pct(start), ePct = pct(end || M)
+  const sPct = pct(s), ePct = pct(e)
+  const zoomed = zoom > 1
   return (
     <div style={{ margin: '2px 8px' }}>
       <div ref={trackRef} style={{ position: 'relative', height: 24 }}>
         <div style={{ position: 'absolute', top: 10, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
-        {/* faint edge cues when zoomed — push a handle here to zoom back out */}
-        {w0 > 0 && <div style={{ position: 'absolute', top: 7, left: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
-        {w1 < M && <div style={{ position: 'absolute', top: 7, right: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
+        {zoomed && w0 > 0 && <div style={{ position: 'absolute', top: 7, left: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
+        {zoomed && w1 < M && <div style={{ position: 'absolute', top: 7, right: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
         <div style={{ position: 'absolute', top: 10, left: `${sPct}%`, width: `${Math.max(0, ePct - sPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
         {[['start', sPct], ['end', ePct]].map(([w, p]) => (
           <div key={w} onMouseDown={drag(w)} style={{ position: 'absolute', top: 2, left: `calc(${p}% - 7px)`, width: 14, height: 20, borderRadius: 4, background: '#c5d0ff', border: '1px solid #5b6af0', cursor: 'ew-resize' }} />
         ))}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, color: '#8fa0d8', marginTop: 2 }}>
-        <span>{fmtTime(start)}–{fmtTime(end || M)}</span>
-        {zoomed && <span style={{ color: '#7080a0' }}>· {fmtTime(w0)}–{fmtTime(w1)}</span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, color: '#8fa0d8', marginTop: 3 }}>
+        <span>{fmtTime(s)}–{fmtTime(e)}</span>
+        {zoomed && <span style={{ color: '#7080a0' }}>· view {fmtTime(w0)}–{fmtTime(w1)}</span>}
         <span style={{ flex: 1 }} />
-        <button onMouseDown={e => e.stopPropagation()} onClick={fitToSelection} style={trimBtn} title="Zoom the timeline in to the selection for fine control">⤢ Fit</button>
-        {zoomed && <button onMouseDown={e => e.stopPropagation()} onClick={() => setWin(null)} style={trimBtn} title="Zoom the timeline out to the whole video">⤡ Full</button>}
+        <span style={{ color: '#7c86ad' }} title="Zoom the timeline for finer control">🔍</span>
+        <input type="range" min={1} max={40} step={1} value={zoom} onMouseDown={e => e.stopPropagation()}
+          onChange={e => setZoom(Number(e.target.value))} style={{ width: 84, accentColor: '#5b6af0' }} title="Zoom the timeline for finer control" />
+        {zoomed && <button onMouseDown={e => e.stopPropagation()} onClick={() => setZoom(1)} style={trimBtn} title="Zoom out to the whole video">full</button>}
       </div>
     </div>
   )
@@ -564,9 +550,10 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 }
 
 // ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
-export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, getDuration }) {
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, onPreviewPause, getDuration }) {
   const [dur, setDur] = useState(0)
   const [urlInput, setUrlInput] = useState('')
+  const [previewPlaying, setPreviewPlaying] = useState(true)
   const yt = video.youtubeId
   // The preview plays on the NODE itself (via onScrub), not here — so we just poll the node player's
   // reported duration to size the trim slider.
@@ -593,8 +580,13 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
       </div>
       <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {yt && (
-          <div style={{ fontSize: 11, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 13 }}>▶</span> Trimming previews on the video itself, on the canvas.
+          <div style={{ fontSize: 11, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button title={previewPlaying ? 'Pause preview' : 'Play the trimmed clip on a loop'}
+              onClick={() => { if (previewPlaying) { onPreviewPause?.(); setPreviewPlaying(false) } else { onLoopSel?.(video.start || 0, video.end || 0); setPreviewPlaying(true) } }}
+              style={{ width: 26, height: 26, borderRadius: '50%', border: '1px solid #5b6af0', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
+              <Icon name={previewPlaying ? 'pause' : 'play'} size={13} />
+            </button>
+            <span>Previews on the video itself, on the canvas.</span>
           </div>
         )}
         {/* Link */}
@@ -610,10 +602,14 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
           <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })} onScrub={onScrubTime} onLoop={onLoopSel} />
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Start</span>
-            <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + yt + (video.start || 0)} onBlur={e => { const v = parseTime(e.target.value); if (v != null) onPatch({ start: v }) }} />
+            <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + yt + (video.start || 0)}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
+              onBlur={e => { const v = parseTime(e.target.value); if (v != null) { onPatch({ start: v }); onScrubTime?.(v, 'start') } }} />
             <span style={{ flex: 1 }} />
             <span>End</span>
-            <input style={inp} defaultValue={video.end ? fmtTime(video.end) : ''} placeholder={fmtTime(max)} key={'e' + yt + (video.end || 0)} onBlur={e => { const v = parseTime(e.target.value); onPatch({ end: v || 0 }) }} />
+            <input style={inp} defaultValue={video.end ? fmtTime(video.end) : ''} placeholder={fmtTime(max)} key={'e' + yt + (video.end || 0)}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
+              onBlur={e => { const v = parseTime(e.target.value); onPatch({ end: v || 0 }); onScrubTime?.(v || (video.start || 0), 'end') }} />
           </div>
         </>}
         {/* Speed */}
