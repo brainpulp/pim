@@ -2185,6 +2185,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [videoEdit, setVideoEdit] = useState(null)                 // { kind:'image'|'media', id } — a single YouTube video's options panel
   const [videoFullscreen, setVideoFullscreen] = useState(null)     // a single YouTube clip playing fullscreen: {youtubeId,start,end,muted}
   const ytssHandlesRef = useRef({})                            // { [nodeId]: live player handle }
+  const videoPreviewHandleRef = useRef(null)                   // live handle of the video being trim-edited (previews on its node)
+  const videoEndLoopRef = useRef(null)                         // interval looping the last ~2s while dragging the END handle
+  const clearVideoEndLoop = () => { if (videoEndLoopRef.current) { clearInterval(videoEndLoopRef.current); videoEndLoopRef.current = null } }
+  const setVideoPreviewHandle = useCallback(h => { videoPreviewHandleRef.current = h }, [])
+  // Trim scrubbing previews on the node: START restarts play there; END jumps to the last ~2s and loops.
+  const videoTrimScrub = useCallback((s, e, which) => {
+    const h = videoPreviewHandleRef.current; if (!h) return
+    clearVideoEndLoop()
+    if (which === 'start') { h.seek?.(s); h.play?.() }
+    else {
+      const lo = Math.max(s || 0, (e || 0) - 2)
+      h.seek?.(lo); h.play?.()
+      videoEndLoopRef.current = setInterval(() => { const t = h.time?.() || 0; if (t >= e - 0.12 || t < lo - 0.4) h.seek?.(lo) }, 200)
+    }
+  }, [])
+  useEffect(() => { if (!videoEdit) { clearVideoEndLoop(); videoPreviewHandleRef.current = null } }, [videoEdit])
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
@@ -5268,6 +5284,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   mediaPlay={mediaPlay}
                   onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
                   onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
+                  previewing={videoEdit?.kind === 'image' && videoEdit.id === img.id}
+                  onPlayerReady={setVideoPreviewHandle}
                   onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
                   onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) updateImage(img.id, { caption: next }) }}
                 />
@@ -5547,6 +5565,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     mediaPlay={mediaPlay}
                     onToggleMedia={prop => setNodeMeta(n.id, { [prop]: !meta[prop] })}
                     onEditVideo={() => setVideoEdit({ kind: 'media', id: n.id })}
+                    previewing={videoEdit?.kind === 'media' && videoEdit.id === n.id}
+                    onPlayerReady={setVideoPreviewHandle}
                     onMediaTitle={() => { const next = prompt('Title', storeNodeById[n.id]?.label || m.title || ''); if (next !== null) updateLabel(n.id, next.trim()) }}
                     onMouseDown={handleMediaNodeMouseDown} />
                 </g>
@@ -6670,6 +6690,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return (
           <YTVideoOptions video={video} anchor={anchor} onPatch={onPatch}
             onClose={() => setVideoEdit(null)}
+            onScrub={videoTrimScrub}
+            getDuration={() => videoPreviewHandleRef.current?.duration?.() || 0}
             onUploadPoster={() => {
               const inp = document.createElement('input')
               inp.type = 'file'; inp.accept = 'image/*'
@@ -8583,9 +8605,11 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 // â"€â"€â"€ ImageNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Video body — a YouTube <iframe> or an uploaded <video>, honoring the per-video options
 // (autoplay/loop/mute/controls/hide-related/start/end/speed). Extracted so it can use refs/effects.
-function VideoEmbed({ img, play }) {
+function VideoEmbed({ img, play, previewing, onReady }) {
   const ref = useRef(null)
   const [errCode, setErrCode] = useState(0)
+  const curTimeRef = useRef(0)
+  const curDurRef = useRef(0)
   const speed = img.speed || 1
   const start = img.start || 0
   const end = (img.end && img.end > start) ? img.end : 0
@@ -8648,7 +8672,7 @@ function VideoEmbed({ img, play }) {
   // past it and it won't stop). Listen to the player's currentTime stream and enforce the end ourselves —
   // pause there, or loop back to the start.
   useEffect(() => {
-    if (img.videoKind !== 'youtube') return
+    if (img.videoKind !== 'youtube' || previewing) return   // while previewing, the trim scrubber drives it
     const endT = (img.end && img.end > (img.start || 0)) ? img.end : 0
     if (!endT) return
     const f = ref.current; if (!f) return
@@ -8665,10 +8689,41 @@ function VideoEmbed({ img, play }) {
     }
     window.addEventListener('message', onMsg)
     return () => { clearTimeout(t); window.removeEventListener('message', onMsg) }
-  }, [img.videoKind, img.youtubeId, img.start, img.end, img.loop])
+  }, [img.videoKind, img.youtubeId, img.start, img.end, img.loop, previewing])
+
+  // Expose a control handle (seek/play/pause/time/duration) so the trim scrubber can preview the
+  // start/end on the node itself. A persistent infoDelivery listener tracks currentTime + duration.
+  useEffect(() => {
+    if (img.videoKind !== 'youtube') return
+    const f = ref.current; if (!f) return
+    const post = (m) => { try { f.contentWindow?.postMessage(JSON.stringify(m), '*') } catch { /* ignore */ } }
+    const cmd = (func, args = []) => post({ event: 'command', func, args })
+    const t = setTimeout(() => post({ event: 'listening', id: 1, channel: 'widget' }), 500)
+    const onMsg = (e) => {
+      if (e.source !== f.contentWindow) return
+      let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
+      if (d?.event === 'infoDelivery' && d.info) {
+        if (typeof d.info.currentTime === 'number') curTimeRef.current = d.info.currentTime
+        if (typeof d.info.duration === 'number' && d.info.duration) curDurRef.current = d.info.duration
+      }
+    }
+    window.addEventListener('message', onMsg)
+    onReady?.({
+      seek: (s) => cmd('seekTo', [s, true]),
+      play: () => cmd('playVideo'),
+      pause: () => cmd('pauseVideo'),
+      setRate: (r) => cmd('setPlaybackRate', [r]),
+      time: () => curTimeRef.current,
+      duration: () => curDurRef.current,
+    })
+    return () => { clearTimeout(t); window.removeEventListener('message', onMsg) }
+  }, [img.videoKind, img.youtubeId]) // eslint-disable-line
 
   if (img.videoKind === 'youtube') {
-    return <iframe ref={ref} src={youtubeEmbedUrl(img)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
+    // While previewing, hold the src stable (drop start/end so a trim edit doesn't reload the iframe —
+    // the scrubber seeks via the handle instead).
+    const embedImg = previewing ? { ...img, start: 0, end: 0 } : img
+    return <iframe ref={ref} src={youtubeEmbedUrl(embedImg)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
   }
   if (errCode) {
@@ -8698,7 +8753,7 @@ function VideoEmbed({ img, play }) {
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
@@ -8713,7 +8768,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   useEffect(() => { if (!isSelected && !mediaPlay) setPlaying(false) }, [isSelected, mediaPlay])
   const ytPoster = isYT && img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : null
   const posterSrc = (isVideo && img.poster) || ytPoster
-  const ytPosterMode = isYT && !(playing || mediaPlay)   // poster shown; iframe not yet mounted
+  const ytPosterMode = isYT && !(playing || mediaPlay || previewing)   // poster shown; iframe not yet mounted
   const isLink = img.type === 'link'
   // Audio autoplay: when a card is flagged for zoom/slide autoplay, the parent's `audioPlay` signal
   // drives play/pause. Manual native controls still work when neither flag is on.
@@ -8855,8 +8910,8 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // Player mounted (played, autoplaying, or a file video). Captures events (so you can scrub /
         // click controls) once activated; file videos stay pass-through until armed with videoActive.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
-          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && (isYT || videoActive)) ? 'auto' : 'none' }}>
-            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay} />
+          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && (isYT || videoActive)) && !previewing ? 'auto' : 'none' }}>
+            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay} previewing={previewing} onReady={onPlayerReady} />
           </div>
         </foreignObject>
       ) : isAudio ? (

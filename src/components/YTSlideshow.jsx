@@ -506,18 +506,19 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 }
 
 // ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
-export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster }) {
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrub, getDuration }) {
   const [dur, setDur] = useState(0)
   const [urlInput, setUrlInput] = useState('')
-  const handleRef = useRef(null)
   const yt = video.youtubeId
+  // The preview plays on the NODE itself (via onScrub), not here — so we just poll the node player's
+  // reported duration to size the trim slider.
   useEffect(() => {
     setDur(0)
-    if (!yt) return
+    if (!yt || !getDuration) return
     let n = 0
-    const t = setInterval(() => { const d = handleRef.current?.duration?.() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 30) clearInterval(t) }, 300)
+    const t = setInterval(() => { const d = getDuration() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 40) clearInterval(t) }, 300)
     return () => clearInterval(t)
-  }, [yt])
+  }, [yt, getDuration])
   const max = Math.max(dur || 0, video.end || 0, 30)
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const W = 340
@@ -534,8 +535,8 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
       </div>
       <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {yt && (
-          <div style={{ width: '100%', aspectRatio: '16 / 9', borderRadius: 8, overflow: 'hidden', border: '1px solid #23234a' }}>
-            <YTPlayer key={yt + (video.captions ? '-cc' : '')} clip={{ youtubeId: yt, start: video.start || 0, end: video.end || 0, speed: video.speed || 1 }} captions={!!video.captions} onReady={h => { handleRef.current = h }} />
+          <div style={{ fontSize: 11, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 13 }}>▶</span> Trimming previews on the video itself, on the canvas.
           </div>
         )}
         {/* Link */}
@@ -548,7 +549,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         </div>
         {/* Trim */}
         {yt && <>
-          <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })} />
+          <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e, which) => { onPatch({ start: s, end: e >= max ? 0 : e }); onScrub?.(s, e, which) }} />
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Start</span>
             <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + yt + (video.start || 0)} onBlur={e => { const v = parseTime(e.target.value); if (v != null) onPatch({ start: v }) }} />
@@ -561,7 +562,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         {yt && (
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Speed</span>
-            <select value={video.speed || 1} onChange={e => { const r = parseFloat(e.target.value); onPatch({ speed: r }); handleRef.current?.setRate?.(r) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
+            <select value={video.speed || 1} onChange={e => { const r = parseFloat(e.target.value); onPatch({ speed: r }) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
               {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
             </select>
           </div>
