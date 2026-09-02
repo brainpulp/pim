@@ -128,6 +128,90 @@ function elementToSlide(o, label) {
   return null
 }
 
+// ── Clipboard table parsing (Google Sheets / Google Docs / Markdown) ─────────────────────────────
+// Turns clipboard content into a { title?, columns:[{name,type,options?}], rows:[{cells:{[colIdx]:v}}] }
+// grid, or null if it isn't tabular. Priority: HTML <table> (richest) → Markdown table → TSV.
+const CHECKBOX_TRUE = new Set(['true', 'yes', 'y', '✓', '✔', '☑', 'x', '☒', 'done', '✅', '1'])
+const CHECKBOX_ALL = new Set([...CHECKBOX_TRUE, 'false', 'no', 'n', '✗', '✘', '☐', '—', '-', '0', ''])
+
+function inferColumnType(values) {
+  const nonEmpty = values.filter(v => v != null && String(v).trim() !== '')
+  if (!nonEmpty.length) return { type: 'text' }
+  const low = nonEmpty.map(v => String(v).trim().toLowerCase())
+  if (low.every(v => CHECKBOX_ALL.has(v)) && low.some(v => CHECKBOX_TRUE.has(v) || v === 'false' || v === 'no')) {
+    return { type: 'checkbox' }
+  }
+  if (nonEmpty.every(v => /^-?\d+(\.\d+)?$/.test(String(v).trim()))) return { type: 'number' }
+  const distinct = [...new Set(nonEmpty.map(v => String(v).trim()))]
+  if (distinct.length >= 2 && distinct.length <= 12 && nonEmpty.length >= 3 && distinct.length <= nonEmpty.length * 0.7) {
+    return { type: 'select', options: distinct }
+  }
+  return { type: 'text' }
+}
+
+// Assemble a grid from a 2D string matrix: first row = header, the rest = data, with per-column types.
+function gridFromMatrix(matrix) {
+  const rowsRaw = matrix.filter(r => r.length && r.some(c => String(c).trim() !== ''))
+  if (rowsRaw.length < 1) return null
+  const nCols = Math.max(...rowsRaw.map(r => r.length))
+  if (nCols < 1) return null
+  const header = rowsRaw[0]
+  const dataRows = rowsRaw.slice(1)
+  const columns = []
+  for (let ci = 0; ci < nCols; ci++) {
+    const name = (header[ci] || '').trim() || `Column ${ci + 1}`
+    const colVals = dataRows.map(r => r[ci] ?? '')
+    const inf = inferColumnType(colVals)
+    columns.push({ name, ...inf })
+  }
+  const rows = dataRows.map(r => {
+    const cells = {}
+    columns.forEach((col, ci) => {
+      let v = (r[ci] ?? '').toString()
+      if (col.type === 'checkbox') v = CHECKBOX_TRUE.has(v.trim().toLowerCase())
+      cells[ci] = v
+    })
+    return { cells }
+  })
+  // Require at least 2 columns OR 2 rows so a single cell/line doesn't become a table.
+  if (nCols < 2 && rows.length < 1) return null
+  return { columns, rows }
+}
+
+function parseClipboardTable(html, text) {
+  // 1) HTML <table> — Google Sheets & Docs both emit one.
+  if (html && /<table[\s>]/i.test(html)) {
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const table = doc.querySelector('table')
+      if (table) {
+        const trs = [...table.querySelectorAll('tr')]
+        const matrix = trs.map(tr => [...tr.querySelectorAll('th,td')].map(td => (td.textContent || '').replace(/\s+/g, ' ').trim()))
+        const grid = gridFromMatrix(matrix)
+        if (grid && grid.columns.length >= 2) return grid
+        if (grid && grid.rows.length >= 1) return grid
+      }
+    } catch { /* fall through to text parsing */ }
+  }
+  const t = (text || '').replace(/\r\n?/g, '\n').replace(/\n+$/, '')
+  if (!t) return null
+  const lines = t.split('\n')
+  // 2) Markdown table — header row, a |---|---| separator, then rows.
+  if (lines.length >= 2 && /\|/.test(lines[0]) && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[1]) && /-/.test(lines[1])) {
+    const cut = (ln) => ln.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim())
+    const matrix = [cut(lines[0]), ...lines.slice(2).map(cut)]
+    const grid = gridFromMatrix(matrix)
+    if (grid) return grid
+  }
+  // 3) TSV — Google Sheets' plain-text form. Need at least one tab (≥2 columns).
+  if (lines.some(l => l.includes('\t'))) {
+    const matrix = lines.map(l => l.split('\t'))
+    const grid = gridFromMatrix(matrix)
+    if (grid && grid.columns.length >= 2) return grid
+  }
+  return null
+}
+
 // Centered inline-SVG icon for SVG-space circular badges. Authored in a 24×24 box; a nested <svg> with
 // x/y = -size/2 puts the glyph's centre (12,12) exactly at (0,0), so it sits dead-center in a <circle> —
 // unlike emoji/text glyphs, whose optical centre drifts under dominantBaseline. Stroke stays ~constant
@@ -1542,6 +1626,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const recolorSelectOption = useGraphStore(s => s.recolorSelectOption)
   const moveChild      = useGraphStore(s => s.moveChild)
   const addTableNode      = useGraphStore(s => s.addTableNode)
+  const addTableNodeFrom  = useGraphStore(s => s.addTableNodeFrom)
   const setTableCell      = useGraphStore(s => s.setTableCell)
   const addTableRow       = useGraphStore(s => s.addTableRow)
   const addTableColumn    = useGraphStore(s => s.addTableColumn)
@@ -4234,12 +4319,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
       const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'))
       if (!item) {
+        const rect = svgRef.current?.getBoundingClientRect()
+        const [cx, cy] = zoomTransformRef.current.invert([(rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2])
+        // A copied table (Google Sheets / Docs cells, or a Markdown table) → a Grid node.
+        const html = e.clipboardData?.getData('text/html') || ''
+        const rawText = e.clipboardData?.getData('text/plain') || ''
+        const grid = parseClipboardTable(html, rawText)
+        if (grid) {
+          e.preventDefault()
+          const id = addTableNodeFrom(grid, cx, cy)
+          setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy } scheduleRender() }, 0)
+          setSelected({ id, type: 'node' })
+          return
+        }
         // No image on the clipboard — is it a bare URL? Then unfurl it as a link-preview card.
-        const text = (e.clipboardData?.getData('text/plain') || '').trim()
+        const text = rawText.trim()
         if (/^https?:\/\/\S+$/i.test(text) && !/\s/.test(text)) {
           e.preventDefault()
-          const rect = svgRef.current?.getBoundingClientRect()
-          const [cx, cy] = zoomTransformRef.current.invert([(rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2])
           // A YouTube link embeds the player directly; anything else unfurls to a preview card.
           const ytId = parseYoutubeId(text)
           // With a YouTube slideshow selected/entered, a pasted YouTube link goes straight INTO it.
@@ -4541,6 +4637,68 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       alert('Could not read the clipboard. Try copying the image again, or paste with Ctrl/Cmd+V.')
     }
   }, [addImage])
+
+  // General "Paste" (from the canvas menu): route whatever is on the clipboard — a table (Sheets/Docs/
+  // Markdown) → Grid, an image → image card, a URL → link/YouTube, plain text → a node.
+  const pasteAnyAt = useCallback(async (sx, sy) => {
+    let html = '', text = '', imageBlob = null
+    try {
+      const clip = await navigator.clipboard.read()
+      for (const it of clip) {
+        const imgType = it.types.find(t => t.startsWith('image/'))
+        if (imgType && !imageBlob) imageBlob = await it.getType(imgType)
+        if (it.types.includes('text/html')) html = await (await it.getType('text/html')).text()
+        if (it.types.includes('text/plain')) text = await (await it.getType('text/plain')).text()
+      }
+    } catch {
+      try { text = await navigator.clipboard.readText() } catch { /* ignore */ }
+    }
+    if (!html && !text && !imageBlob) { try { text = await navigator.clipboard.readText() } catch { /* ignore */ } }
+
+    // 1) Table
+    const grid = parseClipboardTable(html, text)
+    if (grid) {
+      pushUndo()
+      const id = addTableNodeFrom(grid, sx, sy)
+      if (drillRoot) addEdge(drillRoot, id)
+      setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+      setSelected({ id, type: 'node' })
+      return
+    }
+    // 2) Image
+    if (imageBlob) {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const el = new window.Image()
+        el.onload = () => {
+          const MAX = 220, ar = el.naturalWidth / el.naturalHeight || 1
+          const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
+          const imgId2 = addImage(reader.result, sx, sy, w, h)
+          uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId2, { src: url }) })
+        }
+        el.src = reader.result
+      }
+      reader.readAsDataURL(imageBlob)
+      return
+    }
+    const trimmed = (text || '').trim()
+    if (!trimmed) { alert('Nothing to paste — the clipboard is empty (or the browser blocked reading it).'); return }
+    // 3) URL
+    if (/^https?:\/\/\S+$/i.test(trimmed) && !/\s/.test(trimmed)) {
+      const ytId = parseYoutubeId(trimmed)
+      if (ytId) dropYoutube(ytId, sx, sy)
+      else addLinkAt(trimmed, sx, sy)
+      return
+    }
+    // 4) Plain text → a node (first line = label, rest = notes)
+    pushUndo()
+    const firstLine = trimmed.split('\n')[0].slice(0, 120)
+    const rest = trimmed.split('\n').slice(1).join('\n').trim()
+    const id = addNode(firstLine, drillRoot || null, sx, sy)
+    if (rest) updateNotes(id, rest)
+    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+    setSelected({ id, type: 'node' })
+  }, [addImage, addTableNodeFrom, projectId, updateImage, drillRoot])
 
   // Find the regular node whose box contains a canvas point (for attaching media on drop). Skips
   // frames/3d containers (those use containedIn) and hidden nodes.
@@ -5715,6 +5873,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4,
                   boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 160,
                 }}>
+                {item('📋', 'Paste', () => { const { sx, sy } = contextMenu; close(); pasteAnyAt(sx, sy) })}
+                <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                 <MenuFlyout icon="＋" label="Insert">
                   {item('▭', 'Frame', () => {
                     pushUndo()

@@ -1216,6 +1216,30 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // Create a table node from parsed clipboard data. `parsed` = { columns:[{name,type?,width?,options?}],
+  // rows:[{cells:{[colIndex]:value}}] } where cells are keyed by COLUMN INDEX (we assign real ids here).
+  addTableNodeFrom: (parsed, x = null, y = null) => {
+    const id = uid()
+    const columns = (parsed.columns || []).map(c => ({
+      id: uid(), name: c.name || '', type: c.type || 'text',
+      width: c.width || Math.max(80, Math.min(240, (c.name || '').length * 8 + 40)),
+      ...(c.type === 'select' ? { options: c.options || [] } : {}),
+    }))
+    const rows = (parsed.rows || []).map(r => {
+      const cells = {}
+      columns.forEach((col, ci) => { const v = r.cells?.[ci]; if (v !== undefined && v !== '') cells[col.id] = v })
+      return { id: uid(), cells }
+    })
+    const table = { columns, rows }
+    set(s => ({
+      nodes: [...s.nodes, { id, label: parsed.title || 'Table', notes: '', table }],
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, nodeProps: { ...v.nodeProps, [id]: { ...DEFAULT_NODE_PROPS, ...(x !== null ? { fx: x, fy: y } : {}) } },
+      }),
+    }))
+    return id
+  },
+
   // ── YouTube slideshow node (node.ytss) ──────────────────────────────────────
   // A node carrying an ordered list of YouTube clips with per-clip trim + trigger. Rendered as a clean
   // player; arrow-navigable when "entered". clip = { id, youtubeId, title, start, end, trigger, delayMs }.
