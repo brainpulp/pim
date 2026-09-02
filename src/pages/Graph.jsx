@@ -5104,6 +5104,37 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       showDragShield('nwse-resize')
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
 
+    } else if (mode === 'textscale' || mode === 'textwidth' || mode === 'textheight') {
+      // Text box: bottom-right corner scales box+font uniformly; right/bottom edges reflow one dimension
+      // (no font change), so uneven box shapes are possible. The opposite edge/corner stays pinned.
+      const img = images.find(i => i.id === imageId); if (!img) return
+      const th = ((img.rotation || 0) * Math.PI) / 180, cos = Math.cos(th), sin = Math.sin(th)
+      const w0 = img.width, h0 = img.height, fs0 = img.fontScale || 1
+      const pivL = mode === 'textscale' ? { x: -w0 / 2, y: -h0 / 2 } : mode === 'textwidth' ? { x: -w0 / 2, y: 0 } : { x: 0, y: -h0 / 2 }
+      const pivW = { x: img.x + cos * pivL.x - sin * pivL.y, y: img.y + sin * pivL.x + cos * pivL.y }
+      const onMove = me => {
+        const [wx, wy] = clientToSim(me.clientX, me.clientY)
+        const dx = wx - pivW.x, dy = wy - pivW.y
+        const lx = cos * dx + sin * dy, ly = -sin * dx + cos * dy   // cursor in the box's local frame, from pivot
+        if (mode === 'textscale') {
+          const base = w0 * w0 + h0 * h0
+          let s = (lx * w0 + ly * h0) / base
+          const minS = Math.max(40 / w0, 24 / h0, 0.15)
+          if (s < minS) s = minS
+          const nw = Math.round(w0 * s), nh = Math.round(h0 * s)
+          updateImage(imageId, { width: nw, height: nh, fontScale: +(fs0 * s).toFixed(3), x: pivW.x + cos * (nw / 2) - sin * (nh / 2), y: pivW.y + sin * (nw / 2) + cos * (nh / 2) })
+        } else if (mode === 'textwidth') {
+          const nw = Math.max(40, Math.round(lx))
+          updateImage(imageId, { width: nw, x: pivW.x + cos * (nw / 2), y: pivW.y + sin * (nw / 2) })
+        } else {
+          const nh = Math.max(28, Math.round(ly))
+          updateImage(imageId, { height: nh, x: pivW.x - sin * (nh / 2), y: pivW.y + cos * (nh / 2) })
+        }
+      }
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); hideDragShield() }
+      showDragShield(mode === 'textscale' ? 'nwse-resize' : mode === 'textwidth' ? 'ew-resize' : 'ns-resize')
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+
     } else if (mode === 'crop') {
       // Drag a median handle (t|r|b|l) of the crop rect to trim that edge.
       const img = images.find(i => i.id === imageId)
@@ -9170,7 +9201,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
 
 // contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
 // when it changes externally (never while focused, so the caret isn't disturbed); saves on input.
-function RichTextBox({ html, editable, bgColor, borderColor, textShadow, halo, onChange }) {
+function RichTextBox({ html, editable, bgColor, borderColor, textShadow, halo, fontScale = 1, onChange }) {
   const ref = useRef(null)
   useEffect(() => {
     const el = ref.current; if (!el) return
@@ -9188,7 +9219,7 @@ function RichTextBox({ html, editable, bgColor, borderColor, textShadow, halo, o
       onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t) }}
       style={{ width: '100%', height: '100%', boxSizing: 'border-box', padding: '6px 8px', outline: editable ? '1px solid #5b6af0' : 'none',
         border: borderColor ? `1.5px solid ${borderColor}` : 'none', borderRadius: 4, background: bgColor || 'transparent',
-        color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: 15, lineHeight: 1.35, textShadow: shadows.join(', ') || 'none',
+        color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: Math.max(6, 15 * (fontScale || 1)), lineHeight: 1.35, textShadow: shadows.join(', ') || 'none',
         overflow: 'auto', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
   )
 }
@@ -9235,6 +9266,19 @@ function TextFormatToolbar({ left, top, box, onBoxStyle }) {
     if (editable) editable.dispatchEvent(new Event('input', { bubbles: true }))
     const s2 = window.getSelection(); if (s2 && s2.rangeCount) savedRange.current = s2.getRangeAt(0).cloneRange()
   }
+  // Font size in px. Stored as `em` relative to the 15px base so it scales with the box's corner handle.
+  const applyFontSize = (px) => {
+    const r = savedRange.current; if (!r || r.collapsed) return
+    const node = r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer
+    const editable = node?.closest?.('[data-richtext]'); if (!editable) return
+    editable.focus()
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r)
+    const span = document.createElement('span'); span.style.fontSize = (px / 15).toFixed(3) + 'em'
+    try { span.appendChild(r.extractContents()); r.insertNode(span) } catch { return }
+    const nr = document.createRange(); nr.selectNodeContents(span); s.removeAllRanges(); s.addRange(nr)
+    savedRange.current = nr.cloneRange()
+    editable.dispatchEvent(new Event('input', { bubbles: true }))
+  }
   const btn = { background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, padding: '3px 6px', borderRadius: 4, lineHeight: 1 }
   const selStyle = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 4, fontSize: 11, padding: '2px 3px', cursor: 'pointer' }
   const sep = <span style={{ width: 1, height: 18, background: '#2d3a6a', margin: '0 3px' }} />
@@ -9252,9 +9296,9 @@ function TextFormatToolbar({ left, top, box, onBoxStyle }) {
         <option value="" disabled>Font</option>
         {TEXT_FONTS.map(f => <option key={f.label} value={f.exec} style={{ fontFamily: f.exec }}>{f.label}</option>)}
       </select>
-      <select title="Size" value="" onChange={e => exec('fontSize', e.target.value)} style={selStyle}>
+      <select title="Text size (px)" value="" onChange={e => applyFontSize(Number(e.target.value))} style={selStyle}>
         <option value="" disabled>Size</option>
-        {[['XS', '1'], ['S', '2'], ['M', '3'], ['L', '4'], ['XL', '5'], ['XXL', '6'], ['Huge', '7']].map(([l, v]) => <option key={v} value={v}>{l}</option>)}
+        {[10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 96].map(v => <option key={v} value={v}>{v}</option>)}
       </select>
       {sep}
       <button style={btn} onMouseDown={keep} title="Align left" onClick={() => exec('justifyLeft')}>⯇</button>
@@ -9419,7 +9463,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // canvas pans/zooms over it. Content (HTML) saved on input.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
           <RichTextBox html={img.html} editable={isSelected} bgColor={bgColor}
-            borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo}
+            borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo} fontScale={img.fontScale}
             onChange={html => onTextChange?.(html)} />
         </foreignObject>
       ) : (isVideo && ytPosterMode) ? (
@@ -9608,12 +9652,23 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             <IconGlyph name="close" size={13} color="#c5d0ff" />
           </g>
         )}
-        {/* Four square corner resize handles — pivot on the opposite corner (Miro style) */}
-        {corners.map(([c, hx, hy, cur]) => (
-          <rect key={c} x={hx - HS} y={hy - HS} {...SQ} rx={1.5}
-            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize', c) }}
-            style={{ cursor: cur }} />
-        ))}
+        {/* Text box: invisible right/bottom edge strips reflow the box (cursor-only, no font change);
+            a single bottom-right square handle scales box + font together. */}
+        {isText ? (<>
+          <rect x={vR - 4} y={vT + 6} width={8} height={Math.max(0, ch - 12)} fill="transparent"
+            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'textwidth') }} style={{ cursor: 'ew-resize' }} />
+          <rect x={vL + 6} y={vB - 4} width={Math.max(0, cw - 12)} height={8} fill="transparent"
+            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'textheight') }} style={{ cursor: 'ns-resize' }} />
+          <rect x={vR - HS} y={vB - HS} {...SQ} rx={1.5}
+            onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'textscale') }} style={{ cursor: 'nwse-resize' }} />
+        </>) : (
+          /* Four square corner resize handles — pivot on the opposite corner (Miro style) */
+          corners.map(([c, hx, hy, cur]) => (
+            <rect key={c} x={hx - HS} y={hy - HS} {...SQ} rx={1.5}
+              onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize', c) }}
+              style={{ cursor: cur }} />
+          ))
+        )}
         {/* Rotate — top-center */}
         <line x1={(vL + vR) / 2} y1={vT} x2={(vL + vR) / 2} y2={vT - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
         <g transform={`translate(${(vL + vR) / 2},${vT - 28})`}
