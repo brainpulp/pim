@@ -603,6 +603,18 @@ const useGraphStore = create((set, get) => ({
     return id
   },
 
+  // A rich-text box — a canvas element (not a graph node) stored in the SAME view.images[] array, so it
+  // shares selection / drag / resize / group / delete. `html` holds the formatted content.
+  addTextBox: (x, y, width = 220, height = 60, html = '') => {
+    const id = uid()
+    set(s => ({
+      views: s.views.map(v => v.id !== s.activeViewId ? v : {
+        ...v, images: [...(v.images || []), { id, type: 'text', x, y, width, height, rotation: 0, bgColor: null, html }],
+      }),
+    }))
+    return id
+  },
+
   // A video is stored in the SAME view.images[] array (so it shares selection/drag/resize/group/delete)
   // but flagged type:'video'. fields = { videoKind:'youtube', youtubeId } | { videoKind:'file', src }.
   addVideo: (fields, x, y, width, height) => {

@@ -1203,6 +1203,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setContainedIn  = useGraphStore(s => s.setContainedIn)
   const reparentNode    = useGraphStore(s => s.reparentNode)
   const addImage        = useGraphStore(s => s.addImage)
+  const addTextBox      = useGraphStore(s => s.addTextBox)
   const addVideo        = useGraphStore(s => s.addVideo)
   const addAudio        = useGraphStore(s => s.addAudio)
   const addYtssNode     = useGraphStore(s => s.addYtssNode)
@@ -4924,11 +4925,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
-      // Double-click: enter crop mode for this single image
+      // Double-click: enter crop mode for a photo (text boxes just select → become editable).
       if (e.detail === 2) {
+        const dImg = images.find(i => i.id === imageId)
         setSelectedImageIds(new Set([imageId]))
-        setDrilledImageId(imageId)   // treat as ungrouped so it can be cropped/moved alone
-        setCropImageId(imageId)
+        if (dImg?.type !== 'text' && dImg?.type !== 'video' && dImg?.type !== 'audio' && dImg?.type !== 'link') {
+          setDrilledImageId(imageId); setCropImageId(imageId)
+        }
         return  // always return on double-click — never start a drag
       }
 
@@ -5639,6 +5642,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   mediaPlay={mediaPlay}
                   onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
                   onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
+                  onTextChange={html => updateImage(img.id, { html })}
                   previewing={videoEdit?.kind === 'image' && videoEdit.id === img.id}
                   onPlayerReady={setVideoPreviewHandle}
                   onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
@@ -6083,6 +6087,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     close()
                   })}
                   {item('✚', 'Node', () => { setNewNodeAt({ px: contextMenu.px, py: contextMenu.py, sx: contextMenu.sx, sy: contextMenu.sy }); close() })}
+                  {item('🅃', 'Text box', () => { const { sx, sy } = contextMenu; close(); const tid = addTextBox(sx, sy, 220, 60, '<div>Text</div>'); setSelectedNodeIds(new Set()); setSelected(null); setSelectedImageIds(new Set([tid])) })}
                   {item('▦', 'Table', () => {
                     pushUndo()
                     const { sx, sy } = contextMenu
@@ -6459,6 +6464,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
         {/* Photo menu / image toolbar — hidden while cropping a single image */}
         {/* Photo menu — opens on right-click, anchored at the cursor */}
+        {/* Rich-text formatting toolbar — above the single selected Text element (screen space). */}
+        {(() => {
+          if (selectedImageIds.size !== 1) return null
+          const tid = [...selectedImageIds][0]
+          const timg = (activeView?.images || []).find(i => i.id === tid)
+          if (!timg || timg.type !== 'text') return null
+          const left = T.x + (timg.x || 0) * T.k
+          const top = T.y + ((timg.y || 0) - (timg.height || 0) / 2) * T.k - 8
+          return <TextFormatToolbar left={left} top={top} />
+        })()}
+
         {photoMenu && !cropImageId && (<>
           <div onMouseDown={() => setPhotoMenu(null)} onContextMenu={e => { e.preventDefault(); setPhotoMenu(null) }}
             style={{ position: 'fixed', inset: 0, zIndex: 24 }} />
@@ -9152,10 +9168,75 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady }) {
+// contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
+// when it changes externally (never while focused, so the caret isn't disturbed); saves on input.
+function RichTextBox({ html, editable, bgColor, onChange }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    if (document.activeElement !== el && el.innerHTML !== (html || '')) el.innerHTML = html || ''
+  }, [html])
+  useEffect(() => { if (editable) requestAnimationFrame(() => ref.current?.focus()) }, [editable])
+  return (
+    <div ref={ref} data-richtext="true" contentEditable={editable} suppressContentEditableWarning
+      onInput={() => onChange?.(ref.current?.innerHTML || '')}
+      onMouseDown={e => { if (editable) e.stopPropagation() }}
+      onKeyDown={e => e.stopPropagation()}
+      onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t) }}
+      style={{ width: '100%', height: '100%', boxSizing: 'border-box', padding: '6px 8px', outline: editable ? '1px solid #5b6af0' : 'none',
+        borderRadius: 4, background: bgColor || 'transparent', color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: 15, lineHeight: 1.35,
+        overflow: 'auto', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+  )
+}
+
+// Screen-space formatting toolbar for the selected Text element. Buttons keep the editable focused
+// (onMouseDown preventDefault) and drive document.execCommand; an 'input' event is dispatched so the box saves.
+const TEXT_FONTS = ['-apple-system, sans-serif', 'Georgia, serif', 'Times New Roman, serif', 'Courier New, monospace', 'Verdana, sans-serif', 'Comic Sans MS, cursive']
+function TextFormatToolbar({ left, top }) {
+  const exec = (cmd, val) => {
+    document.execCommand(cmd, false, val)
+    const el = document.activeElement
+    if (el && el.isContentEditable) el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  const btn = { background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, padding: '3px 6px', borderRadius: 4, lineHeight: 1 }
+  const sep = <span style={{ width: 1, height: 18, background: '#2d3a6a', margin: '0 3px' }} />
+  const keep = e => e.preventDefault()   // don't steal focus from the editable
+  return (
+    <div onMouseDown={keep} style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 40, display: 'flex', alignItems: 'center', gap: 1,
+      background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '4px 6px', boxShadow: '0 8px 24px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
+      <button style={{ ...btn, fontWeight: 800 }} title="Bold" onClick={() => exec('bold')}>B</button>
+      <button style={{ ...btn, fontStyle: 'italic' }} title="Italic" onClick={() => exec('italic')}>I</button>
+      <button style={{ ...btn, textDecoration: 'underline' }} title="Underline" onClick={() => exec('underline')}>U</button>
+      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Text color" onMouseDown={keep}>A
+        <input type="color" defaultValue="#e8ecff" onChange={e => exec('foreColor', e.target.value)} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
+      {sep}
+      <select title="Font" defaultValue="" onMouseDown={keep} onChange={e => { exec('fontName', e.target.value); e.target.selectedIndex = 0 }}
+        style={{ ...btn, background: '#0e0e1c', border: '1px solid #2d3a6a', fontSize: 11 }}>
+        <option value="" disabled>Font</option>
+        {TEXT_FONTS.map(f => <option key={f} value={f} style={{ fontFamily: f }}>{f.split(',')[0]}</option>)}
+      </select>
+      <select title="Size" defaultValue="" onMouseDown={keep} onChange={e => { exec('fontSize', e.target.value); e.target.selectedIndex = 0 }}
+        style={{ ...btn, background: '#0e0e1c', border: '1px solid #2d3a6a', fontSize: 11 }}>
+        <option value="" disabled>Size</option>
+        {[['XS', '1'], ['S', '2'], ['M', '3'], ['L', '4'], ['XL', '5'], ['XXL', '6'], ['Huge', '7']].map(([l, v]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      {sep}
+      <button style={btn} title="Align left" onClick={() => exec('justifyLeft')}>⯇</button>
+      <button style={btn} title="Align center" onClick={() => exec('justifyCenter')}>≡</button>
+      <button style={btn} title="Align right" onClick={() => exec('justifyRight')}>⯈</button>
+      {sep}
+      <button style={btn} title="Bulleted list" onClick={() => exec('insertUnorderedList')}>•</button>
+      <button style={btn} title="Numbered list" onClick={() => exec('insertOrderedList')}>1.</button>
+      <button style={btn} title="Link" onClick={() => { const u = window.prompt('Link URL:'); if (u) exec('createLink', u) }}>🔗</button>
+    </div>
+  )
+}
+
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
+  const isText = img.type === 'text'
   // Video player is "pass-through" (canvas pan/zoom work over it) until the user activates it. A
   // YouTube iframe otherwise swallows the scroll wheel so the canvas can't zoom over it (Miro-style).
   const [videoActive, setVideoActive] = useState(false)
@@ -9287,6 +9368,13 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             </div>
           </a>
         </foreignObject>
+      ) : isText ? (
+        // Rich text box — a contentEditable card. Editable when selected; pass-through otherwise so the
+        // canvas pans/zooms over it. Content (HTML) saved on input.
+        <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
+          <RichTextBox html={img.html} editable={isSelected} bgColor={bgColor}
+            onChange={html => onTextChange?.(html)} />
+        </foreignObject>
       ) : (isVideo && ytPosterMode) ? (
         // YouTube poster frame — our OWN image (default: the video thumbnail; overridable via the
         // edit dialog), with a play button + title bar drawn by us. No YouTube iframe is mounted yet,
@@ -9347,7 +9435,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           which otherwise lets clicks (incl. ctrl-click to multi-select) fall through instead of hitting
           the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
           while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
-      {((isVideo && (isYT ? ytPosterMode : !(isSelected && videoActive))) || (isLink && !isSelected) || (isAudio && !isSelected)) && (
+      {((isVideo && (isYT ? ytPosterMode : !(isSelected && videoActive))) || (isLink && !isSelected) || (isAudio && !isSelected) || (isText && !isSelected)) && (
         <rect x={-hw} y={-hh} width={width} height={height} fill="transparent"
           onDoubleClick={isVideo ? (e => { e.stopPropagation(); if (isYT) setPlaying(true); else setVideoActive(true) }) : undefined}
           style={{ cursor: 'move' }}>
@@ -9381,7 +9469,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
 
       {/* Caption — editable text beneath the photo (any non-link media). Always visible when set;
           a "＋ caption" hint shows when selected and empty. Click it (or double-click the photo) to edit. */}
-      {!isLink && !isVideo && !isAudio && !isCropping && (() => {
+      {!isLink && !isVideo && !isAudio && !isText && !isCropping && (() => {
         const fs = 12
         const maxCh = Math.max(12, Math.floor(width / (fs * 0.55)))
         if (img.caption) {
@@ -9421,7 +9509,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         )}
         {/* Top drag-bar to move it (the body's pointer events belong to the player/link). Not needed on
             a YouTube poster — the whole poster is pass-through, so dragging anywhere moves the node. */}
-        {((isVideo && !ytPosterMode) || isLink || isAudio) && (
+        {((isVideo && !ytPosterMode) || isLink || isAudio || isText) && (
           <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
             <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
             <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
