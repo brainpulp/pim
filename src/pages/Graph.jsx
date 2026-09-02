@@ -8684,7 +8684,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
           {/* Column header row */}
           <div style={{ display: 'flex', height: colHdrH }}>
             {columns.map(col => (
-              <div key={col.id} data-tcol={col.id} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2 }}>
+              <div key={col.id} data-tcol={col.id} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2, overflow: menuCol === col.id ? 'visible' : 'hidden', zIndex: menuCol === col.id ? 30 : undefined }}>
                 {hov && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ position: 'relative', zIndex: 9, cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
                 {editColId === col.id ? (
                   <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
