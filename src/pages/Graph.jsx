@@ -9189,15 +9189,6 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             ? <image href={posterSrc} x={-hw} y={-hh} width={width} height={height} preserveAspectRatio="xMidYMid slice"
                 style={{ pointerEvents: 'none' }} onError={e => { e.currentTarget.style.display = 'none' }} />
             : <rect x={-hw} y={-hh} width={width} height={height} rx={4} fill="#0b0b18" style={{ pointerEvents: 'none' }} />}
-          {/* Title bar across the top of the poster — editable (double-click). */}
-          {(img.title || isSelected) && (
-            <g onMouseDown={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onMediaTitle?.() }} style={{ cursor: onMediaTitle ? 'text' : 'default' }}>
-              <rect x={-hw} y={-hh} width={width} height={22} fill="rgba(8,8,20,0.62)" />
-              <text x={-hw + 8} y={-hh + 15} fontSize={11.5} fill="#eef1ff" style={{ userSelect: 'none' }}>
-                {(() => { const t = img.title || 'Untitled video'; const max = Math.max(6, Math.floor((width - 20) / 6.6)); return t.length > max ? t.slice(0, max - 1) + '…' : t })()}
-              </text>
-            </g>
-          )}
         </>
       ) : isVideo ? (
         // Player mounted (played, autoplaying, or a file video). Captures events (so you can scrub /
@@ -9267,6 +9258,18 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           </g>
         )
       })()}
+
+      {/* Editable title bar across the top of the poster — rendered ON TOP of the hit rect so its
+          double-click (rename) wins over the poster's double-click (play). */}
+      {isVideo && ytPosterMode && (img.title || isSelected) && (
+        <g onMouseDown={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onMediaTitle?.() }} style={{ cursor: onMediaTitle ? 'text' : 'default' }}>
+          <rect x={-hw} y={-hh} width={width} height={22} fill="rgba(8,8,20,0.62)" />
+          <text x={-hw + 8} y={-hh + 15} fontSize={11.5} fill="#eef1ff" style={{ userSelect: 'none' }}>
+            {(() => { const t = img.title || 'Untitled video'; const max = Math.max(6, Math.floor((width - 20) / 6.6)); return t.length > max ? t.slice(0, max - 1) + '…' : t })()}
+          </text>
+          {isSelected && <title>Double-click to rename</title>}
+        </g>
+      )}
 
       {/* Caption — editable text beneath the photo (any non-link media). Always visible when set;
           a "＋ caption" hint shows when selected and empty. Click it (or double-click the photo) to edit. */}
