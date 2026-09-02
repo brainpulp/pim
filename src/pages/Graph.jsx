@@ -15,7 +15,7 @@ import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
-import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions } from '../components/YTSlideshow'
+import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget } from '../components/YTSlideshow'
 import { playDrop } from '../lib/sound'
 
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
@@ -121,9 +121,9 @@ function elementToSlide(o, label) {
   if (!o) return null
   const title = label || o.title || ''
   const t = o.type || o.kind   // free images use `type`, media nodes use `kind`
-  if (o.videoKind === 'youtube' && o.youtubeId) return { kind: 'youtube', youtubeId: o.youtubeId, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, trigger: 'click' }
-  if (t === 'audio') return { kind: 'audio', src: o.src, title, start: o.start || 0, end: o.end || 0, trigger: 'click' }
-  if (t === 'video' || o.videoKind === 'file') return { kind: 'video', src: o.src, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, loop: !!o.loop, trigger: 'click' }
+  if (o.videoKind === 'youtube' && o.youtubeId) return { kind: 'youtube', youtubeId: o.youtubeId, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, cuts: o.cuts, trigger: 'click' }
+  if (t === 'audio') return { kind: 'audio', src: o.src, title, start: o.start || 0, end: o.end || 0, cuts: o.cuts, trigger: 'click' }
+  if (t === 'video' || o.videoKind === 'file') return { kind: 'video', src: o.src, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, loop: !!o.loop, cuts: o.cuts, trigger: 'click' }
   if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5 }
   return null
 }
@@ -4751,7 +4751,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // (trim / speed / loop / muted / captions), so it plays the same as it did in the slideshow.
   const extractSlide = useCallback((clip, sx, sy) => {
     const k = clip.kind || (clip.youtubeId ? 'youtube' : 'video')
-    const timed = { start: clip.start || 0, end: clip.end || 0, muted: clip.muted === true, loop: !!clip.loop, title: clip.title || '' }
+    const timed = { start: clip.start || 0, end: clip.end || 0, muted: clip.muted === true, loop: !!clip.loop, cuts: clip.cuts, title: clip.title || '' }
     if (k === 'image') { addImage(clip.src, sx, sy, 360, 240); return }
     if (k === 'audio') { addAudio({ src: clip.src, ...timed, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
     const W = 320
@@ -7056,6 +7056,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onLoopSel={videoLoopSel}
             onPreviewPause={() => { clearVideoEndLoop(); videoPreviewHandleRef.current?.pause?.() }}
             getDuration={() => videoPreviewHandleRef.current?.duration?.() || 0}
+            getTime={() => videoPreviewHandleRef.current?.time?.() || 0}
             onUploadPoster={() => {
               const inp = document.createElement('input')
               inp.type = 'file'; inp.accept = 'image/*'
@@ -9001,6 +9002,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
   const [errCode, setErrCode] = useState(0)
   const curTimeRef = useRef(0)
   const curDurRef = useRef(0)
+  const cutsRef = useRef(img.cuts); cutsRef.current = img.cuts
   const speed = img.speed || 1
   const start = img.start || 0
   const end = (img.end && img.end > start) ? img.end : 0
@@ -9038,6 +9040,8 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     v.muted = !!img.muted
     const seekStart = () => { if (start) { try { v.currentTime = start } catch { /* not seekable yet */ } } }
     const onTime = () => {
+      const tgt = cutSkipTarget(v.currentTime, cutsRef.current)
+      if (tgt != null) { try { v.currentTime = tgt } catch { /* ignore */ } return }
       if (end && v.currentTime >= end) {
         if (img.loop) { try { v.currentTime = start } catch { /* ignore */ } v.play().catch(() => {}) }
         else v.pause()
@@ -9094,7 +9098,11 @@ function VideoEmbed({ img, play, previewing, onReady }) {
       if (e.source !== f.contentWindow) return
       let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
       if (d?.event === 'infoDelivery' && d.info) {
-        if (typeof d.info.currentTime === 'number') curTimeRef.current = d.info.currentTime
+        if (typeof d.info.currentTime === 'number') {
+          curTimeRef.current = d.info.currentTime
+          const tgt = cutSkipTarget(d.info.currentTime, cutsRef.current)
+          if (tgt != null) cmd('seekTo', [tgt, true])   // snip: jump over a cut range
+        }
         if (typeof d.info.duration === 'number' && d.info.duration) curDurRef.current = d.info.duration
       }
     }

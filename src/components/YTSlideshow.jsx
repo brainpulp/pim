@@ -160,6 +160,18 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
     } catch { /* */ }
   }, [clip?.youtubeId, clip?.start, clip?.end, clip?.speed]) // eslint-disable-line
 
+  // Snip playback: poll currentTime and jump over any cut range.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const p = playerRef.current; if (!p?.getCurrentTime) return
+      const cuts = clipRef.current?.cuts; if (!cuts?.length) return
+      let t; try { t = p.getCurrentTime() } catch { return }
+      const tgt = cutSkipTarget(t, cuts)
+      if (tgt != null) { try { p.seekTo(tgt, true) } catch { /* */ } }
+    }, 120)
+    return () => clearInterval(iv)
+  }, [])
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
       <div ref={holderRef} style={{ width: '100%', height: '100%', pointerEvents: interactive ? 'auto' : 'none' }} />
@@ -206,6 +218,8 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
     const seekStart = () => { if (start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
     const onLoaded = () => { seekStart(); el.playbackRate = clip.speed || 1 }
     const onTime = () => {
+      const tgt = cutSkipTarget(el.currentTime, clip.cuts)
+      if (tgt != null) { try { el.currentTime = tgt } catch { /* */ } return }
       if (end && el.currentTime >= end) {
         if (clip.loop) { try { el.currentTime = start } catch { /* */ } el.play().catch(() => {}) }
         else if (!ended) { ended = true; el.pause(); onEnded?.() }
@@ -228,7 +242,7 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
       duration: () => el.duration || 0, time: () => el.currentTime || 0,
     })
     return () => { el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
-  }, [clip.src, clip.start, clip.end, clip.speed, clip.loop]) // eslint-disable-line
+  }, [clip.src, clip.start, clip.end, clip.speed, clip.loop, JSON.stringify(clip.cuts || [])]) // eslint-disable-line
 
   if (kind === 'audio') {
     return (
@@ -344,6 +358,72 @@ function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
           onChange={e => setZoom(Number(e.target.value))} style={{ width: 84, accentColor: '#5b6af0' }} title="Zoom the timeline for finer control" />
         {zoomed && <button onMouseDown={e => e.stopPropagation()} onClick={() => setZoom(1)} style={trimBtn} title="Zoom out to the whole video">full</button>}
       </div>
+    </div>
+  )
+}
+
+// ── Snip ("inverse trim") editor: red bands over the timeline mark ranges to SKIP during playback. ──
+function CutsEditor({ cuts = [], max, getTime, onChange }) {
+  const trackRef = useRef(null)
+  const M = Math.max(max || 1, 1)
+  const stateRef = useRef({ cuts, M }); stateRef.current = { cuts, M }
+  const pct = t => Math.max(0, Math.min(1, t / M)) * 100
+  const addCut = () => {
+    const at = Math.max(0, Math.min(M, (getTime?.() ?? M / 2)))
+    const w = Math.min(Math.max(3, M * 0.05), M * 0.3)
+    const s = Math.round(Math.max(0, Math.min(at, M - w))), e = Math.round(Math.min(M, s + w))
+    onChange([...(cuts || []), { s, e }].sort((a, b) => a.s - b.s))
+  }
+  const dragHandle = (i, which) => (ev0) => {
+    ev0.preventDefault(); ev0.stopPropagation()
+    const move = ev => {
+      const r = trackRef.current.getBoundingClientRect()
+      const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
+      const t = Math.round(frac * stateRef.current.M)
+      onChange(stateRef.current.cuts.map((c, j) => j !== i ? c : (which === 's' ? { ...c, s: Math.min(t, c.e - 1) } : { ...c, e: Math.max(t, c.s + 1) })))
+    }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  return (
+    <div style={{ margin: '2px 8px' }}>
+      <div ref={trackRef} style={{ position: 'relative', height: 22 }}>
+        <div style={{ position: 'absolute', top: 9, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
+        {cuts.map((c, i) => {
+          const s = pct(Math.min(c.s, c.e)), e = pct(Math.max(c.s, c.e))
+          return (
+            <div key={i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              <div style={{ position: 'absolute', top: 7, left: `${s}%`, width: `${Math.max(0, e - s)}%`, height: 8, borderRadius: 2, background: 'rgba(248,113,113,0.45)', border: '1px solid #f87171' }} />
+              <div onMouseDown={dragHandle(i, 's')} style={{ position: 'absolute', top: 1, left: `calc(${s}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              <div onMouseDown={dragHandle(i, 'e')} style={{ position: 'absolute', top: 1, left: `calc(${e}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 3 }}>
+        {cuts.map((c, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: '#8fa0d8' }}>
+            <span style={{ color: '#f0a0a0' }}>✂</span><span>{fmtTime(Math.min(c.s, c.e))}–{fmtTime(Math.max(c.s, c.e))}</span>
+            <span style={{ flex: 1 }} />
+            <button onClick={() => onChange(cuts.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>remove</button>
+          </div>
+        ))}
+        <button onClick={addCut} style={{ ...trimBtn, alignSelf: 'flex-start', color: '#f0a0a0', borderColor: '#5a2a3a' }}>✂ Snip a section</button>
+      </div>
+    </div>
+  )
+}
+
+// A chevron-collapsible section (used for the optional "Cuts" UI).
+function Collapsible({ label, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', color: '#9fb0e8', cursor: 'pointer', fontSize: 11.5, padding: '2px 0', width: '100%' }}>
+        <span style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s', display: 'inline-block' }}>▸</span>
+        {label}
+      </button>
+      {open && <div style={{ paddingTop: 2 }}>{children}</div>}
     </div>
   )
 }
@@ -468,6 +548,13 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               <input style={inp} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
                 onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
             </div>
+            {(k === 'youtube' || k === 'video') && (
+              <div style={{ marginTop: 6 }}>
+                <Collapsible label={`✂ Cuts${cur.cuts?.length ? ` (${cur.cuts.length})` : ''} — snip out sections`}>
+                  <CutsEditor cuts={cur.cuts || []} max={max} getTime={() => preview?.time?.() || 0} onChange={cuts => patch(sel, { cuts: cuts.length ? cuts : undefined })} />
+                </Collapsible>
+              </div>
+            )}
           </>}
           {k === 'image' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8' }}>
@@ -562,7 +649,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 }
 
 // ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
-export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, onPreviewPause, getDuration }) {
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, onPreviewPause, getDuration, getTime }) {
   const [dur, setDur] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [previewPlaying, setPreviewPlaying] = useState(true)
@@ -623,6 +710,10 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
               onBlur={e => { const v = parseTime(e.target.value); onPatch({ end: v || 0 }); onScrubTime?.(v || (video.start || 0), 'end') }} />
           </div>
+          {/* Cuts (inverse trim) — snip sections out of the middle */}
+          <Collapsible label={`✂ Cuts${video.cuts?.length ? ` (${video.cuts.length})` : ''} — snip out sections`}>
+            <CutsEditor cuts={video.cuts || []} max={max} getTime={getTime} onChange={cuts => onPatch({ cuts: cuts.length ? cuts : undefined })} />
+          </Collapsible>
         </>}
         {/* Speed */}
         {yt && (
