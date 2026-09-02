@@ -5062,6 +5062,47 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const img = images.find(i => i.id === imageId)
       if (!img) return
       const corner = arg || 'br'
+
+      // GROUP SCALE — when 2+ images are selected, dragging any one's corner scales the whole
+      // selection uniformly about the opposite corner of the group's bounding box. Hold Ctrl/⌘ to
+      // scale just this one image instead.
+      const groupCtrl = e.ctrlKey || e.metaKey
+      const groupSel = [...selectedImageIdsRef.current]
+        .map(gid => images.find(i => i.id === gid)).filter(Boolean)
+      if (!groupCtrl && groupSel.length >= 2 && selectedImageIdsRef.current.has(imageId)) {
+        const gx1 = Math.min(...groupSel.map(i => i.x - i.width / 2))
+        const gy1 = Math.min(...groupSel.map(i => i.y - i.height / 2))
+        const gx2 = Math.max(...groupSel.map(i => i.x + i.width / 2))
+        const gy2 = Math.max(...groupSel.map(i => i.y + i.height / 2))
+        // Pivot = opposite corner of the bbox; dragged corner scales away from it.
+        const pivX = corner.includes('l') ? gx2 : gx1
+        const pivY = corner.includes('t') ? gy2 : gy1
+        const dragX = corner.includes('l') ? gx1 : gx2
+        const dragY = corner.includes('t') ? gy1 : gy2
+        const gBaseX = dragX - pivX, gBaseY = dragY - pivY
+        const gBase2 = gBaseX * gBaseX + gBaseY * gBaseY
+        const gStart = {}
+        groupSel.forEach(i => { gStart[i.id] = { x: i.x, y: i.y, w: i.width, h: i.height } })
+        const onMoveG = me => {
+          if (gBase2 < 1) return
+          const [wx, wy] = clientToSim(me.clientX, me.clientY)
+          let s = ((wx - pivX) * gBaseX + (wy - pivY) * gBaseY) / gBase2
+          if (s < 0.1) s = 0.1
+          groupSel.forEach(i => {
+            const st = gStart[i.id]
+            updateImage(i.id, {
+              x: pivX + (st.x - pivX) * s,
+              y: pivY + (st.y - pivY) * s,
+              width: Math.max(20, Math.round(st.w * s)),
+              height: Math.max(10, Math.round(st.h * s)),
+            })
+          })
+        }
+        const onUpG = () => { document.removeEventListener('mousemove', onMoveG); document.removeEventListener('mouseup', onUpG); hideDragShield() }
+        showDragShield('nwse-resize')
+        document.addEventListener('mousemove', onMoveG); document.addEventListener('mouseup', onUpG)
+        return
+      }
       const sx = corner.includes('l') ? -1 : 1   // sign of dragged corner X
       const sy = corner.includes('t') ? -1 : 1   // sign of dragged corner Y
       const th = ((img.rotation || 0) * Math.PI) / 180
@@ -5586,7 +5627,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
             {/* Rubber-band selection rect — rendered after nodes (below) so it's on top */}
 
-            {/* Combined selection resize handle */}
+            {/* Multi-selection bounding box outline. The resize itself is driven by each selected
+                image's own corner handles (group-scale by default, Ctrl-drag = that image alone). */}
             {selectedImageIds.size >= 2 && (() => {
               const sel = (activeView?.images || []).filter(i => selectedImageIds.has(i.id))
               if (sel.length === 0) return null
@@ -5595,47 +5637,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const bx2 = Math.max(...sel.map(i => i.x + i.width / 2))
               const by2 = Math.max(...sel.map(i => i.y + i.height / 2))
               return (
-                <g>
-                  {/* Selection bounding box outline */}
-                  <rect x={bx1-3} y={by1-3} width={bx2-bx1+6} height={by2-by1+6}
-                    fill="none" stroke="#ffffff" strokeWidth={1} strokeDasharray="4,3"
-                    opacity={0.35} pointerEvents="none" />
-                  {/* Bottom-right corner resize handle */}
-                  <rect x={bx2-6} y={by2-6} width={12} height={12}
-                    fill="#5b6af0" stroke="#fff" strokeWidth={1} rx={2}
-                    style={{ cursor: 'se-resize' }}
-                    onMouseDown={e => {
-                      e.preventDefault(); e.stopPropagation()
-                      const T = zoomTransformRef.current
-                      const bboxW = bx2 - bx1, bboxH = by2 - by1
-                      const origDist = Math.hypot(bboxW * T.k, bboxH * T.k)
-                      const startSizes = {}
-                      sel.forEach(img => { startSizes[img.id] = { w: img.width, h: img.height } })
-                      const onMove = me => {
-                        if (origDist < 1) return
-                        const T2 = zoomTransformRef.current
-                        const d = Math.hypot(
-                          me.clientX - (T2.x + bx1 * T2.k),
-                          me.clientY - (T2.y + by1 * T2.k)
-                        )
-                        const s = d / origDist
-                        sel.forEach(img => {
-                          const { w, h } = startSizes[img.id]
-                          updateImage(img.id, {
-                            width: Math.max(20, Math.round(w * s)),
-                            height: Math.max(10, Math.round(h * s)),
-                          })
-                        })
-                      }
-                      const onUp = () => {
-                        document.removeEventListener('mousemove', onMove)
-                        document.removeEventListener('mouseup', onUp)
-                      }
-                      document.addEventListener('mousemove', onMove)
-                      document.addEventListener('mouseup', onUp)
-                    }}
-                  />
-                </g>
+                <rect x={bx1-3} y={by1-3} width={bx2-bx1+6} height={by2-by1+6}
+                  fill="none" stroke="#ffffff" strokeWidth={1} strokeDasharray="4,3"
+                  opacity={0.35} pointerEvents="none" />
               )
             })()}
 
