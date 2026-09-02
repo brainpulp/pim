@@ -8799,7 +8799,7 @@ function TableCell({ col, value, onChange, textColor }) {
         onChange={e => setDraft(e.target.value)}
         onBlur={() => { if ((draft ?? '') !== (value ?? '')) onChange(draft) }}
         onKeyDown={e => { stop(e); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur() } }}
-        style={{ ...tc.cellInput, color: col2, height: '100%', resize: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '16px', overflow: 'hidden', font: 'inherit' }} />
+        style={{ ...tc.cellInput, color: col2, height: '100%', resize: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', fontSize: 12, lineHeight: '16px', overflow: 'hidden' }} />
     )
   }
   const inputType = col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'

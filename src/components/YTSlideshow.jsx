@@ -181,6 +181,18 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
 export const clipKind = (c) => c?.kind || (c?.youtubeId ? 'youtube' : (c?.src ? 'video' : 'youtube'))
 export const isTimeMedia = (c) => { const k = clipKind(c); return k === 'youtube' || k === 'video' || k === 'audio' }
 
+// Inverse trim ("snips"): `cuts` = [{s,e}] time ranges to SKIP. During playback, if the playhead lands
+// inside a cut, jump to its end. Returns the skip target time, or null if the playhead is not in a cut.
+export function cutSkipTarget(t, cuts) {
+  if (!cuts || !cuts.length || t == null) return null
+  for (const c of cuts) {
+    const s = Math.min(c.s, c.e), e = Math.max(c.s, c.e)
+    if (e - s < 0.05) continue
+    if (t >= s - 0.05 && t < e - 0.1) return e
+  }
+  return null
+}
+
 // ── Native <video>/<audio> file player with a YT-compatible handle ────────────────────────────
 function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interactive = true, onReady, onEnded, style }) {
   const ref = useRef(null)
