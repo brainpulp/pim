@@ -2491,6 +2491,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return
         }
       }
+      // Right-click resolved straight from the DOM target — robust even when a free image overlaps a node
+      // (coordinate hit-testing would pick the node underneath). Media NODES carry data-cardnode and were
+      // already routed to their node menu above, so this only catches free canvas images.
+      if (!forceBg && !isCtrl) {
+        const imgEl = target?.closest?.('[data-imgid]')
+        const imgId = imgEl?.getAttribute?.('data-imgid')
+        if (imgId && (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).some(im => im.id === imgId)) {
+          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
+          setSelectedImageIds(prev => prev.has(imgId) ? prev : new Set([imgId]))
+          setPhotoMenu({ px, py, imageId: imgId })
+          return
+        }
+      }
       // Shift+right-click forces the background menu open even when the cursor is over a node — a reliable
       // escape hatch when the canvas is dense and there's no empty space to click.
       if (forceBg) { setNodeMenu(null); setPhotoMenu(null); setBulkMenu(null); setContextMenu({ px, py, sx, sy }); return }
@@ -4783,6 +4796,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
       const canAttach = dragIds.length === 1   // attach only a single media item to a node
       let lastCenter = null, lastCursor = null
+      let lastClientX = startClientX, lastClientY = startClientY, imgPanRaf = null
       const draggedImg = images.find(i => i.id === imageId)
       // The node this media would attach to: prefer the one under the CURSOR (what the user points at),
       // then the one under the media's center, then any node the media overlaps (nearest to the cursor).
@@ -4804,16 +4818,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         }
         return null
       }
-      const onMove = me => {
+      // Reposition the dragged image(s) to follow the current cursor at the CURRENT zoom transform (so
+      // auto-pan, which changes the transform, keeps the images under the cursor into off-screen space).
+      const applyImageDrag = () => {
         const T2 = zoomTransformRef.current
-        const startSx = (startClientX - T2.x) / T2.k
-        const startSy = (startClientY - T2.y) / T2.k
-        const sx = (me.clientX - T2.x) / T2.k, sy = (me.clientY - T2.y) / T2.k
+        const startSx = (startClientX - T2.x) / T2.k, startSy = (startClientY - T2.y) / T2.k
+        const sx = (lastClientX - T2.x) / T2.k, sy = (lastClientY - T2.y) / T2.k
         const dx = sx - startSx, dy = sy - startSy
-        dragIds.forEach(id => {
-          if (!origins[id]) return
-          updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy })
-        })
+        dragIds.forEach(id => { if (origins[id]) updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy }) })
         // Feedback: highlight the node this media would attach to (drop = becomes its child), OR the
         // slideshow it would be added to (drop = becomes a slide).
         if (canAttach) {
@@ -4823,7 +4835,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (hit !== dragHoverNodeIdRef.current) { dragHoverNodeIdRef.current = hit; setDragHoverNodeId(hit) }
         }
       }
+      const onMove = me => { lastClientX = me.clientX; lastClientY = me.clientY; applyImageDrag() }
+      // Auto-pan while dragging into a canvas-edge margin — mirrors the node-drag behavior.
+      const EDGE_M = 55, EDGE_V = 16
+      const imgEdgePan = () => {
+        imgPanRaf = requestAnimationFrame(imgEdgePan)
+        if (!svgRef.current || !zoomBehaviorRef.current) return
+        const r = svgRef.current.getBoundingClientRect()
+        let vx = 0, vy = 0
+        if (lastClientX < r.left + EDGE_M) vx = -(EDGE_M - (lastClientX - r.left)) / EDGE_M
+        else if (lastClientX > r.right - EDGE_M) vx = (EDGE_M - (r.right - lastClientX)) / EDGE_M
+        if (lastClientY < r.top + EDGE_M) vy = -(EDGE_M - (lastClientY - r.top)) / EDGE_M
+        else if (lastClientY > r.bottom - EDGE_M) vy = (EDGE_M - (r.bottom - lastClientY)) / EDGE_M
+        if (!vx && !vy) return
+        vx = Math.max(-1, Math.min(1, vx)); vy = Math.max(-1, Math.min(1, vy))
+        const k = zoomTransformRef.current.k || 1
+        d3.select(svgRef.current).call(zoomBehaviorRef.current.translateBy, -vx * EDGE_V / k, -vy * EDGE_V / k)
+        applyImageDrag()
+      }
+      imgPanRaf = requestAnimationFrame(imgEdgePan)
       const onUp = () => {
+        if (imgPanRaf) cancelAnimationFrame(imgPanRaf)
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
         hideDragShield()
@@ -8972,7 +9004,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
 
   return (
     <g transform={`translate(${x},${y}) rotate(${rotation})`}
-      data-img="true"
+      data-img="true" data-imgid={id}
       onClick={e => e.stopPropagation()}
       onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
       onDoubleClick={(!isVideo && !isLink && img.type !== 'audio' && !isCropping) ? (e => { e.stopPropagation(); onCaption?.() }) : undefined}
