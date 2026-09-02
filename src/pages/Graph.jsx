@@ -582,8 +582,40 @@ function distributeImages(images, selectedIds, axis) {
   }))
 }
 
+// Copy a canvas photo to the OS clipboard. Browsers only reliably accept image/png on the
+// clipboard, so anything else is re-encoded via a canvas (loaded through a same-origin blob URL to
+// avoid tainting). Returns true on success.
+async function copyImageToClipboard(src) {
+  if (!src || !navigator.clipboard?.write || typeof ClipboardItem === 'undefined') return false
+  try {
+    const resp = await fetch(src)
+    let blob = await resp.blob()
+    if (blob.type !== 'image/png') {
+      const url = URL.createObjectURL(blob)
+      try {
+        blob = await new Promise((resolve, reject) => {
+          const im = new Image()
+          im.onload = () => {
+            const c = document.createElement('canvas')
+            c.width = im.naturalWidth || 1; c.height = im.naturalHeight || 1
+            c.getContext('2d').drawImage(im, 0, 0)
+            c.toBlob(b => b ? resolve(b) : reject(new Error('encode failed')), 'image/png')
+          }
+          im.onerror = () => reject(new Error('image load failed'))
+          im.src = url
+        })
+      } finally { URL.revokeObjectURL(url) }
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    return true
+  } catch (err) {
+    console.warn('Copy image failed', err)
+    return false
+  }
+}
+
 function ImageToolbar({ images, selectedImageIds, anchor,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onDelete }) {
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onDelete }) {
   const [sub, setSub] = useState(null) // null | 'align' | 'video'
 
   if (selectedImageIds.size === 0 || !anchor) return null
@@ -596,6 +628,7 @@ function ImageToolbar({ images, selectedImageIds, anchor,
   const edgeBlur = sel[0]?.edgeBlur || 0
   const vid = isSingle && sel[0]?.type === 'video' ? sel[0] : null
   const isYT = vid?.videoKind === 'youtube'
+  const isPhoto = isSingle && !['text', 'video', 'audio', 'link'].includes(sel[0]?.type)
 
   // Text menu row — matches the canvas right-click menu styling.
   const row = (label, onClick, opts = {}) => (
@@ -693,6 +726,7 @@ function ImageToolbar({ images, selectedImageIds, anchor,
         {hasGroupId && row('Ungroup', onUngroup, { right: '⇧Ctrl+G' })}
         {count >= 2 && row('Align & distribute', () => setSub('align'), { right: '›' })}
         {vid && row('Video options', () => setSub('video'), { right: '›' })}
+        {isPhoto && row('Copy image', () => onCopyImage?.(sel[0]))}
         {isSingle && !vid && row('Crop', onCrop)}
         {isSingle && !vid && stepperRow('Blur', blur, onSetBlur, 40)}
         {isSingle && !vid && stepperRow('Edge blur', edgeBlur, onSetEdgeBlur, 40)}
@@ -6526,6 +6560,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onSetEdgeBlur={v => selectedImageIds.forEach(id => updateImage(id, { edgeBlur: v }))}
             onSetVideoOpt={(id, patch) => updateImage(id, patch)}
             onCrop={() => { const id = photoMenu.imageId || [...selectedImageIds][0]; if (id) { setCropImageId(id); setDrilledImageId(id); setSelectedImageIds(new Set([id])) } setPhotoMenu(null) }}
+            onCopyImage={img => { setPhotoMenu(null); copyImageToClipboard(img?.src) }}
             onAlign={anchor => {
               const imgs = activeView?.images || []
               const updates = alignImages(imgs, selectedImageIds, anchor)
