@@ -4437,16 +4437,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           setSelected({ id, type: 'node' })
           return
         }
-        // No image on the clipboard — is it a bare URL? Then unfurl it as a link-preview card.
+        // A YouTube link ANYWHERE in the pasted text → drop a video (or add to a selected slideshow).
+        const ytId = parseYoutubeId(rawText)
+        if (ytId) {
+          e.preventDefault()
+          if (ytssTargetRef.current) addClipToYtss(ytssTargetRef.current, ytId)
+          else dropYoutube(ytId, cx, cy)
+          return
+        }
+        // A bare (non-YouTube) URL → unfurl it as a link-preview card.
         const text = rawText.trim()
         if (/^https?:\/\/\S+$/i.test(text) && !/\s/.test(text)) {
           e.preventDefault()
-          // A YouTube link embeds the player directly; anything else unfurls to a preview card.
-          const ytId = parseYoutubeId(text)
-          // With a YouTube slideshow selected/entered, a pasted YouTube link goes straight INTO it.
-          if (ytId && ytssTargetRef.current) { addClipToYtss(ytssTargetRef.current, ytId) }
-          else if (ytId) dropYoutube(ytId, cx, cy)
-          else addLinkAt(text, cx, cy)
+          addLinkAt(text, cx, cy)
         }
         return
       }
@@ -4788,13 +4791,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     const trimmed = (text || '').trim()
     if (!trimmed) { alert('Nothing to paste — the clipboard is empty (or the browser blocked reading it).'); return }
-    // 3) URL
-    if (/^https?:\/\/\S+$/i.test(trimmed) && !/\s/.test(trimmed)) {
-      const ytId = parseYoutubeId(trimmed)
-      if (ytId) dropYoutube(ytId, sx, sy)
-      else addLinkAt(trimmed, sx, sy)
-      return
-    }
+    // 3) YouTube link anywhere in the text → a video
+    const ytId = parseYoutubeId(text)
+    if (ytId) { dropYoutube(ytId, sx, sy); return }
+    // 3b) Other bare URL → link-preview card
+    if (/^https?:\/\/\S+$/i.test(trimmed) && !/\s/.test(trimmed)) { addLinkAt(trimmed, sx, sy); return }
     // 4) Plain text → a node (first line = label, rest = notes)
     pushUndo()
     const firstLine = trimmed.split('\n')[0].slice(0, 120)
