@@ -6472,7 +6472,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (!timg || timg.type !== 'text') return null
           const left = T.x + (timg.x || 0) * T.k
           const top = T.y + ((timg.y || 0) - (timg.height || 0) / 2) * T.k - 8
-          return <TextFormatToolbar left={left} top={top} />
+          return <TextFormatToolbar left={left} top={top} box={timg} onBoxStyle={patch => updateImage(tid, patch)} />
         })()}
 
         {photoMenu && !cropImageId && (<>
@@ -9170,13 +9170,16 @@ function VideoEmbed({ img, play, previewing, onReady }) {
 
 // contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
 // when it changes externally (never while focused, so the caret isn't disturbed); saves on input.
-function RichTextBox({ html, editable, bgColor, onChange }) {
+function RichTextBox({ html, editable, bgColor, borderColor, textShadow, halo, onChange }) {
   const ref = useRef(null)
   useEffect(() => {
     const el = ref.current; if (!el) return
     if (document.activeElement !== el && el.innerHTML !== (html || '')) el.innerHTML = html || ''
   }, [html])
   useEffect(() => { if (editable) requestAnimationFrame(() => ref.current?.focus()) }, [editable])
+  const shadows = []
+  if (halo) { const c = typeof halo === 'string' ? halo : 'rgba(0,0,0,0.9)'; shadows.push(`0 0 2px ${c}`, `0 0 2px ${c}`, `0 0 5px ${c}`) }
+  if (textShadow) shadows.push('2px 2px 4px rgba(0,0,0,0.55)')
   return (
     <div ref={ref} data-richtext="true" contentEditable={editable} suppressContentEditableWarning
       onInput={() => onChange?.(ref.current?.innerHTML || '')}
@@ -9184,7 +9187,8 @@ function RichTextBox({ html, editable, bgColor, onChange }) {
       onKeyDown={e => e.stopPropagation()}
       onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t) }}
       style={{ width: '100%', height: '100%', boxSizing: 'border-box', padding: '6px 8px', outline: editable ? '1px solid #5b6af0' : 'none',
-        borderRadius: 4, background: bgColor || 'transparent', color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: 15, lineHeight: 1.35,
+        border: borderColor ? `1.5px solid ${borderColor}` : 'none', borderRadius: 4, background: bgColor || 'transparent',
+        color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: 15, lineHeight: 1.35, textShadow: shadows.join(', ') || 'none',
         overflow: 'auto', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
   )
 }
@@ -9208,7 +9212,7 @@ const TEXT_FONTS = [
   { label: 'Pacifico', exec: 'Pacifico, cursive' },
   { label: 'Caveat', exec: 'Caveat, cursive' },
 ]
-function TextFormatToolbar({ left, top }) {
+function TextFormatToolbar({ left, top, box, onBoxStyle }) {
   const savedRange = useRef(null)
   useEffect(() => {
     const onSel = () => {
@@ -9260,6 +9264,16 @@ function TextFormatToolbar({ left, top }) {
       <button style={btn} onMouseDown={keep} title="Bulleted list" onClick={() => exec('insertUnorderedList')}>•</button>
       <button style={btn} onMouseDown={keep} title="Numbered list" onClick={() => exec('insertOrderedList')}>1.</button>
       <button style={btn} onMouseDown={keep} title="Link" onClick={() => { const u = window.prompt('Link URL:'); if (u) exec('createLink', u) }}>🔗</button>
+      {sep}
+      {/* Box-level styles (whole text element) */}
+      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Background color">▧
+        <input type="color" value={box?.bgColor && box.bgColor !== 'none' ? box.bgColor : '#12122a'} onInput={e => onBoxStyle?.({ bgColor: e.target.value })} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
+      {box?.bgColor && box.bgColor !== 'none' && <button style={{ ...btn, fontSize: 10, color: '#8fa0d8' }} onMouseDown={keep} title="No background" onClick={() => onBoxStyle?.({ bgColor: null })}>✕bg</button>}
+      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Border color">▢
+        <input type="color" value={box?.borderColor || '#5b6af0'} onInput={e => onBoxStyle?.({ borderColor: e.target.value })} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
+      {box?.borderColor && <button style={{ ...btn, fontSize: 10, color: '#8fa0d8' }} onMouseDown={keep} title="No border" onClick={() => onBoxStyle?.({ borderColor: null })}>✕bd</button>}
+      <button style={{ ...btn, background: box?.textShadow ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Drop shadow" onClick={() => onBoxStyle?.({ textShadow: !box?.textShadow })}>⌵</button>
+      <button style={{ ...btn, background: box?.halo ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Halo (outline glow for legibility)" onClick={() => onBoxStyle?.({ halo: !box?.halo })}>◎</button>
     </div>
   )
 }
@@ -9405,6 +9419,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // canvas pans/zooms over it. Content (HTML) saved on input.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
           <RichTextBox html={img.html} editable={isSelected} bgColor={bgColor}
+            borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo}
             onChange={html => onTextChange?.(html)} />
         </foreignObject>
       ) : (isVideo && ytPosterMode) ? (
