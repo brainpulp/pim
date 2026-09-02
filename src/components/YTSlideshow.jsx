@@ -44,6 +44,7 @@ function Icon({ name, size = 15 }) {
     case 'add':    return <svg {...p}><path d="M12 5v14M5 12h14" /></svg>
     case 'trash':  return <svg {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>
     case 'extract':return <svg {...p}><path d="M7 17L17 7" /><path d="M8 7h9v9" /></svg>
+    case 'copy':   return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
     case 'drag':   return <svg {...p} fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
     default:       return null
   }
@@ -313,6 +314,8 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
     setUrlInput(''); setSel(clips.length)
   }
   const del = (i) => { onChange(clips.filter((_, j) => j !== i)); setSel(s => Math.max(0, Math.min(s, clips.length - 2))) }
+  // Duplicate a clip (right after it) so you can show a different segment of the SAME video in one slideshow.
+  const dup = (i) => { const copy = { ...clips[i], id: uid() }; onChange([...clips.slice(0, i + 1), copy, ...clips.slice(i + 1)]); setSel(i + 1) }
 
   // Selecting a clip auto-plays it on the node from its trimmed start, and we poll its duration for the slider.
   const [previewPlaying, setPreviewPlaying] = useState(true)
@@ -481,6 +484,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               <div style={{ color: '#c5d0ff', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title || (clipKind(c) === 'youtube' ? c.youtubeId : clipKind(c))}</div>
               <div style={{ color: '#7080a0', fontSize: 10.5 }}>{clipKind(c) === 'image' ? `${c.duration || 5}s image` : `${fmtTime(c.start || 0)}–${c.end ? fmtTime(c.end) : 'end'}`} · {c.trigger || 'click'}{c.loop ? ' · loop' : ''}</div>
             </div>
+            <IconBtn name="copy" title="Duplicate (to show a different part of the same video)" size={22} tone="ghost" onClick={() => dup(i)} />
             {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={22} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}
             <IconBtn name="trash" title="Delete" size={22} tone="danger" onClick={() => del(i)} />
           </div>
