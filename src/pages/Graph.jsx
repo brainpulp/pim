@@ -2600,6 +2600,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const openMenuAt = (clientX, clientY, target, isCtrl, forceBg) => {
       if (!el || readOnly) return
       if (target?.closest?.(OVERLAY_SEL)) return
+      // A table manages its own right-click menu (add/delete rows & columns, collapse, delete). Don't
+      // also pop the node/background menu over it — unless Shift forces the background menu.
+      if (!forceBg && target?.closest?.('[data-table-surface]')) return
       const rect = el.getBoundingClientRect()
       if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
       const px = clientX - rect.left, py = clientY - rect.top
@@ -6222,6 +6225,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 <TableCard node={n} title={node.label} table={node.table} zoomRef={zoomTransformRef}
                   fill={getVP(n.id).fillColor} scale={getVP(n.id).tableScale || 1} palette={COLOR_PALETTE}
                   selected={selected?.type === 'node' && selected.id === n.id}
+                  collapsed={!!getVP(n.id).tableCollapsed}
+                  onToggleCollapse={() => setNodeViewProp(n.id, 'tableCollapsed', !getVP(n.id).tableCollapsed)}
+                  onPivotTop={dy => {
+                    const sn = simNodesRef.current.find(x => x.id === n.id); const vp = getVP(n.id)
+                    if (sn) { sn.y = (sn.y || 0) + dy; if (sn.fy != null) sn.fy = sn.y }
+                    if (vp.fy != null) setAnchor(n.id, vp.fx ?? sn?.x ?? 0, vp.fy + dy)
+                    scheduleRender()
+                  }}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onRename={label => updateLabel(n.id, label)}
@@ -8810,7 +8821,7 @@ const st = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onPivotTop, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
@@ -8836,6 +8847,21 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const H = colHdrH + rowHeights.reduce((a, h) => a + h, 0)
   const bg = fill && fill !== 'none' && fill !== 'transparent' ? fill : null
   const accent = bg || '#5b6af0'
+  // Below a certain on-screen size the table is too small to edit — the whole surface becomes a drag
+  // handle (move only), no cell editing / affordances. Effective size = canvas zoom × table scale.
+  const effK = (zoomRef?.current?.k || 1) * (scale || 1)
+  const dragOnly = effK < 0.5
+  // Pivot-on-top: the table is centered at node.y (transform translates by −H/2). When H changes
+  // (column reflow, row add), keep the TOP edge fixed by shifting the anchor y by half the delta.
+  const prevHRef = useRef(H)
+  useEffect(() => {
+    const prev = prevHRef.current
+    if (prev !== H) {
+      const dy = (H - prev) / 2
+      prevHRef.current = H
+      if (Math.abs(dy) > 0.01) onPivotTop?.(dy)   // parent shifts the anchor down by dy so the top stays put
+    }
+  }, [H])
   const colX = []; { let a = 0; columns.forEach(c => { colX.push(a); a += colW(c) }) }
   const rowTop = []; { let a = colHdrH; rowHeights.forEach(h => { rowTop.push(a); a += h }) }
 
@@ -8848,6 +8874,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const [showColors, setShowColors] = useState(false)
   const [showTextColors, setShowTextColors] = useState(false)
   const [borderHov, setBorderHov] = useState(false)   // hovering any of the 4 move-borders → light the whole-table ring
+  const showAff = hov && !dragOnly                    // editing affordances (handles/menus) only when zoomed in enough
   const [drop, setDrop] = useState(null)              // live reorder destination: { kind:'col'|'row', id }
   const [dragging, setDragging] = useState(false)     // a reorder drag is in progress
   const [ctx, setCtx] = useState(null)                // right-click menu: { x, y, ri, ci } in card-local coords
@@ -8909,18 +8936,43 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   // stay inside the foreignObject's hit-rect — otherwise `overflow:visible` shows them but they aren't
   // clickable, and the gap between grid and affordance drops the hover.
   const PADT = 24, PADR = 34, PADB = 26, PADL = 30
+
+  // Collapsed: render as a compact node — a table icon + the title — that expands on double-click (or ⊞).
+  if (collapsed) {
+    const label = title || 'Table'
+    const cw = Math.max(120, Math.min(300, label.length * 8 + 60))
+    const ch = 34
+    return (
+      <g transform={`translate(${(node.x || 0) - cw / 2},${(node.y || 0) - ch / 2}) scale(${scale})`}>
+        <foreignObject data-card="true" x={-6} y={-6} width={cw + 12} height={ch + 12} style={{ overflow: 'visible' }}>
+          <div onMouseDown={e => { stop(e); onHeaderDown(e) }} onClick={e => { stop(e); onSelect() }}
+            onDoubleClick={e => { stop(e); onToggleCollapse?.() }} title="Double-click to expand"
+            style={{ width: cw, height: ch, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 10px',
+              background: bg || '#181d3a', border: `1.5px solid ${selected ? accent : '#2d3a6a'}`, borderRadius: 9, cursor: 'move',
+              boxShadow: selected ? `0 0 0 1.5px ${accent}` : '0 4px 14px rgba(0,0,0,0.4)', fontFamily: '-apple-system, sans-serif' }}>
+            <span style={{ fontSize: 15, flexShrink: 0 }}>📊</span>
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+            <button onMouseDown={stop} onClick={e => { stop(e); onToggleCollapse?.() }} title="Expand"
+              style={{ background: 'transparent', border: 'none', color: '#8fa0d8', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '2px 4px', flexShrink: 0 }}>⊞</button>
+          </div>
+        </foreignObject>
+      </g>
+    )
+  }
+
   return (
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
     <foreignObject data-card="true" x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
-      <div ref={rootRef} onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
+      <div ref={rootRef} data-table-surface="1" onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
         onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
+        onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
           pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
       {/* grid-anchor is always interactive so hovering it reveals the (otherwise click-through) padding */}
       <div onMouseEnter={() => setHov(true)} style={{ position: 'absolute', left: PADL, top: PADT, width: W, pointerEvents: 'auto' }}>
 
         {/* Hover-only header: drag handle · title · colour · delete (floats above the grid) */}
-        {hov && (
+        {showAff && (
           <div style={{ position: 'absolute', left: 0, top: -23, height: 20, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
             <span onMouseDown={onHeaderDown} title="Drag to move" style={{ cursor: 'grab', color: '#8090b8', fontSize: 12, lineHeight: 1 }}>✥</span>
             {editTitle ? (
@@ -8951,17 +9003,20 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
                 </div>
               )}
             </div>
+            <button style={tc.hbtn} title="Collapse table (show title only)" onMouseDown={stop} onClick={e => { stop(e); onToggleCollapse?.() }}>▬</button>
             <button style={{ ...tc.hbtn, color: '#f0a0a0' }} title="Delete table" onMouseDown={stop} onClick={e => { stop(e); onDelete() }}>🗑</button>
           </div>
         )}
 
-        {/* Grid — background (or transparent), lines + text. */}
-        <div style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: (selected || borderHov) ? `0 0 0 1.5px ${accent}` : 'none' }}>
+        {/* Grid — background (or transparent), lines + text. Right-clicking a non-cell area (gaps,
+            borders) falls back to appending rows/columns. */}
+        <div onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
+          style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: (selected || borderHov) ? `0 0 0 1.5px ${accent}` : 'none' }}>
           {/* Column header row */}
           <div style={{ display: 'flex', height: colHdrH }}>
             {columns.map((col, ci) => (
               <div key={col.id} data-tcol={col.id} onContextMenu={e => openCtx(e, -1, ci)} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2, overflow: menuCol === col.id ? 'visible' : 'hidden', zIndex: menuCol === col.id ? 30 : undefined }}>
-                {hov && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ position: 'relative', zIndex: 9, cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
+                {showAff && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ position: 'relative', zIndex: 9, cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
                 {editColId === col.id ? (
                   <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
                     onBlur={e => { onUpdateColumn(col.id, { name: e.target.value.trim() || col.name }); setEditColId(null) }}
@@ -8971,7 +9026,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
                   <span title={`${col.name} · ${TYPE_LABELS[col.type] || col.type}`} onDoubleClick={e => { stop(e); setEditColId(col.id) }}
                     style={{ flex: 1, fontSize: 11, fontWeight: 700, color: txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}>{col.name}</span>
                 )}
-                {hov && <button style={tc.colMenuBtn} title="Column type / delete" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>}
+                {showAff && <button style={tc.colMenuBtn} title="Column type / delete" onMouseDown={stop} onClick={e => { stop(e); setMenuCol(menuCol === col.id ? null : col.id) }}>⋮</button>}
                 {menuCol === col.id && (
                   <div style={tc.colMenu} onMouseDown={stop} onClick={stop} onWheel={stop}>
                     <div style={tc.menuLabel}>Type</div>
@@ -8989,35 +9044,35 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
                 )}
               </div>
             ))}
-            {hov && <button style={tc.addColBtn} title="Add column" onMouseDown={stop} onClick={e => { stop(e); onAddColumn('text') }}>＋</button>}
+            {showAff && <button style={tc.addColBtn} title="Add column" onMouseDown={stop} onClick={e => { stop(e); onAddColumn('text') }}>＋</button>}
           </div>
           {/* Data rows */}
           {rows.map((r, ri) => (
             <div key={r.id} data-trow={r.id} className="tc-row" style={{ display: 'flex', height: rowHeights[ri], position: 'relative' }}>
               {columns.map((col, ci) => (
                 <div key={col.id} onContextMenu={e => openCtx(e, ri, ci)} style={{ ...cellBox(colW(col)), ...(col.wrap && col.type === 'text' ? { alignItems: 'stretch', padding: '3px 5px' } : {}) }}>
-                  <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} textColor={txt} />
+                  <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} textColor={txt} editable={!dragOnly} />
                 </div>
               ))}
-              {hov && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
+              {showAff && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
                 style={{ position: 'absolute', zIndex: 9, left: -28, top: '50%', transform: 'translateY(-50%)', cursor: 'grab', color: '#7b8fcc', fontSize: 11, lineHeight: 1 }}>⣿</span>}
-              {hov && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
+              {showAff && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
             </div>
           ))}
 
           {/* Google-Docs-style resize handles: grab a grid line and drag. Interior lines only, so the outer
               borders stay free for moving. */}
-          {hov && columns.map((col, ci) => ci < columns.length - 1 && (
+          {showAff && columns.map((col, ci) => ci < columns.length - 1 && (
             <div key={'cd' + col.id} className="tc-linediv" onMouseDown={e => startColResize(e, col)} title="Drag to resize column"
               style={{ position: 'absolute', left: colX[ci] + colW(col) - 3, top: 0, width: 6, height: H, cursor: 'col-resize', zIndex: 6 }} />
           ))}
-          {hov && rows.map((r, ri) => ri < rows.length - 1 && (
+          {showAff && rows.map((r, ri) => ri < rows.length - 1 && (
             <div key={'rd' + r.id} className="tc-linediv" onMouseDown={e => startRowResize(e, r.id, rowHeights[ri])} title="Drag to resize row"
               style={{ position: 'absolute', left: 0, top: rowTop[ri] + rowHeights[ri] - 3, width: W, height: 6, cursor: 'row-resize', zIndex: 6 }} />
           ))}
           {/* Last column / last row remain resizable via a thin handle on their own edge. */}
-          {hov && columns.length > 0 && <div className="tc-linediv" onMouseDown={e => startColResize(e, columns[columns.length - 1])} title="Drag to resize column" style={{ position: 'absolute', left: W - 3, top: 0, width: 6, height: colHdrH, cursor: 'col-resize', zIndex: 7 }} />}
-          {hov && rows.length > 0 && <div className="tc-linediv" onMouseDown={e => startRowResize(e, rows[rows.length - 1].id, rowHeights[rowHeights.length - 1])} title="Drag to resize row" style={{ position: 'absolute', left: -6, top: rowTop[rows.length - 1] + rowHeights[rowHeights.length - 1] - 3, width: 6, height: 6, cursor: 'row-resize', zIndex: 7 }} />}
+          {showAff && columns.length > 0 && <div className="tc-linediv" onMouseDown={e => startColResize(e, columns[columns.length - 1])} title="Drag to resize column" style={{ position: 'absolute', left: W - 3, top: 0, width: 6, height: colHdrH, cursor: 'col-resize', zIndex: 7 }} />}
+          {showAff && rows.length > 0 && <div className="tc-linediv" onMouseDown={e => startRowResize(e, rows[rows.length - 1].id, rowHeights[rowHeights.length - 1])} title="Drag to resize row" style={{ position: 'absolute', left: -6, top: rowTop[rows.length - 1] + rowHeights[rowHeights.length - 1] - 3, width: 6, height: 6, cursor: 'row-resize', zIndex: 7 }} />}
 
           {/* Live reorder destination — a solid highlight over the target COLUMN or ROW (never a line). */}
           {drop && drop.kind === 'col' && (() => { const ci = columns.findIndex(c => c.id === drop.id); if (ci < 0) return null
@@ -9027,7 +9082,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
 
           {/* Move-the-table borders — drag any of the 4 edges. Hovering ANY of them lights the whole-table
               selection ring (same style/thickness as selecting it), not each border individually. */}
-          {hov && [
+          {showAff && [
             { k: 't', s: { left: 0, top: -3, width: W, height: 6 } },
             { k: 'b', s: { left: 0, top: H - 3, width: W, height: 6 } },
             { k: 'l', s: { left: -3, top: 0, width: 6, height: H } },
@@ -9039,9 +9094,15 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
           ))}
         </div>
 
+        {/* Zoomed out too far to edit → the whole grid becomes a drag handle (move only). Right-click
+            still offers table options. */}
+        {dragOnly && <div title="Zoom in to edit" onMouseDown={e => { stop(e); onHeaderDown(e) }} onClick={e => { stop(e); onSelect() }}
+          onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
+          style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, cursor: 'move', zIndex: 30 }} />}
+
         {/* Hover-only add-row + resize corner */}
-        {hov && <button style={tc.addRowBtn} onMouseDown={stop} onClick={e => { stop(e); onAddRow() }}>＋ row</button>}
-        {hov && <div title="Drag to resize table" onMouseDown={startScale}
+        {showAff && <button style={tc.addRowBtn} onMouseDown={stop} onClick={e => { stop(e); onAddRow() }}>＋ row</button>}
+        {showAff && <div title="Drag to resize table" onMouseDown={startScale}
           style={{ position: 'absolute', right: -5, bottom: -5, width: 11, height: 11, background: accent, borderRadius: 2, cursor: 'nwse-resize', boxShadow: '0 0 0 1px rgba(0,0,0,0.4)' }} />}
 
         {/* Right-click context menu — add / delete rows & columns right where you clicked. */}
@@ -9059,6 +9120,9 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
             <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
             {ctx.ri >= 0 && rows[ctx.ri] && <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteRow(rows[ctx.ri].id); setCtx(null) }}>Delete row</div>}
             {columns[ctx.ci] && <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(columns[ctx.ci].id); setCtx(null) }}>Delete column</div>}
+            <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
+            <div style={tc.menuItem(false)} onClick={() => { onToggleCollapse?.(); setCtx(null) }}>▬ Collapse table</div>
+            <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDelete(); setCtx(null) }}>Delete table</div>
           </div>
         </>)}
       </div>
@@ -9068,7 +9132,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   )
 }
 
-function TableCell({ col, value, onChange, textColor }) {
+function TableCell({ col, value, onChange, textColor, editable = true }) {
   const [draft, setDraft] = useState(value ?? '')
   useEffect(() => { setDraft(value ?? '') }, [value])
   const stop = e => e.stopPropagation()
@@ -9088,7 +9152,7 @@ function TableCell({ col, value, onChange, textColor }) {
   if (col.type === 'text') {
     // Rich text cell: contentEditable holding HTML, with a floating B/I/U/S + bullet toolbar while
     // editing. Wrap columns grow the row to fit; non-wrap stay single-line.
-    return <RichCell value={value} wrap={!!col.wrap} textColor={col2} onChange={onChange} />
+    return <RichCell value={value} wrap={!!col.wrap} textColor={col2} editable={editable} onChange={onChange} />
   }
   const inputType = col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'
   return (
@@ -9103,7 +9167,7 @@ function TableCell({ col, value, onChange, textColor }) {
 // A rich-text table cell: contentEditable HTML with a floating format toolbar (bold/italic/underline/
 // strikethrough + bullet list). The toolbar renders in a portal so it escapes the SVG/foreignObject
 // transform and sits at true screen coordinates above the cell.
-function RichCell({ value, wrap, textColor, onChange }) {
+function RichCell({ value, wrap, textColor, editable = true, onChange }) {
   const ref = useRef(null)
   const [editing, setEditing] = useState(false)
   const [tb, setTb] = useState(null)   // { left, top } screen coords for the toolbar
@@ -9112,6 +9176,17 @@ function RichCell({ value, wrap, textColor, onChange }) {
     const el = ref.current; if (!el) return
     if (document.activeElement !== el && el.innerHTML !== (value ?? '')) el.innerHTML = value ?? ''
   }, [value])
+  // While editing, close the cell (and its floating toolbar) the moment the canvas is panned/zoomed —
+  // a wheel gesture, or a mousedown anywhere outside this cell and its toolbar. Stops the toolbar from
+  // floating over a moving canvas.
+  useEffect(() => {
+    if (!editing) return
+    const onWheel = () => ref.current?.blur()
+    const onDown = e => { const t = e.target; if (ref.current && !ref.current.contains(t) && !t?.closest?.('[data-tcell-tb]')) ref.current.blur() }
+    window.addEventListener('wheel', onWheel, { capture: true, passive: true })
+    window.addEventListener('mousedown', onDown, true)
+    return () => { window.removeEventListener('wheel', onWheel, true); window.removeEventListener('mousedown', onDown, true) }
+  }, [editing])
   const placeTb = () => { const r = ref.current?.getBoundingClientRect(); if (r) setTb({ left: r.left, top: r.top - 32 }) }
   const exec = (cmd) => { document.execCommand(cmd, false); ref.current?.focus(); if (ref.current) onChange(ref.current.innerHTML) }
   const btn = (label, cmd, style) => (
@@ -9119,18 +9194,19 @@ function RichCell({ value, wrap, textColor, onChange }) {
       style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 6px', borderRadius: 4, ...style }}>{label}</button>
   )
   return (<>
-    <div ref={ref} contentEditable suppressContentEditableWarning data-tcell="1"
-      onMouseDown={stop} onClick={stop}
+    <div ref={ref} contentEditable={editable} suppressContentEditableWarning data-tcell="1"
+      onMouseDown={editable ? stop : undefined} onClick={editable ? stop : undefined}
       onFocus={() => { setEditing(true); placeTb() }}
       onScroll={placeTb}
       onBlur={() => { setEditing(false); setTb(null); onChange(ref.current?.innerHTML || '') }}
       onInput={placeTb}
       onKeyDown={e => { stop(e); if (e.key === 'Enter' && !wrap && !e.shiftKey) { e.preventDefault(); ref.current?.blur() } }}
       style={{ ...tc.cellInput, color: textColor || TC_TXT, whiteSpace: wrap ? 'pre-wrap' : 'nowrap',
-        wordBreak: wrap ? 'break-word' : 'normal', overflow: 'hidden', cursor: 'text', minHeight: 15,
+        wordBreak: wrap ? 'break-word' : 'normal', overflow: 'hidden', cursor: editable ? 'text' : 'inherit', minHeight: 15,
+        pointerEvents: editable ? 'auto' : 'none',
         fontFamily: 'inherit', fontSize: 12, lineHeight: wrap ? '16px' : 1.3 }} />
-    {editing && tb && createPortal(
-      <div onMouseDown={e => { e.preventDefault(); stop(e) }} onClick={stop}
+    {editing && editable && tb && createPortal(
+      <div data-tcell-tb="1" onMouseDown={e => { e.preventDefault(); stop(e) }} onClick={stop}
         style={{ position: 'fixed', left: tb.left, top: tb.top, zIndex: 10000, display: 'flex', alignItems: 'center', gap: 1,
           background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 7, padding: 2, boxShadow: '0 6px 20px rgba(0,0,0,0.7)' }}>
         {btn('B', 'bold', { fontWeight: 800 })}
