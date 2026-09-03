@@ -293,7 +293,7 @@ const trimBtn = { background: 'transparent', border: '1px solid #2d3a6a', color:
 // video — but the window is MANUAL: it only re-centers on the selection at the moment you change the zoom
 // level. It never follows the selection on its own afterwards (that auto-follow made the view jump around
 // while trimming). Live preview via onScrub (drag) / onLoop (release).
-function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
+function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
   const trackRef = useRef(null)
   const [zoom, setZoom] = useState(1)   // 1 = whole video; higher = narrower window
   const [dragging, setDragging] = useState(false)
@@ -340,6 +340,9 @@ function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
   const pct = (t) => Math.max(0, Math.min(1, (t - w0) / span)) * 100
   const sPct = pct(s), ePct = pct(e)
   const zoomed = zoom > 1
+  // Live playback head — where the preview currently is. Only shown when it's inside the visible window.
+  const phInWin = playhead != null && playhead >= w0 - 0.001 && playhead <= w1 + 0.001
+  const phPct = phInWin ? pct(playhead) : null
   return (
     <div style={{ margin: '2px 8px' }}>
       <div ref={trackRef} style={{ position: 'relative', height: 24 }}>
@@ -347,6 +350,9 @@ function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
         {zoomed && w0 > 0 && <div style={{ position: 'absolute', top: 7, left: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
         {zoomed && w1 < M && <div style={{ position: 'absolute', top: 7, right: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
         <div style={{ position: 'absolute', top: 10, left: `${sPct}%`, width: `${Math.max(0, ePct - sPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
+        {phPct != null && (
+          <div style={{ position: 'absolute', top: 3, left: `calc(${phPct}% - 1px)`, width: 2, height: 18, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />
+        )}
         {[['start', sPct], ['end', ePct]].map(([w, p]) => (
           <div key={w} onMouseDown={drag(w)} style={{ position: 'absolute', top: 2, left: `calc(${p}% - 7px)`, width: 14, height: 20, borderRadius: 4, background: '#c5d0ff', border: '1px solid #5b6af0', cursor: 'ew-resize' }} />
         ))}
@@ -667,6 +673,13 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
     const t = setInterval(() => { const d = getDuration() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 40) clearInterval(t) }, 300)
     return () => clearInterval(t)
   }, [hasVideo, video.src, yt, getDuration])
+  // Poll the preview's current time so the trim slider can show a live playback head.
+  const [curT, setCurT] = useState(0)
+  useEffect(() => {
+    if (!hasVideo || !getTime) return
+    const t = setInterval(() => setCurT(getTime() || 0), 120)
+    return () => clearInterval(t)
+  }, [hasVideo, getTime])
   const max = Math.max(dur || 0, video.end || 0, 30)
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const W = 340
@@ -683,13 +696,15 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
       </div>
       <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {hasVideo && (
-          <div style={{ fontSize: 11, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontSize: 11.5, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button title={previewPlaying ? 'Pause preview' : 'Play the trimmed clip on a loop'}
               onClick={() => { if (previewPlaying) { onPreviewPause?.(); setPreviewPlaying(false) } else { onLoopSel?.(video.start || 0, video.end || 0); setPreviewPlaying(true) } }}
-              style={{ width: 26, height: 26, borderRadius: '50%', border: '1px solid #5b6af0', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 8, border: '1px solid #5b6af0', background: '#171c3f', color: '#dbe2ff', cursor: 'pointer', padding: '5px 12px 5px 10px', fontSize: 12, fontWeight: 600, flex: '0 0 auto' }}>
               <Icon name={previewPlaying ? 'pause' : 'play'} size={13} />
+              {previewPlaying ? 'Pause' : 'Play'}
             </button>
-            <span>Previews on the video itself, on the canvas.</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#c5d0ff' }}>{fmtTime(curT)}</span>
+            <span>on the canvas</span>
           </div>
         )}
         {/* Link (YouTube only — a file video has no URL to swap) */}
@@ -704,7 +719,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         )}
         {/* Trim */}
         {hasVideo && <>
-          <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })} onScrub={onScrubTime} onLoop={onLoopSel} />
+          <TrimSlider start={video.start || 0} end={video.end || max} max={max} playhead={curT} onChange={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })} onScrub={onScrubTime} onLoop={onLoopSel} />
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Start</span>
             <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + (yt || 'f') + (video.start || 0)}
@@ -716,6 +731,20 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
               onBlur={e => { const v = parseTime(e.target.value); onPatch({ end: v || 0 }); onScrubTime?.(v || (video.start || 0), 'end') }} />
           </div>
+          {/* Final duration — after the trim, then after the speed change. */}
+          {(() => {
+            const st = video.start || 0
+            const en = (video.end && video.end > st) ? video.end : (dur || max)
+            const speed = video.speed || 1
+            const trimLen = Math.max(0, en - st)
+            const finalLen = trimLen / (speed || 1)
+            return (
+              <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8', justifyContent: 'space-between', fontVariantNumeric: 'tabular-nums' }}>
+                <span>Final length: <b style={{ color: '#c5d0ff' }}>{fmtTime(trimLen)}</b><span style={{ color: '#7080a0' }}> (trim)</span></span>
+                {speed !== 1 && <span>→ <b style={{ color: '#8ecbff' }}>{fmtTime(finalLen)}</b> at {speed}×</span>}
+              </div>
+            )
+          })()}
           {/* Cuts (inverse trim) — snip sections out of the middle */}
           <Collapsible label={`✂ Cuts${video.cuts?.length ? ` (${video.cuts.length})` : ''} — snip out sections`}>
             <CutsEditor cuts={video.cuts || []} max={max} getTime={getTime} onChange={cuts => onPatch({ cuts: cuts.length ? cuts : undefined })} />
