@@ -7356,7 +7356,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const halfW = 240 * (getVP(ytssInspectorId).ytssScale || 1)
           anchor = { x: rect.left + T.x + (sn.x + halfW) * T.k + 14, y: rect.top + T.y + sn.y * T.k }
         }
-        return (
+        const closeInspector = () => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }
+        return (<>
+          {/* Click-away backdrop — clicking anywhere outside the panel closes it. */}
+          <div onMouseDown={closeInspector} style={{ position: 'fixed', inset: 0, zIndex: 499 }} />
           <YTSlideshowInspector
             clips={yn.ytss.clips || []}
             anchor={anchor}
@@ -7376,9 +7379,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onUpload={() => uploadSlideToYtss(ytssInspectorId)}
             onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); extractSlide(clip, (s?.x || 0) + 340, (s?.y || 0)) }}
-            onClose={() => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }}
+            onClose={closeInspector}
           />
-        )
+        </>)
       })()}
 
       {ytssFullscreenId && (() => {
