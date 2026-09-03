@@ -597,11 +597,13 @@ const useGraphStore = create((set, get) => ({
   })),
 
   // â”€â”€ Image ops (per view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  addImage: (src, x, y, width, height) => {
+  // `extra` merges extra fields onto the image — notably `z:'front'` so a freshly pasted/dropped image
+  // paints ON TOP of everything (nodes/tables included), not behind them.
+  addImage: (src, x, y, width, height, extra = {}) => {
     const id = uid()
     set(s => ({
       views: s.views.map(v => v.id !== s.activeViewId ? v : {
-        ...v, images: [...(v.images || []), { id, src, x, y, width, height, rotation: 0, bgColor: null }],
+        ...v, images: [...(v.images || []), { id, src, x, y, width, height, rotation: 0, bgColor: null, ...extra }],
       }),
     }))
     return id

@@ -654,15 +654,17 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
   const [urlInput, setUrlInput] = useState('')
   const [previewPlaying, setPreviewPlaying] = useState(true)
   const yt = video.youtubeId
+  const isFile = !yt && !!video.src           // an uploaded file video (not a YouTube embed)
+  const hasVideo = !!(yt || isFile)           // there's a playable clip to trim / configure
   // The preview plays on the NODE itself (via onScrub), not here — so we just poll the node player's
   // reported duration to size the trim slider.
   useEffect(() => {
     setDur(0)
-    if (!yt || !getDuration) return
+    if (!hasVideo || !getDuration) return
     let n = 0
     const t = setInterval(() => { const d = getDuration() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 40) clearInterval(t) }, 300)
     return () => clearInterval(t)
-  }, [yt, getDuration])
+  }, [hasVideo, video.src, yt, getDuration])
   const max = Math.max(dur || 0, video.end || 0, 30)
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const W = 340
@@ -674,11 +676,11 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
     <div style={{ ...pos, background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, fontFamily: '-apple-system, sans-serif', overflow: 'hidden' }}
       onMouseDown={e => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
-        <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>YouTube video</div>
+        <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>{isFile ? 'Video' : 'YouTube video'}</div>
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
       <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {yt && (
+        {hasVideo && (
           <div style={{ fontSize: 11, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 8 }}>
             <button title={previewPlaying ? 'Pause preview' : 'Play the trimmed clip on a loop'}
               onClick={() => { if (previewPlaying) { onPreviewPause?.(); setPreviewPlaying(false) } else { onLoopSel?.(video.start || 0, video.end || 0); setPreviewPlaying(true) } }}
@@ -688,25 +690,27 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
             <span>Previews on the video itself, on the canvas.</span>
           </div>
         )}
-        {/* Link */}
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input value={urlInput} placeholder={yt ? `youtu.be/${yt}` : 'Paste a YouTube link…'} onChange={e => setUrlInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') } }}
-            style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left' }} />
-          <button onClick={() => { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') }}
-            style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12 }}>Set</button>
-        </div>
+        {/* Link (YouTube only — a file video has no URL to swap) */}
+        {!isFile && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={urlInput} placeholder={yt ? `youtu.be/${yt}` : 'Paste a YouTube link…'} onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') } }}
+              style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left' }} />
+            <button onClick={() => { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') }}
+              style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12 }}>Set</button>
+          </div>
+        )}
         {/* Trim */}
-        {yt && <>
+        {hasVideo && <>
           <TrimSlider start={video.start || 0} end={video.end || max} max={max} onChange={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })} onScrub={onScrubTime} onLoop={onLoopSel} />
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Start</span>
-            <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + yt + (video.start || 0)}
+            <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + (yt || 'f') + (video.start || 0)}
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
               onBlur={e => { const v = parseTime(e.target.value); if (v != null) { onPatch({ start: v }); onScrubTime?.(v, 'start') } }} />
             <span style={{ flex: 1 }} />
             <span>End</span>
-            <input style={inp} defaultValue={video.end ? fmtTime(video.end) : ''} placeholder={fmtTime(max)} key={'e' + yt + (video.end || 0)}
+            <input style={inp} defaultValue={video.end ? fmtTime(video.end) : ''} placeholder={fmtTime(max)} key={'e' + (yt || 'f') + (video.end || 0)}
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
               onBlur={e => { const v = parseTime(e.target.value); onPatch({ end: v || 0 }); onScrubTime?.(v || (video.start || 0), 'end') }} />
           </div>
@@ -716,7 +720,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
           </Collapsible>
         </>}
         {/* Speed */}
-        {yt && (
+        {hasVideo && (
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Speed</span>
             <select value={video.speed || 1} onChange={e => { const r = parseFloat(e.target.value); onPatch({ speed: r }) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
@@ -760,6 +764,16 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
             </div>
           )
         })()}
+        {/* Poster frame for a FILE video — upload-only (we can't sample arbitrary frames here). */}
+        {isFile && onUploadPoster && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 11.5, color: '#8fa0d8' }}>Poster frame {video.poster ? '(custom)' : '(the first frame)'}</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={onUploadPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Upload image…</button>
+              {video.poster && <button onClick={onResetPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Remove</button>}
+            </div>
+          </div>
+        )}
         {/* Toggles */}
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.autoplayOnZoom} onChange={e => onPatch({ autoplayOnZoom: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Autoplay on zoom / arrow-nav</label>
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.autoplayOnSlide} onChange={e => onPatch({ autoplayOnSlide: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Autoplay on slide</label>

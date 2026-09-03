@@ -4769,7 +4769,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const [cx, cy] = zoomTransformRef.current.invert([
             (rect?.width ?? 800) / 2, (rect?.height ?? 600) / 2,
           ])
-          const imgId = addImage(src, cx, cy, w, h)
+          const imgId = addImage(src, cx, cy, w, h, { z: 'front' })
           uploadImageDataUrl(src, projectId).then(url => { if (url && url !== src) updateImage(imgId, { src: url }) })
         }
         el.src = ev.target.result
@@ -4901,7 +4901,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const MAX = 220
           const ar = el.naturalWidth / el.naturalHeight || 1
           const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
-          const imgId = addImage(reader.result, sx, sy, w, h)
+          const imgId = addImage(reader.result, sx, sy, w, h, { z: 'front' })
           uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId, { src: url }) })
         }
         el.src = reader.result
@@ -4986,7 +4986,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const extractSlide = useCallback((clip, sx, sy) => {
     const k = clip.kind || (clip.youtubeId ? 'youtube' : 'video')
     const timed = { start: clip.start || 0, end: clip.end || 0, muted: clip.muted === true, loop: !!clip.loop, cuts: clip.cuts, title: clip.title || '' }
-    if (k === 'image') { addImage(clip.src, sx, sy, 360, 240); return }
+    if (k === 'image') { addImage(clip.src, sx, sy, 360, 240, { z: 'front' }); return }
     if (k === 'audio') { addAudio({ src: clip.src, ...timed, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
     const W = 320
     if (k === 'youtube') { addVideo({ videoKind: 'youtube', youtubeId: clip.youtubeId, speed: clip.speed || 1, captions: !!clip.captions, ...timed }, sx, sy, W, Math.round(W * 9 / 16)); return }
@@ -5035,7 +5035,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const MAX = 220
             const ar = el.naturalWidth / el.naturalHeight || 1
             const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
-            const imgId2 = addImage(reader.result, sx, sy, w, h)
+            const imgId2 = addImage(reader.result, sx, sy, w, h, { z: 'front' })
             uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId2, { src: url }) })
           }
           el.src = reader.result
@@ -5468,6 +5468,50 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const selectedNode = selected?.type === 'node' ? simNodesRef.current.find(n => n.id === selected.id) : null
   const selectedStoreNode = selectedNode ? storeNodes.find(n => n.id === selectedNode.id) : null
 
+  // One canvas image/photo/video/text card. Rendered in two passes: default images sit BELOW the nodes
+  // (a background layer); images flagged `z:'front'` (e.g. anything freshly pasted) render in a later
+  // pass so the newest element lands on top of everything — including tables/nodes.
+  const renderImageCard = (img0) => {
+    const _ov = imageStageOverlay?.[img0.id]
+    const img = _ov ? { ...img0, ..._ov } : img0
+    let mediaPlay = false
+    if ((img.type === 'audio' || img.type === 'video') && (img.autoplayOnZoom || img.autoplayOnSlide)) {
+      const t = zoomTransformRef.current, k = t.k || 1
+      const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
+      if (vw > 0) {
+        const cxs = t.x + img.x * k, cys = t.y + img.y * k
+        const inView = cxs > 0 && cxs < vw && cys > 0 && cys < vh
+        const fill = Math.max((img.width * k) / vw, (img.height * k) / vh)
+        if (inView && fill >= 0.4) mediaPlay = true
+      }
+      if (!mediaPlay && img.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
+        const fr = slideSimNodes[presentingSlideIdx]
+        if (fr) {
+          const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(fr.id) || {}) }
+          const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
+          const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
+          if (Math.abs(img.x - (fr.x || 0)) <= fhw && Math.abs(img.y - (fr.y || 0)) <= fhh) mediaPlay = true
+        }
+      }
+    }
+    return (
+      <ImageNode key={img.id} img={img}
+        isSelected={selectedImageIds.has(img.id)}
+        isCropping={cropImageId === img.id}
+        onMouseDown={handleImageMouseDown}
+        mediaPlay={mediaPlay}
+        onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
+        onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
+        onTextChange={html => updateImage(img.id, { html })}
+        zoomK={T.k}
+        previewing={videoEdit?.kind === 'image' && videoEdit.id === img.id}
+        onPlayerReady={setVideoPreviewHandle}
+        onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
+        onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) updateImage(img.id, { caption: next }) }}
+      />
+    )
+  }
+
   if (loading) return <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#8090b8', background:'#0c0c1a' }}>Loading project…</div>
 
   // Pre-compute edge geometry for two-pass rendering (lines behind nodes, arrowheads on top)
@@ -5890,53 +5934,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               )
             })()}
 
-            {/* 3. Images (floating photos are hidden while drilled into a node) */}
-            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img0 => {
-              // During stage play/preview/presentation, photos animate via a view-only overlay (position,
-              // size, opacity, colorize) merged over the doc image — never mutating the doc.
-              const _ov = imageStageOverlay?.[img0.id]
-              const img = _ov ? { ...img0, ..._ov } : img0
-              // Audio autoplay signal: play when zoomed into it, or when its slide (containing frame) is presented.
-              // Audio AND video autoplay signal. "Zoomed/nav'd into it" (fills ≥ half the viewport, on
-              // screen) plays it for EITHER flag — so a clip set to "on slide" also plays when you arrow-nav
-              // into it. During presentation, on-slide media plays when its containing frame is the slide.
-              let mediaPlay = false
-              if ((img.type === 'audio' || img.type === 'video') && (img.autoplayOnZoom || img.autoplayOnSlide)) {
-                const t = zoomTransformRef.current, k = t.k || 1
-                const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
-                if (vw > 0) {
-                  const cxs = t.x + img.x * k, cys = t.y + img.y * k
-                  const inView = cxs > 0 && cxs < vw && cys > 0 && cys < vh
-                  const fill = Math.max((img.width * k) / vw, (img.height * k) / vh)
-                  if (inView && fill >= 0.4) mediaPlay = true
-                }
-                if (!mediaPlay && img.autoplayOnSlide && isPresenting && presentingSlideIdx != null) {
-                  const fr = slideSimNodes[presentingSlideIdx]
-                  if (fr) {
-                    const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(fr.id) || {}) }
-                    const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
-                    const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
-                    if (Math.abs(img.x - (fr.x || 0)) <= fhw && Math.abs(img.y - (fr.y || 0)) <= fhh) mediaPlay = true
-                  }
-                }
-              }
-              return (
-                <ImageNode key={img.id} img={img}
-                  isSelected={selectedImageIds.has(img.id)}
-                  isCropping={cropImageId === img.id}
-                  onMouseDown={handleImageMouseDown}
-                  mediaPlay={mediaPlay}
-                  onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
-                  onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
-                  onTextChange={html => updateImage(img.id, { html })}
-                  zoomK={T.k}
-                  previewing={videoEdit?.kind === 'image' && videoEdit.id === img.id}
-                  onPlayerReady={setVideoPreviewHandle}
-                  onMediaTitle={() => { const next = prompt('Title', img.title || ''); if (next !== null) updateImage(img.id, { title: next.trim() }) }}
-                  onCaption={() => { const next = prompt('Caption', img.caption || ''); if (next !== null) updateImage(img.id, { caption: next }) }}
-                />
-              )
-            })}
+            {/* 3. Images (floating photos are hidden while drilled into a node). Background pass —
+                everything except cards flagged `z:'front'`, which paint in a later pass (on top of nodes).
+                During stage play/preview/presentation, photos animate via a view-only overlay (position,
+                size, opacity, colorize) merged over the doc image — never mutating the doc (in renderImageCard). */}
+            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false && img.z !== 'front').map(renderImageCard)}
 
             {/* 3a. Drawing layer — floating shapes/lines/arrows/emoji/text (per-view decorations, not nodes). */}
             {(activeView?.drawings || []).map(d => (
@@ -6312,6 +6314,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 </g>
               )
             })}
+
+            {/* 5. Front images — cards flagged `z:'front'` (freshly pasted/dropped) paint here, ABOVE the
+                nodes/tables, so the newest element lands on top of everything. Array order keeps the latest
+                on top of earlier front cards. */}
+            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false && img.z === 'front').map(renderImageCard)}
 
             {/* Rubber-band selection rect — on top of nodes/images */}
             {rubberBand && (() => {
@@ -7358,16 +7365,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         let onPatchPoster = null
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
-          if (!img || img.videoKind !== 'youtube') return null
-          video = { youtubeId: img.youtubeId, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, keepPlaying: img.keepPlaying }
+          if (!img || img.type !== 'video') return null
+          video = { youtubeId: img.youtubeId, videoKind: img.videoKind, src: img.src, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, keepPlaying: img.keepPlaying }
           onPatch = patch => updateImage(videoEdit.id, patch)
           onPatchPoster = url => updateImage(videoEdit.id, { poster: url })
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
         } else {
           const node = storeNodes.find(n => n.id === videoEdit.id)
-          const m = node?.media; if (!m || m.videoKind !== 'youtube') return null
+          const m = node?.media; if (!m || m.kind !== 'video') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, keepPlaying: m.keepPlaying }
+          video = { youtubeId: m.youtubeId, videoKind: m.videoKind, src: m.src, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, keepPlaying: m.keepPlaying }
           onPatchPoster = url => updateNodeMedia(videoEdit.id, { poster: url })
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
@@ -9558,6 +9565,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
   const [ended, setEnded] = useState(false)   // reached the trim end (or natural end) → freeze the frame, hide all UI
   const curTimeRef = useRef(0)
   const curDurRef = useRef(0)
+  const curPlayRef = useRef(false)   // is the player currently playing (for the selected-video scrubber)
   const cutsRef = useRef(img.cuts); cutsRef.current = img.cuts
   const speed = img.speed || 1
   const start = img.start || 0
@@ -9570,12 +9578,14 @@ function VideoEmbed({ img, play, previewing, onReady }) {
   useEffect(() => {
     if (!img.autoplayOnZoom && !img.autoplayOnSlide && !img.keepPlaying) return
     const el = ref.current; if (!el) return
+    // Autoplay must play ONLY the trimmed segment [start, end], not the whole video: seek to `start`
+    // before (re)starting.
     if (img.videoKind === 'youtube') {
-      const cmd = (func) => { try { el.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args: [] }), '*') } catch { /* ignore */ } }
+      const cmd = (func, args = []) => { try { el.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*') } catch { /* ignore */ } }
       if (play) {
         // Programmatic play is only allowed MUTED (the parent's keypress gesture doesn't cross into the
-        // cross-origin iframe). Mute → play, and retry a couple of times in case the player isn't ready.
-        const go = () => { cmd('mute'); cmd('playVideo') }
+        // cross-origin iframe). Mute → seek to trim start → play, retried in case the player isn't ready.
+        const go = () => { cmd('mute'); if (start) cmd('seekTo', [start, true]); cmd('playVideo') }
         go()
         const t1 = setTimeout(go, 400), t2 = setTimeout(go, 1200)
         return () => { clearTimeout(t1); clearTimeout(t2) }
@@ -9583,11 +9593,15 @@ function VideoEmbed({ img, play, previewing, onReady }) {
         cmd('pauseVideo')
       }
     } else if (play) {
-      el.play().catch(() => { /* gesture-gated; ignore */ })
+      // Seek into the trimmed window if we're outside it (past `end`, or before `start`).
+      const outside = (start && el.currentTime < start - 0.05) || (end && el.currentTime >= end - 0.05)
+      const startPlay = () => { if (start && outside) { try { el.currentTime = start } catch { /* not seekable yet */ } } el.play().catch(() => { /* gesture-gated; ignore */ }) }
+      if (el.readyState >= 1) startPlay()
+      else { const once = () => { startPlay(); el.removeEventListener('loadedmetadata', once) }; el.addEventListener('loadedmetadata', once) }
     } else {
       el.pause()
     }
-  }, [play, img.autoplayOnZoom, img.autoplayOnSlide, img.keepPlaying, img.videoKind, img.src])
+  }, [play, img.autoplayOnZoom, img.autoplayOnSlide, img.keepPlaying, img.videoKind, img.src, start, end])
 
   // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
   useEffect(() => {
@@ -9668,6 +9682,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
           if (tgt != null) cmd('seekTo', [tgt, true])   // snip: jump over a cut range
         }
         if (typeof d.info.duration === 'number' && d.info.duration) curDurRef.current = d.info.duration
+        if (typeof d.info.playerState === 'number') curPlayRef.current = (d.info.playerState === 1)
       }
     }
     window.addEventListener('message', onMsg)
@@ -9678,9 +9693,33 @@ function VideoEmbed({ img, play, previewing, onReady }) {
       setRate: (r) => cmd('setPlaybackRate', [r]),
       time: () => curTimeRef.current,
       duration: () => curDurRef.current,
+      playing: () => curPlayRef.current,
     })
     return () => { clearTimeout(t); window.removeEventListener('message', onMsg) }
-  }, [img.videoKind, img.youtubeId]) // eslint-disable-line
+  }, [img.videoKind, img.youtubeId, previewing]) // eslint-disable-line
+
+  // File video: expose the same control handle so the selected-video scrubber (and the trim-edit
+  // preview) can drive it. currentTime/duration stay fresh via the element's own events.
+  useEffect(() => {
+    if (img.videoKind === 'youtube') return
+    const v = ref.current; if (!v) return
+    const sync = () => { curTimeRef.current = v.currentTime || 0; curDurRef.current = v.duration || 0; curPlayRef.current = !v.paused }
+    v.addEventListener('timeupdate', sync)
+    v.addEventListener('durationchange', sync)
+    v.addEventListener('loadedmetadata', sync)
+    v.addEventListener('play', sync)
+    v.addEventListener('pause', sync)
+    onReady?.({
+      seek: (s) => { try { v.currentTime = s } catch { /* not seekable yet */ } },
+      play: () => v.play().catch(() => { /* gesture-gated */ }),
+      pause: () => v.pause(),
+      setRate: (r) => { v.playbackRate = r },
+      time: () => v.currentTime || 0,
+      duration: () => v.duration || 0,
+      playing: () => !v.paused,
+    })
+    return () => { v.removeEventListener('timeupdate', sync); v.removeEventListener('durationchange', sync); v.removeEventListener('loadedmetadata', sync); v.removeEventListener('play', sync); v.removeEventListener('pause', sync) }
+  }, [img.videoKind, img.src, previewing]) // eslint-disable-line
 
   if (img.videoKind === 'youtube') {
     // While previewing, hold the src stable (drop start/end so a trim edit doesn't reload the iframe —
@@ -9893,6 +9932,18 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   const ytPosterMode = isYT && !(playing || mediaPlay || previewing || img.keepPlaying)   // poster shown; iframe not yet mounted
   // "Keep playing" mounts the player and never reverts to the poster on focus change.
   useEffect(() => { if (img.keepPlaying && isYT) setPlaying(true) }, [img.keepPlaying, isYT])
+  // Selected-video scrubber: a play/pause button + progress slider shown while the video is SELECTED
+  // (no hover, no Edit dialog needed) so you can preview the clip. Driven by the live player handle
+  // that VideoEmbed hands us; polled while selected so the slider tracks playback.
+  const playHandleRef = useRef(null)
+  const [scrub, setScrub] = useState({ t: 0, d: 0, playing: false })
+  useEffect(() => {
+    if (!isVideo || !isSelected || previewing) return
+    const poll = () => { const h = playHandleRef.current; if (h) setScrub({ t: h.time?.() || 0, d: h.duration?.() || 0, playing: !!h.playing?.() }) }
+    poll()
+    const iv = setInterval(poll, 200)
+    return () => clearInterval(iv)
+  }, [isVideo, isSelected, previewing])
   const isLink = img.type === 'link'
   // Audio autoplay: when a card is flagged for zoom/slide autoplay, the parent's `audioPlay` signal
   // drives play/pause. Manual native controls still work when neither flag is on.
@@ -10051,7 +10102,8 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // click controls) once activated; file videos stay pass-through until armed with videoActive.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
           <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && (isYT || videoActive)) && !previewing ? 'auto' : 'none' }}>
-            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay || !!img.keepPlaying} previewing={previewing} onReady={onPlayerReady} />
+            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay || !!img.keepPlaying} previewing={previewing}
+              onReady={h => { playHandleRef.current = h; if (previewing) onPlayerReady?.(h) }} />
           </div>
         </foreignObject>
       ) : isAudio ? (
@@ -10159,16 +10211,24 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             style={{ cursor: 'text' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCaption?.() }}>＋ caption</text>
         ) : null
       })()}
+      {/* Video caption — the title, shown beneath the clip (until renamed). Always visible; sits below
+          the inline scrubber when selected. Click to rename. */}
+      {isVideo && !isCropping && !ytPosterMode && (img.title || isSelected) && (() => {
+        const fs = 11
+        const y = hh + (isSelected ? 32 : 14)
+        const t = img.title || 'Untitled video'
+        const shown = t.length > 44 ? t.slice(0, 43) + '…' : t
+        return (
+          <text x={0} y={y} textAnchor="middle" fontSize={fs} fill={img.title ? '#c5d0ff' : '#7080a0'}
+            style={{ cursor: 'text' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onMediaTitle?.() }}
+            paintOrder="stroke" stroke="rgba(12,12,26,0.85)" strokeWidth={fs * 0.14}>
+            {shown}
+          </text>
+        )
+      })()}
       {isSelected && !isCropping && (<>
         <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
           fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
-        {/* Video name caption (file videos only — YouTube shows an editable title bar on the poster). */}
-        {isVideo && img.title && !isYT && (
-          <text x={0} y={hh + 14} textAnchor="middle" fontSize={11} fill="#c5d0ff"
-            style={{ userSelect: 'none', pointerEvents: 'none' }}>
-            {img.title.length > 40 ? img.title.slice(0, 40) + '…' : img.title}
-          </text>
-        )}
         {/* Attached-to-a-node badge (child of that node — moves & can delete with it) */}
         {img.attachedTo && (
           <g transform={`translate(${vR - 10},${vT + 2})`} style={{ pointerEvents: 'none' }}>
@@ -10191,10 +10251,11 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             </g>
           )
         })()}
-        {/* Audio/Video: two autoplay toggles below the card. "On zoom" also fires when you arrow-nav
-            into the media; "On slide" plays it while its frame is presented (and when nav'd into). */}
-        {(isAudio || isVideo) && (() => {
-          const py = isVideo ? vB + 24 : vB + 6   // video clears its own title caption
+        {/* Audio: autoplay toggles below the card. "On zoom" also fires when you arrow-nav into the
+            media; "On slide" plays it while its frame is presented. (Video's equivalents live in the
+            Edit dialog — kept off the canvas per the video's own controls below.) */}
+        {isAudio && (() => {
+          const py = vB + 6
           const pill = (px, on, label, prop) => (
             <g key={prop} transform={`translate(${px},${py})`} style={{ cursor: 'pointer' }}
               onMouseDown={e => { e.stopPropagation(); onToggleMedia?.(prop) }}>
@@ -10206,13 +10267,64 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           return (<>
             {pill(vL, !!img.autoplayOnZoom, '⚡ On zoom', 'autoplayOnZoom')}
             {pill(vL + 92, !!img.autoplayOnSlide, '▷ On slide', 'autoplayOnSlide')}
-            {isVideo && img.videoKind === 'youtube' && (
-              <g transform={`translate(${vL + 184},${py})`} style={{ cursor: 'pointer' }} onMouseDown={e => { e.stopPropagation(); onEditVideo?.() }}>
-                <rect x={0} y={0} width={58} height={20} rx={10} fill="#12122a" stroke="#2d3a6a" strokeWidth={1.1} />
-                <g transform="translate(13,10)"><IconGlyph name="edit" size={12} color="#aeb8ff" /></g>
-                <text x={24} y={13.5} fontSize={10.5} fill="#aeb8ff" style={{ userSelect: 'none' }}>Edit</text>
-              </g>
-            )}
+          </>)
+        })()}
+        {/* Video: an inline scrubber (play/pause + progress) shown while selected, so you can preview
+            the clip without opening Edit. Seeks within the trimmed window [start, end]. + an Edit button. */}
+        {isVideo && (() => {
+          const lo = img.start || 0
+          const hi = (img.end && img.end > lo) ? img.end : (scrub.d || 0)
+          const span = Math.max(0.01, hi - lo)
+          const frac = Math.min(1, Math.max(0, (scrub.t - lo) / span))
+          const py = vB + 10
+          const btnR = 8
+          const editW = 46
+          const railX = vL + btnR * 2 + 6
+          const railW = Math.max(8, cw - (btnR * 2 + 6) - editW - 8)
+          const railY = py
+          const thumbX = railX + frac * railW
+          const seekFrom = (clientX, rect) => {
+            const f = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)))
+            const t = lo + f * span
+            playHandleRef.current?.seek?.(t)
+            setScrub(s => ({ ...s, t }))
+          }
+          const onRailDown = e => {
+            e.stopPropagation()
+            const rect = e.currentTarget.getBoundingClientRect()
+            seekFrom(e.clientX, rect)
+            const mv = ev => seekFrom(ev.clientX, rect)
+            const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
+            window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up)
+          }
+          const togglePlay = e => {
+            e.stopPropagation()
+            if (scrub.playing) { playHandleRef.current?.pause?.() }
+            else if (isYT && ytPosterMode) { setPlaying(true) }   // mount the iframe → autoplays from trim start
+            else { playHandleRef.current?.play?.() }
+            setScrub(s => ({ ...s, playing: !s.playing }))
+          }
+          return (<>
+            {/* play / pause */}
+            <g transform={`translate(${vL + btnR},${py})`} onMouseDown={togglePlay} style={{ cursor: 'pointer' }}>
+              <circle r={btnR} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.1} />
+              {scrub.playing
+                ? <g fill="#c5d0ff"><rect x={-3} y={-3.5} width={2.2} height={7} /><rect x={1} y={-3.5} width={2.2} height={7} /></g>
+                : <path d="M -2.6 -3.6 L -2.6 3.6 L 3.6 0 Z" fill="#c5d0ff" />}
+            </g>
+            {/* progress rail */}
+            <g onMouseDown={onRailDown} style={{ cursor: 'pointer' }}>
+              <rect x={railX} y={railY - 6} width={railW} height={12} fill="transparent" />
+              <rect x={railX} y={railY - 1.5} width={railW} height={3} rx={1.5} fill="#2d3a6a" />
+              <rect x={railX} y={railY - 1.5} width={frac * railW} height={3} rx={1.5} fill="#5b6af0" />
+              <circle cx={thumbX} cy={railY} r={4.5} fill="#c5d0ff" stroke="#5b6af0" strokeWidth={1} />
+            </g>
+            {/* Edit */}
+            <g transform={`translate(${vR - editW},${py - 10})`} style={{ cursor: 'pointer' }} onMouseDown={e => { e.stopPropagation(); onEditVideo?.() }}>
+              <rect x={0} y={0} width={editW} height={20} rx={10} fill="#12122a" stroke="#2d3a6a" strokeWidth={1.1} />
+              <g transform="translate(12,10)"><IconGlyph name="edit" size={12} color="#aeb8ff" /></g>
+              <text x={22} y={13.5} fontSize={10.5} fill="#aeb8ff" style={{ userSelect: 'none' }}>Edit</text>
+            </g>
           </>)
         })()}
         {/* Video: the body pans/zooms with the canvas until you "arm" the player. Double-clicking the
