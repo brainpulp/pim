@@ -615,8 +615,8 @@ async function copyImageToClipboard(src) {
 }
 
 function ImageToolbar({ images, selectedImageIds, anchor,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onDelete }) {
-  const [sub, setSub] = useState(null) // null | 'align' | 'video'
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onSetEffect, onResetEffects, onDelete }) {
+  const [sub, setSub] = useState(null) // null | 'align' | 'video' | 'effects'
 
   if (selectedImageIds.size === 0 || !anchor) return null
   const sel = images.filter(i => selectedImageIds.has(i.id))
@@ -685,6 +685,18 @@ function ImageToolbar({ images, selectedImageIds, anchor,
       <span style={{ color: on ? '#6ee7a8' : '#5a6683', fontWeight: 700 }}>{on ? '✓' : '○'}</span>
     </div>
   )
+  // A labelled range-slider row (used for image effects). `fmt` renders the live value.
+  const sliderRow = (label, value, min, max, step, onSet, fmt) => (
+    <div style={{ padding: '5px 12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#c5d0ff', marginBottom: 3 }}>
+        <span>{label}</span><span style={{ color: '#8fa0d8' }}>{fmt ? fmt(value) : value}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+        onChange={e => onSet(parseFloat(e.target.value))}
+        style={{ width: '100%', accentColor: '#5b6af0', cursor: 'pointer' }} />
+    </div>
+  )
 
   return (
     <div
@@ -719,13 +731,38 @@ function ImageToolbar({ images, selectedImageIds, anchor,
         {numRow('Start (s)', vid.start, v => onSetVideoOpt(vid.id, { start: v }), '0')}
         {numRow('End (s)', vid.end, v => onSetVideoOpt(vid.id, { end: v }), 'end')}
         {speedRow(vid.speed, sp => onSetVideoOpt(vid.id, { speed: sp }))}
-      </>) : (<>
+      </>) : sub === 'effects' && isPhoto ? (() => {
+        const ph = sel[0]
+        const op = ph.opacity == null ? 1 : ph.opacity
+        const tint = ph.tint || {}
+        const tintOn = tint.amount > 0
+        return (<>
+          {row('‹ Effects', () => setSub(null), { color: '#8090b8' })}
+          {sliderRow('Transparency', op, 0, 1, 0.01, v => onSetEffect({ opacity: v }), v => `${Math.round(v * 100)}%`)}
+          <div style={{ borderTop: '1px solid #23234a', margin: '4px 8px' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px' }}>
+            <span style={{ fontSize: '0.8rem', color: '#c5d0ff', flex: 1 }}>Colorize</span>
+            <input type="color" value={tint.color || '#5b6af0'}
+              onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+              onChange={e => onSetEffect({ tint: { color: e.target.value, amount: tint.amount > 0 ? tint.amount : 0.6 } })}
+              style={{ width: 26, height: 22, padding: 0, border: '1px solid #2d3a6a', borderRadius: 4, background: 'transparent', cursor: 'pointer' }} />
+            {tintOn && <button onClick={() => onSetEffect({ tint: null })}
+              style={{ padding: '0 6px', borderRadius: 4, border: '1px solid #2a3358', background: 'transparent', color: '#f87171', cursor: 'pointer', fontSize: 13 }}>×</button>}
+          </div>
+          {sliderRow('Strength', tint.amount || 0, 0, 1, 0.01,
+            v => onSetEffect({ tint: v > 0 ? { color: tint.color || '#5b6af0', amount: v } : null }),
+            v => `${Math.round(v * 100)}%`)}
+          <div style={{ borderTop: '1px solid #23234a', margin: '4px 8px' }} />
+          {row('Reset effects', () => onResetEffects?.(), { color: '#8fa0d8' })}
+        </>)
+      })() : (<>
         {isSingle && row('Bring forward', () => onReorderImage(sel[0].id, 'up'))}
         {isSingle && row('Send backward', () => onReorderImage(sel[0].id, 'down'))}
         {count >= 2 && row('Group', onGroup, { right: 'Ctrl+G' })}
         {hasGroupId && row('Ungroup', onUngroup, { right: '⇧Ctrl+G' })}
         {count >= 2 && row('Align & distribute', () => setSub('align'), { right: '›' })}
         {vid && row('Video options', () => setSub('video'), { right: '›' })}
+        {isPhoto && row('Effects', () => setSub('effects'), { right: '›' })}
         {isPhoto && row('Copy image', () => onCopyImage?.(sel[0]))}
         {isSingle && !vid && row('Crop', onCrop)}
         {isSingle && !vid && stepperRow('Blur', blur, onSetBlur, 40)}
@@ -6561,6 +6598,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onSetVideoOpt={(id, patch) => updateImage(id, patch)}
             onCrop={() => { const id = photoMenu.imageId || [...selectedImageIds][0]; if (id) { setCropImageId(id); setDrilledImageId(id); setSelectedImageIds(new Set([id])) } setPhotoMenu(null) }}
             onCopyImage={img => { setPhotoMenu(null); copyImageToClipboard(img?.src) }}
+            onSetEffect={patch => selectedImageIds.forEach(id => updateImage(id, patch))}
+            onResetEffects={() => selectedImageIds.forEach(id => updateImage(id, { opacity: 1, tint: null }))}
             onAlign={anchor => {
               const imgs = activeView?.images || []
               const updates = alignImages(imgs, selectedImageIds, anchor)
@@ -9434,6 +9473,22 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   const edgeMaskId = `fimg-edgemask-${id}`
   const edgeFilterId = `fimg-edgefilter-${id}`
 
+  // Visual effects: transparency + colorize (a tint whose hue+chroma replace the photo's via the
+  // 'color' blend mode, keeping its luminance → classic duotone-style recolor). Both are animatable
+  // across frame stages. Applied as a wrapping opacity + an isolated overlay rect over the image.
+  const photoOpacity = img.opacity == null ? 1 : img.opacity
+  const photoTint = img.tint && img.tint.amount > 0 ? img.tint : null
+  const renderPhotoBody = (clipAttr) => photoTint ? (
+    <g clipPath={clipAttr} style={{ isolation: 'isolate' }}>
+      <image href={src} x={-hw} y={-hh} width={width} height={height} />
+      <rect x={cx} y={cy} width={cw} height={ch} fill={photoTint.color}
+        opacity={Math.max(0, Math.min(1, photoTint.amount))}
+        style={{ mixBlendMode: 'color', pointerEvents: 'none' }} />
+    </g>
+  ) : (
+    <image href={src} x={-hw} y={-hh} width={width} height={height} clipPath={clipAttr} />
+  )
+
   // Visible-rect geometry drives the selection chrome (so handles hug the cropped area).
   const vL = cx, vT = cy, vR = cx + cw, vB = cy + ch
   const HS = 5  // half-size of square handles (px in local space)
@@ -9577,16 +9632,19 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         <image href={src} x={-hw} y={-hh} width={width} height={height} opacity={0.3}
           style={{ pointerEvents: 'none' }} />
       )}
-      {blur > 0 ? (
-        <g filter={`url(#${blurId})`} mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined}>
-          <image href={src} x={-hw} y={-hh} width={width} height={height}
-            clipPath={hasCrop ? `url(#${clipId})` : undefined} />
-        </g>
-      ) : (
-        <image href={src} x={-hw} y={-hh} width={width} height={height}
-          clipPath={hasCrop ? `url(#${clipId})` : undefined}
-          mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined} />
-      )}
+      <g opacity={photoOpacity !== 1 ? photoOpacity : undefined}>
+        {blur > 0 ? (
+          <g filter={`url(#${blurId})`} mask={edgeBlur > 0 ? `url(#${edgeMaskId})` : undefined}>
+            {renderPhotoBody(hasCrop ? `url(#${clipId})` : undefined)}
+          </g>
+        ) : edgeBlur > 0 ? (
+          <g mask={`url(#${edgeMaskId})`}>
+            {renderPhotoBody(hasCrop ? `url(#${clipId})` : undefined)}
+          </g>
+        ) : (
+          renderPhotoBody(hasCrop ? `url(#${clipId})` : undefined)
+        )}
+      </g>
       </>)}
 
       {/* Transparent hit target for videos/links: their body is pointer-events:none until activated,
