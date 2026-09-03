@@ -8953,9 +8953,9 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
   // clickable, and the gap between grid and affordance drops the hover.
   const PADT = 24, PADR = 34, PADB = 26, PADL = 30
 
-  // Collapsed: render as a compact, scalable node — a table icon + the title — pinned so its TOP-CENTRE
-  // sits exactly where the expanded table's top edge was (node.y − H/2), so collapsing doesn't shift it.
-  // Expands on double-click (or ⊞). Scaling grows it down/out from that fixed top-centre.
+  // Collapsed: render as a compact, scalable node — a table icon + the title — pinned so its TOP-LEFT
+  // sits exactly where the expanded table's top-left corner was (node.x − W/2, node.y − H/2), so
+  // collapsing doesn't shift it. Expands on double-click (or ⊞). Scaling grows it down/right from there.
   if (collapsed) {
     const label = title || 'Table'
     const cw = Math.max(120, Math.min(300, label.length * 8 + 60))
@@ -8970,7 +8970,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
       window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
     }
     return (
-      <g transform={`translate(${(node.x || 0) - cs * cw / 2},${topY}) scale(${cs})`}>
+      <g transform={`translate(${(node.x || 0) - W / 2},${topY}) scale(${cs})`}>
         <foreignObject data-card="true" x={-6} y={-6} width={cw + 12} height={ch + 14} style={{ overflow: 'visible' }}>
           <div onMouseDown={e => { stop(e); onHeaderDown(e) }} onClick={e => { stop(e); onSelect() }}
             onDoubleClick={e => { stop(e); onToggleCollapse?.() }} title="Double-click to expand"
