@@ -10012,26 +10012,32 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
       {/* Play button on the YouTube poster — always visible so an unselected poster reads as a video.
           Clicking it mounts the player (a real user gesture, so it plays with sound). */}
       {isVideo && ytPosterMode && (() => {
-        const R = Math.max(15, Math.min(30, Math.min(cw, ch) * 0.16))
+        // Size proportional to the video so a small (or small+zoomed-in) clip gets small controls.
+        const R = Math.max(3, Math.min(cw, ch) * 0.18)
         return (
           <g onMouseDown={e => { e.stopPropagation(); setPlaying(true) }} style={{ cursor: 'pointer' }}>
-            <circle cx={0} cy={0} r={R} fill="rgba(8,8,20,0.55)" stroke="#fff" strokeWidth={1.6} />
+            <circle cx={0} cy={0} r={R} fill="rgba(8,8,20,0.55)" stroke="#fff" strokeWidth={Math.max(0.4, R * 0.05)} />
             <path d={`M ${-R * 0.32} ${-R * 0.5} L ${-R * 0.32} ${R * 0.5} L ${R * 0.6} 0 Z`} fill="#fff" />
           </g>
         )
       })()}
 
       {/* Editable title bar across the top of the poster — rendered ON TOP of the hit rect so its
-          double-click (rename) wins over the poster's double-click (play). */}
-      {isVideo && ytPosterMode && (img.title || isSelected) && (
-        <g onMouseDown={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onMediaTitle?.() }} style={{ cursor: onMediaTitle ? 'text' : 'default' }}>
-          <rect x={-hw} y={-hh} width={width} height={22} fill="rgba(8,8,20,0.62)" />
-          <text x={-hw + 8} y={-hh + 15} fontSize={11.5} fill="#eef1ff" style={{ userSelect: 'none' }}>
-            {(() => { const t = img.title || 'Untitled video'; const max = Math.max(6, Math.floor((width - 20) / 6.6)); return t.length > max ? t.slice(0, max - 1) + '…' : t })()}
-          </text>
-          {isSelected && <title>Double-click to rename</title>}
-        </g>
-      )}
+          double-click (rename) wins over the poster's double-click (play). Scales with the video size. */}
+      {isVideo && ytPosterMode && (img.title || isSelected) && (() => {
+        const barH = Math.max(6, Math.min(26, height * 0.15))
+        const fs = barH * 0.6
+        const maxCh = Math.max(4, Math.floor((width - fs) / (fs * 0.56)))
+        return (
+          <g onMouseDown={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onMediaTitle?.() }} style={{ cursor: onMediaTitle ? 'text' : 'default' }}>
+            <rect x={-hw} y={-hh} width={width} height={barH} fill="rgba(8,8,20,0.62)" />
+            <text x={-hw + fs * 0.55} y={-hh + barH * 0.72} fontSize={fs} fill="#eef1ff" style={{ userSelect: 'none' }}>
+              {(() => { const t = img.title || 'Untitled video'; return t.length > maxCh ? t.slice(0, maxCh - 1) + '…' : t })()}
+            </text>
+            {isSelected && <title>Double-click to rename</title>}
+          </g>
+        )
+      })()}
 
       {/* Caption — editable text beneath the photo (any non-link media). Always visible when set;
           a "＋ caption" hint shows when selected and empty. Click it (or double-click the photo) to edit. */}
