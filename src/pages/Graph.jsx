@@ -1207,6 +1207,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const stageOverlayRef = useRef(null)
   useEffect(() => { stageOverlayRef.current = stageOverlay }, [stageOverlay])
   const stageBasePosRef = useRef(null)
+  // Image stage overlay: view-only per-image {x,y,width,height,opacity,tint} applied during stage
+  // play/preview/presentation so photos animate (move/scale/fade/colorize) without touching the doc.
+  const [imageStageOverlay, setImageStageOverlay] = useState(null)
+  const imageStageOverlayRef = useRef(null)
+  useEffect(() => { imageStageOverlayRef.current = imageStageOverlay }, [imageStageOverlay])
+  const imgAnimRunRef = useRef(0)
   // On-frame timeline ("builds") editor: keyframe model — the canvas shows the current stage and edits
   // auto-record into it. timelineFrameId = the frame being authored; timelineStageIdx = current stage;
   // timelinePlaying = running the builds (non-destructive overlay). Decoupled from node selection so the
@@ -3931,10 +3937,91 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     return snap
   }, [frameMembers, getVP])
 
+  // Images whose center currently sits inside the frame's box — captured by stages alongside nodes so
+  // photos can animate (position/size/opacity/colorize) across build steps.
+  const frameImageIds = useCallback((frameId) => {
+    const gs = useGraphStore.getState()
+    const imgs = gs.views.find(v => v.id === gs.activeViewId)?.images || []
+    const fvp = { ...DEFAULT_NODE_PROPS, ...(viewNodePropsRef.current[frameId] || {}) }
+    const fsn = simNodesRef.current.find(n => n.id === frameId)
+    const fx = fsn?.x ?? fvp.fx ?? 0, fy = fsn?.y ?? fvp.fy ?? 0
+    const fr = NODE_R * (fvp.scale || 1)
+    const { halfW: defHW, halfH: defHH } = shapeDims('frame', fr)
+    const hw = fvp.frameHalfW ?? defHW, hh = fvp.frameHalfH ?? defHH
+    return imgs.filter(im => im.x >= fx - hw && im.x <= fx + hw && im.y >= fy - hh && im.y <= fy + hh).map(im => im.id)
+  }, [])
+
+  const snapshotFrameImgs = useCallback((frameId) => {
+    const gs = useGraphStore.getState()
+    const byId = new Map((gs.views.find(v => v.id === gs.activeViewId)?.images || []).map(im => [im.id, im]))
+    const out = {}
+    frameImageIds(frameId).forEach(id => {
+      const im = byId.get(id); if (!im) return
+      out[id] = { x: im.x, y: im.y, w: im.width, h: im.height, v: im.visible !== false,
+        o: im.opacity == null ? 1 : im.opacity, tc: im.tint?.color, ta: im.tint?.amount || 0 }
+    })
+    return out
+  }, [frameImageIds])
+
+  // Interpolate two hex colors (#rrggbb) for tint tweening across stages.
+  const lerpHexColor = (a, b, t) => {
+    const pa = parseInt((a || '#000000').slice(1), 16), pb = parseInt((b || '#000000').slice(1), 16)
+    const ar = (pa >> 16) & 255, ag = (pa >> 8) & 255, ab = pa & 255
+    const br = (pb >> 16) & 255, bg = (pb >> 8) & 255, bb = pb & 255
+    const r = Math.round(ar + (br - ar) * t), g = Math.round(ag + (bg - ag) * t), bl = Math.round(ab + (bb - ab) * t)
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | bl).toString(16).slice(1)
+  }
+  // Tween the image overlay from a base map to a stage's captured image map. Visibility folds into
+  // opacity (hidden → 0) so photos fade rather than pop. `from`/`to` are full-field maps.
+  const animateImageOverlay = useCallback((from, to, dur, onDone) => {
+    const run = ++imgAnimRunRef.current
+    const ids = Object.keys(to)
+    if (!ids.length) { setImageStageOverlay(prev => { const n = { ...(prev || {}) }; return n }); onDone?.(); return }
+    const t0 = performance.now(), D = Math.max(1, dur)
+    const build = (e) => {
+      const ov = {}
+      ids.forEach(id => {
+        const f = from[id] || to[id], tt = to[id]
+        const L = (a, b) => a + (b - a) * e
+        const tintOn = (f.tintAmount > 0) || (tt.tintAmount > 0)
+        ov[id] = {
+          x: L(f.x, tt.x), y: L(f.y, tt.y),
+          width: Math.max(4, L(f.width, tt.width)), height: Math.max(4, L(f.height, tt.height)),
+          opacity: Math.max(0, Math.min(1, L(f.opacity, tt.opacity))),
+          tint: tintOn ? { color: lerpHexColor(f.tintColor || tt.tintColor, tt.tintColor || f.tintColor, e), amount: L(f.tintAmount || 0, tt.tintAmount || 0) } : null,
+        }
+      })
+      return ov
+    }
+    const step = () => {
+      if (run !== imgAnimRunRef.current) return
+      const t = Math.min(1, (performance.now() - t0) / D)
+      const e = 1 - Math.pow(1 - t, 3)
+      setImageStageOverlay(prev => ({ ...(prev || {}), ...build(e) }))
+      if (t < 1) requestAnimationFrame(step)
+      else onDone?.()
+    }
+    if (dur > 0) requestAnimationFrame(step)
+    else setImageStageOverlay(prev => ({ ...(prev || {}), ...build(1) }))
+  }, [])
+
+  // The live/current displayed state of an image (overlay if present, else the doc image), as a
+  // full-field map entry — used as the tween's starting point.
+  const imgFieldsFor = useCallback((im) => {
+    const ov = imageStageOverlayRef.current?.[im.id]
+    const opacity = ov ? (ov.opacity ?? 1) : (im.opacity == null ? 1 : im.opacity)
+    const tint = ov ? ov.tint : im.tint
+    return {
+      x: ov?.x ?? im.x, y: ov?.y ?? im.y,
+      width: ov?.width ?? im.width, height: ov?.height ?? im.height,
+      opacity, tintColor: tint?.color, tintAmount: tint?.amount || 0,
+    }
+  }, [])
+
   const captureStage = useCallback((frameId) => {
     const stages = getFrameStages(frameId)
-    setNodeViewProp(frameId, 'stages', [...stages, { id: crypto.randomUUID(), name: `Stage ${stages.length + 1}`, snap: snapshotFrame(frameId) }])
-  }, [getFrameStages, snapshotFrame, setNodeViewProp])
+    setNodeViewProp(frameId, 'stages', [...stages, { id: crypto.randomUUID(), name: `Stage ${stages.length + 1}`, snap: snapshotFrame(frameId), imgs: snapshotFrameImgs(frameId) }])
+  }, [getFrameStages, snapshotFrame, snapshotFrameImgs, setNodeViewProp])
 
   const updateStage = useCallback((frameId, idx) => {
     const stages = getFrameStages(frameId)
@@ -3981,6 +4068,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       targets[id] = { x: s.x, y: s.y }
     })
     const dur = stage.dur != null ? stage.dur : 340
+    // Image effects animate alongside nodes (position/size/opacity/colorize; visibility folds into opacity).
+    const gsImgs = new Map((useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).map(im => [im.id, im]))
+    const imgTo = {}, imgFrom = {}
+    Object.entries(stage.imgs || {}).forEach(([id, s]) => {
+      const im = gsImgs.get(id); if (!im) return
+      imgTo[id] = { x: s.x, y: s.y, width: s.w, height: s.h, opacity: s.v === false ? 0 : (s.o == null ? 1 : s.o), tintColor: s.tc, tintAmount: s.ta || 0 }
+      imgFrom[id] = imgFieldsFor(im)
+    })
+    const runImgs = () => { if (Object.keys(imgTo).length) animateImageOverlay(imgFrom, imgTo, animate ? dur : 0) }
     // Fade visibility instead of cutting (opt-in per stage). Keep fade-out nodes visible during the fade.
     if (stage.fade && animate && dur > 0) {
       const prevOv = stageOverlayRef.current
@@ -3991,14 +4087,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setStageOverlay({ vis, collapse, scale, style })
       animateNodesTo(Object.keys(targets), targets, dur)
       animateFadeOps(fadeIn, fadeOut, dur, () => setStageOverlay(prev => prev ? { ...prev, vis: { ...prev.vis, ...Object.fromEntries(fadeOut.map(id => [id, false])) } } : prev))
+      runImgs()
       scheduleRender()
       return
     }
     setStageOverlay({ vis, collapse, scale, style })
     if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
+    runImgs()
     scheduleRender()
-  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender, flagShapeMorphs, animateFadeOps, getVP])
+  }, [getFrameStages, frameMembers, animateNodesTo, scheduleRender, flagShapeMorphs, animateFadeOps, getVP, imgFieldsFor, animateImageOverlay])
 
   const enterStagePreview = useCallback((frameId, idx = 0) => {
     if (!getFrameStages(frameId).length) return
@@ -4021,6 +4119,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const bp = stageBasePosRef.current
     clearFades()
     setStageOverlay(null)
+    imgAnimRunRef.current++          // cancel any in-flight image tween
+    setImageStageOverlay(null)       // restore photos to their doc state
     if (bp) {
       const ids = Object.keys(bp.pos)
       const targets = {}; ids.forEach(id => targets[id] = { x: bp.pos[id].x, y: bp.pos[id].y })
@@ -4302,9 +4402,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const targets = {}; Object.entries(snap).forEach(([id, s]) => { targets[id] = { x: s.x, y: s.y } })
     if (animate && dur > 0) animateNodesTo(Object.keys(targets), targets, dur)
     else Object.keys(targets).forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = targets[id].x; sn.y = targets[id].y; sn.fx = targets[id].x; sn.fy = targets[id].y } })
+    // Pose the captured images into the doc so this stage's photo positions/effects are what you edit.
+    Object.entries(stage.imgs || {}).forEach(([id, s]) => {
+      updateImage(id, { x: s.x, y: s.y, width: s.w, height: s.h, visible: s.v !== false,
+        opacity: s.o == null ? 1 : s.o, tint: s.ta > 0 ? { color: s.tc, amount: s.ta } : null })
+    })
     moveCamForStage(stages, idx, animate, dur > 0 ? dur : 340)
     scheduleRender()
-  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs, moveCamForStage, animateFadeOps, getVP, setNodeViewProp])
+  }, [getFrameStages, applyStagePose, animateNodesTo, scheduleRender, flagShapeMorphs, moveCamForStage, animateFadeOps, getVP, setNodeViewProp, updateImage])
 
   const writeStageSnap = useCallback((frameId, idx, snap) => {
     const stages = getFrameStages(frameId)
@@ -4318,7 +4423,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const fnode = simNodesRef.current.find(n => n.id === frameId)
     let stages = getFrameStages(frameId)
     if (!stages.length) {
-      const first = { id: crypto.randomUUID(), name: 'Stage 1', snap: snapshotFrame(frameId), advance: 'click' }
+      const first = { id: crypto.randomUUID(), name: 'Stage 1', snap: snapshotFrame(frameId), imgs: snapshotFrameImgs(frameId), advance: 'click' }
       setNodeViewProp(frameId, 'stages', [first])
       stages = [first]
     }
@@ -4326,12 +4431,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setTimelineStageIdx(0)
     setTimelinePlaying(false)
     if (fnode) zoomToFrame(fnode, true)
-  }, [stagePreview, exitStagePreview, getFrameStages, snapshotFrame, setNodeViewProp, zoomToFrame])
+  }, [stagePreview, exitStagePreview, getFrameStages, snapshotFrame, snapshotFrameImgs, setNodeViewProp, zoomToFrame])
 
   const exitTimeline = useCallback(() => {
     if (timelinePlayTimerRef.current) { clearTimeout(timelinePlayTimerRef.current); timelinePlayTimerRef.current = null }
     clearFades()
     setStageOverlay(null)
+    imgAnimRunRef.current++
+    setImageStageOverlay(null)
     stageBasePosRef.current = null
     setTimelinePlaying(false)
     setTimelineFrameId(null)
@@ -4351,10 +4458,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const frameId = timelineFrameIdRef.current; if (frameId == null) return
     const stages = getFrameStages(frameId)
     // New stage clones the CURRENT pose (so you start from where you are, then tweak) — keyframe style.
-    const next = { id: crypto.randomUUID(), name: `Stage ${stages.length + 1}`, snap: snapshotFrame(frameId), advance: 'click' }
+    const next = { id: crypto.randomUUID(), name: `Stage ${stages.length + 1}`, snap: snapshotFrame(frameId), imgs: snapshotFrameImgs(frameId), advance: 'click' }
     setNodeViewProp(frameId, 'stages', [...stages, next])
     setTimelineStageIdx(stages.length)
-  }, [getFrameStages, snapshotFrame, setNodeViewProp])
+  }, [getFrameStages, snapshotFrame, snapshotFrameImgs, setNodeViewProp])
 
   const deleteTimelineStage = useCallback((idx) => {
     const frameId = timelineFrameIdRef.current; if (frameId == null) return
@@ -4423,12 +4530,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const stages = getFrameStages(frameId)
       if (!stages[idx]) return
       const snap = snapshotFrame(frameId)
-      if (JSON.stringify(snap) === JSON.stringify(stages[idx].snap)) return   // nothing actually changed
-      writeStageSnap(frameId, idx, snap)
+      const imgs = snapshotFrameImgs(frameId)
+      const cur = stages[idx]
+      if (JSON.stringify(snap) === JSON.stringify(cur.snap) && JSON.stringify(imgs) === JSON.stringify(cur.imgs || {})) return   // nothing changed
+      setNodeViewProp(frameId, 'stages', stages.map((s, i) => i === idx ? { ...s, snap, imgs } : s))
       setTimelineRecordPulse(p => p + 1)
     }, 500)
     return () => clearTimeout(t)
-  }, [viewNodeProps, collapsedNodeIds, timelineFrameId, timelineStageIdx, timelinePlaying, getFrameStages, snapshotFrame, writeStageSnap])
+  }, [viewNodeProps, collapsedNodeIds, activeView?.images, timelineFrameId, timelineStageIdx, timelinePlaying, getFrameStages, snapshotFrame, snapshotFrameImgs, setNodeViewProp])
 
   // Play the builds non-destructively via the overlay, honoring each stage's advance trigger. Timed
   // stages auto-advance; 'click' stages wait for Next (→ / space / the strip's ▶).
@@ -5375,6 +5484,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       stageBasePosRef.current = null
     }
     setStageOverlay(null)
+    imgAnimRunRef.current++
+    setImageStageOverlay(null)
   }
   const slideStages = (idx) => { const f = slideSimNodes[idx]; return f ? (getVP(f.id).stages || []) : [] }
   // The YouTube slideshow (if any) whose centre sits inside a frame's box.
@@ -5715,7 +5826,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             })()}
 
             {/* 3. Images (floating photos are hidden while drilled into a node) */}
-            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img => {
+            {!drillRoot && (activeView?.images || []).filter(img => img.visible !== false).map(img0 => {
+              // During stage play/preview/presentation, photos animate via a view-only overlay (position,
+              // size, opacity, colorize) merged over the doc image — never mutating the doc.
+              const _ov = imageStageOverlay?.[img0.id]
+              const img = _ov ? { ...img0, ..._ov } : img0
               // Audio autoplay signal: play when zoomed into it, or when its slide (containing frame) is presented.
               // Audio AND video autoplay signal. "Zoomed/nav'd into it" (fills ≥ half the viewport, on
               // screen) plays it for EITHER flag — so a clip set to "on slide" also plays when you arrow-nav
