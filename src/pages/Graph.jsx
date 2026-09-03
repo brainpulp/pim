@@ -618,7 +618,7 @@ async function copyImageToClipboard(src) {
 }
 
 function ImageToolbar({ images, selectedImageIds, anchor,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onSetEffect, onResetEffects, onDelete }) {
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onSetEffect, onResetEffects, onDuplicate, onDelete }) {
   const [sub, setSub] = useState(null) // null | 'align' | 'video' | 'effects'
 
   if (selectedImageIds.size === 0 || !anchor) return null
@@ -770,6 +770,7 @@ function ImageToolbar({ images, selectedImageIds, anchor,
         {isSingle && !vid && row('Crop', onCrop)}
         {isSingle && !vid && stepperRow('Blur', blur, onSetBlur, 40)}
         {isSingle && !vid && stepperRow('Edge blur', edgeBlur, onSetEdgeBlur, 40)}
+        {row(count >= 2 ? '⧉ Duplicate all' : '⧉ Duplicate', () => onDuplicate?.())}
         {row('Delete', onDelete, { color: '#f87171' })}
       </>)}
     </div>
@@ -1299,6 +1300,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const groupImages     = useGraphStore(s => s.groupImages)
   const ungroupImages   = useGraphStore(s => s.ungroupImages)
   const reorderImage    = useGraphStore(s => s.reorderImage)
+  const duplicateImage  = useGraphStore(s => s.duplicateImage)
   const deleteImages    = useGraphStore(s => s.deleteImages)
   const addCustomEmoji  = useGraphStore(s => s.addCustomEmoji)
   const removeCustomEmoji = useGraphStore(s => s.removeCustomEmoji)
@@ -2301,17 +2303,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setPendingEditId(newId)
   }, [getSiblings, addNode, setNodeViewProp])
 
-  // Duplicate a node → a sister with the SAME label, style, and notes.
+  // Duplicate a node → an independent copy with ALL its content and settings (label, style, notes, and
+  // for card nodes the table / media / video / slideshow data — deep-copied so editing the copy never
+  // touches the original). Dropped a little below-right of the source. Plain text nodes also enter edit
+  // mode for a quick rename.
   const handleDuplicateNode = useCallback((nodeId) => {
-    const srcNode = storeNodes.find(n => n.id === nodeId)
-    const { parentId } = getSiblings(nodeId)
-    const newId = addNode(srcNode?.label || 'New node', parentId)
-    const svp = viewNodePropsRef.current[nodeId] || {}
-    LAST_STYLE_PROPS.forEach(k => { if (svp[k] !== undefined) setNodeViewProp(newId, k, svp[k]) })
-    if (srcNode?.notes) updateNotes(newId, srcNode.notes)
+    const src = storeNodes.find(n => n.id === nodeId)
+    const sn = simNodesRef.current.find(n => n.id === nodeId)
+    const x = (sn?.x ?? 0) + 46, y = (sn?.y ?? 0) + 46
+    const newId = duplicateNodeAt(nodeId, x, y)
+    if (!newId) return
+    setTimeout(() => {
+      const s2 = simNodesRef.current.find(n => n.id === newId)
+      if (s2) { s2.x = x; s2.y = y; s2.fx = x; s2.fy = y }
+      scheduleRender()
+    }, 0)
     setSelected({ id: newId, type: 'node' })
-    setPendingEditId(newId)
-  }, [storeNodes, getSiblings, addNode, setNodeViewProp, updateNotes])
+    const isCard = !!(src && (src.table || src.media || src.ytss || src.list || src.kanban || src.strategy))
+    if (!isCard) setPendingEditId(newId)
+  }, [storeNodes, duplicateNodeAt, scheduleRender])
 
   // ── Word generator ──────────────────────────────────────────────────────────
   // wgDialog = { nodeId, mode:'words'|'variations' } while the generate dialog is open.
@@ -6843,6 +6853,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const updates = distributeImages(imgs, selectedImageIds, axis)
               updates.forEach(u => updateImage(u.id, u))
             }}
+            onDuplicate={() => {
+              pushUndo()
+              const ids = selectedImageIds.size ? [...selectedImageIds] : (photoMenu.imageId ? [photoMenu.imageId] : [])
+              const newIds = ids.map(id => duplicateImage(id)).filter(Boolean)
+              if (newIds.length) setSelectedImageIds(new Set(newIds))
+              setPhotoMenu(null)
+            }}
             onDelete={() => { setConfirmDeleteImages([...selectedImageIds]); setPhotoMenu(null) }}
           />
         </>)}
@@ -10129,10 +10146,12 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             : <rect x={-hw} y={-hh} width={width} height={height} rx={4} fill="#0b0b18" style={{ pointerEvents: 'none' }} />}
         </>
       ) : isVideo ? (
-        // Player mounted (played, autoplaying, or a file video). Captures events (so you can scrub /
-        // click controls) once activated; file videos stay pass-through until armed with videoActive.
+        // Player mounted (played, autoplaying, or a file video). Stays pass-through (canvas zoom/pan work
+        // OVER it — a cross-origin YouTube iframe would otherwise eat the wheel) until ARMED via
+        // videoActive (double-click). Playback is driven by our own scrubber, so arming is only needed for
+        // the native player controls.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
-          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && (isYT || videoActive)) && !previewing ? 'auto' : 'none' }}>
+          <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && videoActive && !previewing) ? 'auto' : 'none' }}>
             <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay || !!img.keepPlaying} previewing={previewing}
               onReady={h => { playHandleRef.current = h; if (previewing) onPlayerReady?.(h) }} />
           </div>
@@ -10181,11 +10200,11 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           which otherwise lets clicks (incl. ctrl-click to multi-select) fall through instead of hitting
           the node. This rect gives a solid surface; mousedown bubbles to the <g>'s handler. Omitted
           while the player is active (so its controls work) or when a link is selected (so it's clickable). */}
-      {((isVideo && (isYT ? ytPosterMode : !(isSelected && videoActive))) || (isLink && !isSelected) || (isAudio && !isSelected) || (isText && !isSelected)) && (
+      {((isVideo && !(isSelected && videoActive)) || (isLink && !isSelected) || (isAudio && !isSelected) || (isText && !isSelected)) && (
         <rect x={-hw} y={-hh} width={width} height={height} fill="transparent"
-          onDoubleClick={isVideo ? (e => { e.stopPropagation(); if (isYT) setPlaying(true); else setVideoActive(true) }) : undefined}
+          onDoubleClick={isVideo ? (e => { e.stopPropagation(); if (isYT) setPlaying(true); setVideoActive(true) }) : undefined}
           style={{ cursor: 'move' }}>
-          {isVideo && <title>{img.title ? `${img.title} — double-click to play` : 'Double-click to play'}</title>}
+          {isVideo && <title>{img.title ? `${img.title} — double-click to interact` : 'Double-click to interact'}</title>}
         </rect>
       )}
 
@@ -10358,24 +10377,24 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
             </g>
           </>)
         })()}
-        {/* Video: the body pans/zooms with the canvas until you "arm" the player. Double-clicking the
-            video activates it (handled on the hit rect); when idle we show only a low-key play glyph so
-            it isn't a big clunky button. Once active, a small ✕ (top-right) releases it to the canvas. */}
-        {isVideo && !isYT && !videoActive && (
-          <g transform={`translate(0,${vB - 16})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
-            <rect x={-52} y={-9} width={104} height={18} rx={9} fill="#0c0c1acc" />
-            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9.5} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>▶ double-click to play/pause</text>
+        {/* Video: the body pans/zooms with the canvas until you "arm" the player (so the canvas can zoom
+            OVER it). When mounted but not armed, a low-key hint says double-click to interact with the
+            native controls; once armed, a small ✕ (top-right) releases it back to the canvas. */}
+        {isVideo && !videoActive && !(isYT && ytPosterMode) && (
+          <g transform={`translate(0,${vB - 16})`} onMouseDown={e => { e.stopPropagation(); if (isYT) setPlaying(true); setVideoActive(true) }} style={{ cursor: 'pointer' }}>
+            <rect x={-64} y={-9} width={128} height={18} rx={9} fill="#0c0c1acc" />
+            <text x={0} y={1} textAnchor="middle" dominantBaseline="middle" fontSize={9.5} fill="#c5d0ff" style={{ userSelect: 'none', pointerEvents: 'none' }}>double-click to interact</text>
           </g>
         )}
-        {isVideo && !isYT && videoActive && (
+        {isVideo && videoActive && (
           <g transform={`translate(${vR - 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setVideoActive(false) }} style={{ cursor: 'pointer' }}>
             <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
             <IconGlyph name="close" size={13} color="#c5d0ff" />
           </g>
         )}
-        {/* YouTube playing → a ✕ to return to the clean poster frame. */}
-        {isVideo && isYT && !ytPosterMode && (
-          <g transform={`translate(${vR - 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setPlaying(false) }} style={{ cursor: 'pointer' }}>
+        {/* YouTube playing (unarmed) → a ✕ to return to the clean poster frame. */}
+        {isVideo && isYT && !ytPosterMode && !videoActive && (
+          <g transform={`translate(${vL + 11},${vT + 3})`} onMouseDown={e => { e.stopPropagation(); setPlaying(false) }} style={{ cursor: 'pointer' }}>
             <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1.2} />
             <IconGlyph name="close" size={13} color="#c5d0ff" />
           </g>

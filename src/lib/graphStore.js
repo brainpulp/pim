@@ -208,7 +208,9 @@ const useGraphStore = create((set, get) => ({
     const parentId = s.edges.find(e => e.target === nodeId)?.source || null
     const newId = uid()
     const srcVp = s.views.find(v => v.id === s.activeViewId)?.nodeProps?.[nodeId] || {}
-    const newNode = { ...src, id: newId, meta: src.meta ? { ...src.meta } : undefined, props: src.props ? { ...src.props } : undefined }
+    // DEEP copy so nested data (table columns/rows, media/video settings, slideshow clips) is independent
+    // of the original — editing the duplicate must not mutate the source.
+    const newNode = { ...JSON.parse(JSON.stringify(src)), id: newId }
     set(st => ({
       nodes: [...st.nodes, newNode],
       edges: parentId ? [...st.edges, { id: uid(), source: parentId, target: newId }] : st.edges,
@@ -234,7 +236,7 @@ const useGraphStore = create((set, get) => ({
         seen.add(childId)
         const c = byId[childId]; if (!c) return
         const nid = uid()
-        newNodes.push({ ...c, id: nid, meta: c.meta ? { ...c.meta } : undefined, props: c.props ? { ...c.props } : undefined })
+        newNodes.push({ ...JSON.parse(JSON.stringify(c)), id: nid })
         newEdges.push({ id: uid(), source: newParentId, target: nid })
         const cvp = vp[childId]
         if (cvp) { const nv = { ...cvp }; if (nv.fx != null) nv.fx += dx; if (nv.fy != null) nv.fy += dy; newProps[nid] = nv }
@@ -607,6 +609,20 @@ const useGraphStore = create((set, get) => ({
       }),
     }))
     return id
+  },
+
+  // Duplicate one canvas item (photo / video / audio / link / text) — a DEEP copy of every setting
+  // (trim, effects, autoplay flags, poster, html, …), offset a little and dropped on top. Returns the
+  // new id. Not added to the source's group.
+  duplicateImage: (imageId) => {
+    const s = get()
+    const v = s.views.find(vv => vv.id === s.activeViewId)
+    const src = (v?.images || []).find(im => im.id === imageId)
+    if (!src) return null
+    const newId = uid()
+    const copy = { ...JSON.parse(JSON.stringify(src)), id: newId, x: (src.x || 0) + 28, y: (src.y || 0) + 28, z: 'front', groupId: null }
+    set(st => ({ views: st.views.map(vv => vv.id !== st.activeViewId ? vv : { ...vv, images: [...(vv.images || []), copy] }) }))
+    return newId
   },
 
   // A rich-text box — a canvas element (not a graph node) stored in the SAME view.images[] array, so it
