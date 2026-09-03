@@ -8879,6 +8879,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const [dragging, setDragging] = useState(false)     // a reorder drag is in progress
   const [ctx, setCtx] = useState(null)                // right-click menu: { x, y, ri, ci } in card-local coords
   const rootRef = useRef(null)
+  const gridRef = useRef(null)                        // the grid container, for coordinate-based reorder hit-testing
   const openCtx = (e, ri, ci) => {
     e.preventDefault(); e.stopPropagation()
     const rect = rootRef.current?.getBoundingClientRect()
@@ -8901,16 +8902,30 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
-  // Reorder by dragging a grip — the destination COLUMN/ROW (never a grid line) under the pointer is
-  // highlighted live, before mouseup, so you can see where it will land.
+  // Reorder by dragging a grip — the destination COLUMN/ROW is picked from the cursor's POSITION (row
+  // band by Y, column band by X) rather than DOM hit-testing, so the row grip (which sits out in the
+  // left margin) still resolves a target when dragged straight down. Highlighted live before mouseup.
   const startReorder = (e, id, attr, onMove) => {
     e.preventDefault(); e.stopPropagation()
     const kind = attr === 'data-tcol' ? 'col' : 'row'
     setDragging(true); setDrop(null)
     let target = null
     const move = ev => {
-      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.(`[${attr}]`)
-      target = el ? el.getAttribute(attr) : null
+      const gr = gridRef.current?.getBoundingClientRect(); if (!gr) return
+      const k = eff() || 1
+      if (kind === 'row') {
+        const ly = (ev.clientY - gr.top) / k
+        let found = null
+        for (let i = 0; i < rows.length; i++) { if (ly >= rowTop[i] && ly < rowTop[i] + rowHeights[i]) { found = rows[i].id; break } }
+        if (!found && rows.length) found = ly < rowTop[0] ? rows[0].id : rows[rows.length - 1].id
+        target = found
+      } else {
+        const lx = (ev.clientX - gr.left) / k
+        let found = null
+        for (let i = 0; i < columns.length; i++) { if (lx >= colX[i] && lx < colX[i] + colW(columns[i])) { found = columns[i].id; break } }
+        if (!found && columns.length) found = lx < colX[0] ? columns[0].id : columns[columns.length - 1].id
+        target = found
+      }
       setDrop(target && target !== id ? { kind, id: target } : null)
     }
     const up = () => {
@@ -9010,7 +9025,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
 
         {/* Grid — background (or transparent), lines + text. Right-clicking a non-cell area (gaps,
             borders) falls back to appending rows/columns. */}
-        <div onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
+        <div ref={gridRef} onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
           style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: (selected || borderHov) ? `0 0 0 1.5px ${accent}` : 'none' }}>
           {/* Column header row */}
           <div style={{ display: 'flex', height: colHdrH }}>
