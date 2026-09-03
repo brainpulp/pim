@@ -6235,6 +6235,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     if (vp.fy != null) setAnchor(n.id, vp.fx ?? sn?.x ?? 0, vp.fy + dy)
                     scheduleRender()
                   }}
+                  onWheelScroll={(dx, dy) => {
+                    if (!svgRef.current || !zoomBehaviorRef.current) return
+                    const k = zoomTransformRef.current.k || 1
+                    d3.select(svgRef.current).call(zoomBehaviorRef.current.translateBy, -dx / k, -dy / k)
+                  }}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onRename={label => updateLabel(n.id, label)}
@@ -8823,7 +8828,7 @@ const st = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onWheelScroll, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
@@ -8993,7 +8998,15 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
     <foreignObject data-card="true" x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
       <div ref={rootRef} data-table-surface="1" onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
-        onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
+        onMouseDown={stop} onClick={e => { stop(e); onSelect() }}
+        onWheel={e => {
+          // At an editable zoom, a plain wheel SCROLLS (pans) the canvas — a table reads like a
+          // document. Ctrl/⌘+wheel (or when zoomed out to drag-only) falls through to the canvas zoom.
+          if (dragOnly || e.ctrlKey || e.metaKey) return
+          e.preventDefault(); e.stopPropagation()
+          const m = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1   // lines / pages → pixels
+          onWheelScroll?.(e.deltaX * m, e.deltaY * m)
+        }}
         onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
           pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
@@ -9103,11 +9116,12 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
           {showAff && columns.length > 0 && <div className="tc-linediv" onMouseDown={e => startColResize(e, columns[columns.length - 1])} title="Drag to resize column" style={{ position: 'absolute', left: W - 3, top: 0, width: 6, height: colHdrH, cursor: 'col-resize', zIndex: 7 }} />}
           {showAff && rows.length > 0 && <div className="tc-linediv" onMouseDown={e => startRowResize(e, rows[rows.length - 1].id, rowHeights[rowHeights.length - 1])} title="Drag to resize row" style={{ position: 'absolute', left: -6, top: rowTop[rows.length - 1] + rowHeights[rowHeights.length - 1] - 3, width: 6, height: 6, cursor: 'row-resize', zIndex: 7 }} />}
 
-          {/* Live reorder destination — a solid highlight over the target COLUMN or ROW (never a line). */}
+          {/* Live reorder destination — a solid highlight over the target COLUMN or ROW. Kept above the
+              cells and grips (high z) so it's actually visible during the drag. */}
           {drop && drop.kind === 'col' && (() => { const ci = columns.findIndex(c => c.id === drop.id); if (ci < 0) return null
-            return <div style={{ position: 'absolute', left: colX[ci], top: 0, width: colW(columns[ci]), height: H, background: 'rgba(91,106,240,0.22)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 8 }} /> })()}
+            return <div style={{ position: 'absolute', left: colX[ci], top: 0, width: colW(columns[ci]), height: H, background: 'rgba(91,106,240,0.30)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 20 }} /> })()}
           {drop && drop.kind === 'row' && (() => { const ri = rows.findIndex(r => r.id === drop.id); if (ri < 0) return null
-            return <div style={{ position: 'absolute', left: 0, top: rowTop[ri], width: W, height: rowHeights[ri], background: 'rgba(91,106,240,0.22)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 8 }} /> })()}
+            return <div style={{ position: 'absolute', left: 0, top: rowTop[ri], width: W, height: rowHeights[ri], background: 'rgba(91,106,240,0.30)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 20 }} /> })()}
 
           {/* Move-the-table borders — drag any of the 4 edges. Hovering ANY of them lights the whole-table
               selection ring (same style/thickness as selecting it), not each border individually. */}
