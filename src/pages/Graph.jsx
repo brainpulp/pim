@@ -5222,10 +5222,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         applyImageDrag()
       }
       imgPanRaf = requestAnimationFrame(imgEdgePan)
+      let dragEnded = false
       const onUp = () => {
+        if (dragEnded) return          // guard: pointerup/mouseup/blur may all fire — end exactly once
+        dragEnded = true
         if (imgPanRaf) cancelAnimationFrame(imgPanRaf)
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
+        window.removeEventListener('pointerup', onUp, true)
+        window.removeEventListener('blur', onUp)
+        window.removeEventListener('keydown', onKeyAbort, true)
         hideDragShield()
         // Dropped onto a slideshow → add this media as a slide and remove the free image from the canvas.
         if (canAttach) {
@@ -5255,9 +5261,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (dragHoverNodeIdRef.current !== null) { dragHoverNodeIdRef.current = null; setDragHoverNodeId(null) }
         }
       }
+      // Backstops so a missed mouseup can never "glue" the drag (e.g. the release lands over a media
+      // player/iframe that swallows it): also end on pointerup (capture phase), window blur, or Escape.
+      const onKeyAbort = ev => { if (ev.key === 'Escape') onUp() }
       showDragShield('move')
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
+      window.addEventListener('pointerup', onUp, true)
+      window.addEventListener('blur', onUp)
+      window.addEventListener('keydown', onKeyAbort, true)
 
     } else if (mode === 'resize') {
       // Proportional corner resize: the OPPOSITE corner of the visible (crop) rect
