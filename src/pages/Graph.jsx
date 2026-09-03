@@ -78,13 +78,16 @@ const clearGestureCursor = () => { document.body.style.cursor = '' }
 // iframes and receives those events itself (they still bubble to document), so drags release cleanly.
 let _dragShield = null
 const showDragShield = (cursor = 'grabbing') => {
-  if (_dragShield) return
+  // Disable pointer capture on ALL media (esp. cross-origin YouTube iframes, which swallow the mouseup
+  // and glue the drag) for the whole drag — independent of whether the overlay covers them.
+  document.body.classList.add('pim-dragging')
+  if (_dragShield) { _dragShield.style.cursor = cursor; return }
   const el = document.createElement('div')
   el.style.cssText = `position:fixed;inset:0;z-index:2147483000;cursor:${cursor};background:transparent`
   document.body.appendChild(el)
   _dragShield = el
 }
-const hideDragShield = () => { if (_dragShield) { _dragShield.remove(); _dragShield = null } }
+const hideDragShield = () => { document.body.classList.remove('pim-dragging'); if (_dragShield) { _dragShield.remove(); _dragShield = null } }
 
 // Extract an 11-char YouTube video id from a URL or bare id, else null.
 const parseYoutubeId = (str) => {
