@@ -8819,8 +8819,12 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
       if (!col.wrap || col.type !== 'text') continue
       const val = r.cells?.[col.id]; if (val == null || val === '') continue
       const cpl = Math.max(1, Math.floor((colW(col) - 12) / 6.6))
-      const lines = String(val).split('\n').reduce((n, ln) => n + Math.max(1, Math.ceil(ln.length / cpl)), 0)
-      need = Math.max(need, lines * 16 + 8)
+      // Cells may hold HTML (rich text): count block breaks, then wrap the tag-stripped text.
+      const raw = String(val)
+      const blocks = (raw.match(/<(br|\/div|\/li|\/p|\/h[1-6])\b/gi) || []).length
+      const text = raw.replace(/<[^>]+>/g, ' ')
+      const lines = text.split('\n').reduce((n, ln) => n + Math.max(1, Math.ceil(ln.length / cpl)), 0) + blocks
+      need = Math.max(need, lines * 16 + 10)
     }
     return need
   }
@@ -9078,16 +9082,10 @@ function TableCell({ col, value, onChange, textColor }) {
       </select>
     )
   }
-  if (col.type === 'text' && col.wrap) {
-    // Wrapping cell: a textarea that wraps to the column width (the row auto-grows to fit). Enter commits;
-    // Shift+Enter inserts a line break.
-    return (
-      <textarea value={draft} onMouseDown={stop} onClick={stop} rows={1}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={() => { if ((draft ?? '') !== (value ?? '')) onChange(draft) }}
-        onKeyDown={e => { stop(e); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur() } }}
-        style={{ ...tc.cellInput, color: col2, height: '100%', resize: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', fontSize: 12, lineHeight: '16px', overflow: 'hidden' }} />
-    )
+  if (col.type === 'text') {
+    // Rich text cell: contentEditable holding HTML, with a floating B/I/U/S + bullet toolbar while
+    // editing. Wrap columns grow the row to fit; non-wrap stay single-line.
+    return <RichCell value={value} wrap={!!col.wrap} textColor={col2} onChange={onChange} />
   }
   const inputType = col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'
   return (
@@ -9097,6 +9095,50 @@ function TableCell({ col, value, onChange, textColor }) {
       onKeyDown={e => { stop(e); if (e.key === 'Enter') e.currentTarget.blur() }}
       style={{ ...tc.cellInput, color: col2 }} />
   )
+}
+
+// A rich-text table cell: contentEditable HTML with a floating format toolbar (bold/italic/underline/
+// strikethrough + bullet list). The toolbar renders in a portal so it escapes the SVG/foreignObject
+// transform and sits at true screen coordinates above the cell.
+function RichCell({ value, wrap, textColor, onChange }) {
+  const ref = useRef(null)
+  const [editing, setEditing] = useState(false)
+  const [tb, setTb] = useState(null)   // { left, top } screen coords for the toolbar
+  const stop = e => e.stopPropagation()
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    if (document.activeElement !== el && el.innerHTML !== (value ?? '')) el.innerHTML = value ?? ''
+  }, [value])
+  const placeTb = () => { const r = ref.current?.getBoundingClientRect(); if (r) setTb({ left: r.left, top: r.top - 32 }) }
+  const exec = (cmd) => { document.execCommand(cmd, false); ref.current?.focus(); if (ref.current) onChange(ref.current.innerHTML) }
+  const btn = (label, cmd, style) => (
+    <button onMouseDown={e => { e.preventDefault(); stop(e); exec(cmd) }} onClick={stop}
+      style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 6px', borderRadius: 4, ...style }}>{label}</button>
+  )
+  return (<>
+    <div ref={ref} contentEditable suppressContentEditableWarning data-tcell="1"
+      onMouseDown={stop} onClick={stop}
+      onFocus={() => { setEditing(true); placeTb() }}
+      onScroll={placeTb}
+      onBlur={() => { setEditing(false); setTb(null); onChange(ref.current?.innerHTML || '') }}
+      onInput={placeTb}
+      onKeyDown={e => { stop(e); if (e.key === 'Enter' && !wrap && !e.shiftKey) { e.preventDefault(); ref.current?.blur() } }}
+      style={{ ...tc.cellInput, color: textColor || TC_TXT, whiteSpace: wrap ? 'pre-wrap' : 'nowrap',
+        wordBreak: wrap ? 'break-word' : 'normal', overflow: 'hidden', cursor: 'text', minHeight: 15,
+        fontFamily: 'inherit', fontSize: 12, lineHeight: wrap ? '16px' : 1.3 }} />
+    {editing && tb && createPortal(
+      <div onMouseDown={e => { e.preventDefault(); stop(e) }} onClick={stop}
+        style={{ position: 'fixed', left: tb.left, top: tb.top, zIndex: 10000, display: 'flex', alignItems: 'center', gap: 1,
+          background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 7, padding: 2, boxShadow: '0 6px 20px rgba(0,0,0,0.7)' }}>
+        {btn('B', 'bold', { fontWeight: 800 })}
+        {btn('I', 'italic', { fontStyle: 'italic' })}
+        {btn('U', 'underline', { textDecoration: 'underline' })}
+        {btn('S', 'strikeThrough', { textDecoration: 'line-through' })}
+        <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
+        {btn('•', 'insertUnorderedList')}
+        {btn('1.', 'insertOrderedList', { fontSize: 12 })}
+      </div>, document.body)}
+  </>)
 }
 
 function SelectOptionsEditor({ options, onChange }) {
