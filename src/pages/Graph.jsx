@@ -8868,6 +8868,25 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
     const dy = (H - prev) / 2
     if (prev !== H && Math.abs(dy) > 0.01) onPivotTop?.(dy)   // parent shifts the anchor down by dy so the top stays put
   }, [H, collapsed])
+
+  // Wheel over the table: D3's zoom listener sits on the <svg> and, because React delegates events at the
+  // root container (above the svg), fires BEFORE any React onWheel here. So intercept natively on the
+  // element itself. At an editable zoom a plain wheel scrolls/pans the canvas (a table reads like a
+  // document); Ctrl/⌘+wheel (or drag-only zoom level) is left to bubble to the canvas zoom.
+  const wheelCfg = useRef({})
+  wheelCfg.current = { dragOnly, onWheelScroll }
+  useEffect(() => {
+    const el = rootRef.current; if (!el) return
+    const onWheel = (e) => {
+      const { dragOnly, onWheelScroll } = wheelCfg.current
+      if (dragOnly || e.ctrlKey || e.metaKey) return
+      e.preventDefault(); e.stopPropagation()
+      const m = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1   // lines / pages → pixels
+      onWheelScroll?.(e.deltaX * m, e.deltaY * m)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [collapsed])
   const colX = []; { let a = 0; columns.forEach(c => { colX.push(a); a += colW(c) }) }
   const rowTop = []; { let a = colHdrH; rowHeights.forEach(h => { rowTop.push(a); a += h }) }
 
@@ -9005,14 +9024,6 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
     <foreignObject data-card="true" x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
       <div ref={rootRef} data-table-surface="1" onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
         onMouseDown={stop} onClick={e => { stop(e); onSelect() }}
-        onWheel={e => {
-          // At an editable zoom, a plain wheel SCROLLS (pans) the canvas — a table reads like a
-          // document. Ctrl/⌘+wheel (or when zoomed out to drag-only) falls through to the canvas zoom.
-          if (dragOnly || e.ctrlKey || e.metaKey) return
-          e.preventDefault(); e.stopPropagation()
-          const m = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1   // lines / pages → pixels
-          onWheelScroll?.(e.deltaX * m, e.deltaY * m)
-        }}
         onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
           pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
