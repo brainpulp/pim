@@ -7375,7 +7375,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (sn && rect) anchor = { x: rect.left + T.x + (sn.x + (m.width || 0) / 2) * T.k + 14, y: rect.top + T.y + sn.y * T.k }
         }
         videoEditSelRef.current = { start: video?.start || 0, end: video?.end || 0 }
-        return (
+        return (<>
+          {/* Click-away backdrop — clicking anywhere outside the panel closes it. */}
+          <div onMouseDown={() => setVideoEdit(null)} style={{ position: 'fixed', inset: 0, zIndex: 499 }} />
           <YTVideoOptions video={video} anchor={anchor} onPatch={onPatch}
             onClose={() => setVideoEdit(null)}
             onScrubTime={videoScrubTo}
@@ -7399,7 +7401,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }}
             onResetPoster={() => onPatchPoster?.(null)}
             onPlayFullscreen={() => setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true, speed: video.speed || 1, captions: video.captions === true })} />
-        )
+        </>)
       })()}
 
       {videoFullscreen?.youtubeId && (
@@ -9550,10 +9552,11 @@ function VideoEmbed({ img, play, previewing, onReady }) {
   const end = (img.end && img.end > start) ? img.end : 0
   useEffect(() => { setErrCode(0) }, [img.src])
 
-  // Autoplay-on-focus: when the media is flagged for zoom/slide autoplay, the parent's `play` signal
-  // drives play/pause (e.g. arrow-nav zooming into it, or its frame being presented).
+  // Autoplay-on-focus: when the media is flagged for zoom/slide autoplay (or "keep playing"), the
+  // parent's `play` signal drives play/pause. "Keep playing" auto-starts on mount (muted, per browser
+  // policy) without waiting for a click.
   useEffect(() => {
-    if (!img.autoplayOnZoom && !img.autoplayOnSlide) return
+    if (!img.autoplayOnZoom && !img.autoplayOnSlide && !img.keepPlaying) return
     const el = ref.current; if (!el) return
     if (img.videoKind === 'youtube') {
       const cmd = (func) => { try { el.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args: [] }), '*') } catch { /* ignore */ } }
@@ -9572,7 +9575,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     } else {
       el.pause()
     }
-  }, [play, img.autoplayOnZoom, img.autoplayOnSlide, img.videoKind, img.src])
+  }, [play, img.autoplayOnZoom, img.autoplayOnSlide, img.keepPlaying, img.videoKind, img.src])
 
   // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
   useEffect(() => {
@@ -10030,7 +10033,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // click controls) once activated; file videos stay pass-through until armed with videoActive.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'hidden' }}>
           <div style={{ width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#000', pointerEvents: (isSelected && (isYT || videoActive)) && !previewing ? 'auto' : 'none' }}>
-            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay} previewing={previewing} onReady={onPlayerReady} />
+            <VideoEmbed img={isYT ? { ...img, autoplay: true, hideRelated: true } : img} play={mediaPlay || !!img.keepPlaying} previewing={previewing} onReady={onPlayerReady} />
           </div>
         </foreignObject>
       ) : isAudio ? (
