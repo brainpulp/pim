@@ -9607,7 +9607,8 @@ function VideoEmbed({ img, play, previewing, onReady }) {
       if (play) {
         // Programmatic play is only allowed MUTED (the parent's keypress gesture doesn't cross into the
         // cross-origin iframe). Mute → seek to trim start → play, retried in case the player isn't ready.
-        const go = () => { cmd('mute'); if (start) cmd('seekTo', [start, true]); cmd('playVideo') }
+        // Once it's actually playing, retries no-op so a short trim window isn't restarted mid-play.
+        const go = () => { if (curPlayRef.current) return; cmd('mute'); if (start) cmd('seekTo', [start, true]); cmd('playVideo') }
         go()
         const t1 = setTimeout(go, 400), t2 = setTimeout(go, 1200)
         return () => { clearTimeout(t1); clearTimeout(t2) }
@@ -9663,27 +9664,30 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [speed, img.videoKind, img.youtubeId, img.autoplay, img.muted, img.loop, img.controls, img.hideRelated, img.start, img.end])
 
-  // Watchdog for a trimmed END: YouTube's own `end` param only fires from the start of playback (scrub
-  // past it and it won't stop). Listen to the player's currentTime stream and enforce the end ourselves —
-  // pause there, or loop back to the start.
+  // Watchdog for a trimmed END: YouTube's own `end` URL param is unreliable with autoplay (and won't
+  // fire after a scrub), so we enforce the end ourselves. This must NOT depend on catching a single
+  // handshake at the right moment (the player init timing varies, and a missed handshake meant the whole
+  // video played). Instead: an interval keeps (re)starting the state stream until currentTime is flowing,
+  // then polls it and pauses/loops at the trim end. `curTimeRef` is kept fresh by the handle effect below.
   useEffect(() => {
     if (img.videoKind !== 'youtube' || previewing) return   // while previewing, the trim scrubber drives it
     const endT = (img.end && img.end > (img.start || 0)) ? img.end : 0
     if (!endT) return
     const f = ref.current; if (!f) return
     const post = (msg) => { try { f.contentWindow?.postMessage(JSON.stringify(msg), '*') } catch { /* ignore */ } }
-    const t = setTimeout(() => post({ event: 'listening', id: 1, channel: 'widget' }), 800)   // start the state stream
-    const onMsg = (e) => {
-      if (e.source !== f.contentWindow) return
-      let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
-      if (d?.event !== 'infoDelivery' || !d.info || typeof d.info.currentTime !== 'number') return
-      if (d.info.currentTime >= endT - 0.25) {
+    const startStream = () => post({ event: 'listening', id: 1, channel: 'widget' })
+    let streaming = false
+    const onMsg = (e) => { if (e.source === f.contentWindow) streaming = true }   // any message ⇒ the stream is live
+    window.addEventListener('message', onMsg)
+    const iv = setInterval(() => {
+      if (!streaming) startStream()          // keep knocking until the player answers
+      const t = curTimeRef.current
+      if (t >= endT - 0.2) {
         if (img.loop) { post({ event: 'command', func: 'seekTo', args: [img.start || 0, true] }); post({ event: 'command', func: 'playVideo', args: [] }) }
         else post({ event: 'command', func: 'pauseVideo', args: [] })
       }
-    }
-    window.addEventListener('message', onMsg)
-    return () => { clearTimeout(t); window.removeEventListener('message', onMsg) }
+    }, 200)
+    return () => { clearInterval(iv); window.removeEventListener('message', onMsg) }
   }, [img.videoKind, img.youtubeId, img.start, img.end, img.loop, previewing])
 
   // Expose a control handle (seek/play/pause/time/duration) so the trim scrubber can preview the
@@ -9693,9 +9697,14 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     const f = ref.current; if (!f) return
     const post = (m) => { try { f.contentWindow?.postMessage(JSON.stringify(m), '*') } catch { /* ignore */ } }
     const cmd = (func, args = []) => post({ event: 'command', func, args })
-    const t = setTimeout(() => post({ event: 'listening', id: 1, channel: 'widget' }), 500)
+    // Kick the state stream repeatedly until it's flowing — player init timing varies, and a single
+    // handshake was easy to miss (which left currentTime/duration at 0: no trim enforcement, no trim slider).
+    const listen = () => post({ event: 'listening', id: 1, channel: 'widget' })
+    let got = false
+    const timers = [setTimeout(listen, 200), setTimeout(listen, 600), setTimeout(listen, 1200), setTimeout(listen, 2200), setTimeout(listen, 3500)]
     const onMsg = (e) => {
       if (e.source !== f.contentWindow) return
+      if (!got) { got = true; listen() }   // player is alive → confirm the stream
       let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
       if (d?.event === 'infoDelivery' && d.info) {
         if (typeof d.info.currentTime === 'number') {
@@ -9717,7 +9726,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
       duration: () => curDurRef.current,
       playing: () => curPlayRef.current,
     })
-    return () => { clearTimeout(t); window.removeEventListener('message', onMsg) }
+    return () => { timers.forEach(clearTimeout); window.removeEventListener('message', onMsg) }
   }, [img.videoKind, img.youtubeId, previewing]) // eslint-disable-line
 
   // File video: expose the same control handle so the selected-video scrubber (and the trim-edit
