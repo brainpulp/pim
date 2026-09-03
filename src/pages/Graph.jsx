@@ -6272,6 +6272,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onFullscreen={() => { ytssHandlesRef.current[n.id]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(n.id) }}
                   onReplay={() => { setYtssEndedId(null); setYtssIdxMap(m => ({ ...m, [n.id]: 0 })); ytssPlayingRef.current = true }}
                   onEdit={() => setYtssInspectorId(n.id)}
+                  onRename={name => { pushUndo(); updateLabel(n.id, name) }}
                   onSetIdx={i => setYtssIdxMap(m => ({ ...m, [n.id]: i }))}
                   onReady={h => { ytssHandlesRef.current[n.id] = h }}
                   onEnded={() => {

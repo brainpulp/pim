@@ -879,7 +879,8 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename }) {
+  const [editingTitle, setEditingTitle] = useState(false)
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
@@ -890,9 +891,28 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
     <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
       onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.(); onHeaderDown?.(e) } }}
       onDoubleClick={e => { e.stopPropagation(); onEnter?.() }}>
-      {/* Title above */}
-      <text x={0} y={-H / 2 - 10} textAnchor="middle" fontSize={15} fill={active ? '#8ecbff' : '#c5d0ff'}
-        style={{ userSelect: 'none', fontWeight: 600 }}>{label}{clips.length ? `  ·  ${idx + 1}/${clips.length}` : ''}</text>
+      {/* Title above — double-click to rename */}
+      {editingTitle ? (
+        <foreignObject x={-W / 2} y={-H / 2 - 32} width={W} height={28} style={{ overflow: 'visible' }}>
+          <input autoFocus defaultValue={node.label || ''} placeholder="Slideshow name"
+            onMouseDown={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { e.currentTarget.value = node.label || ''; e.currentTarget.blur() } }}
+            onBlur={e => { onRename?.(e.currentTarget.value.trim()); setEditingTitle(false) }}
+            style={{ width: '100%', boxSizing: 'border-box', textAlign: 'center', background: '#12122a', border: '1px solid #5b6af0', color: '#eef1ff', borderRadius: 6, fontSize: 15, fontWeight: 600, padding: '3px 8px', outline: 'none', fontFamily: '-apple-system, sans-serif' }} />
+        </foreignObject>
+      ) : (
+        <text x={0} y={-H / 2 - 10} textAnchor="middle" fontSize={15} fill={active ? '#8ecbff' : '#c5d0ff'}
+          onDoubleClick={e => { if (!active) { e.stopPropagation(); onSelect?.(); setEditingTitle(true) } }}
+          style={{ userSelect: 'none', fontWeight: 600, cursor: active ? 'default' : 'text' }}>
+          {label}{clips.length ? `  ·  ${idx + 1}/${clips.length}` : ''}
+        </text>
+      )}
+      {selected && !active && !editingTitle && (
+        <text x={W / 2} y={-H / 2 - 10} textAnchor="start" fontSize={11} fill="#7d84a4"
+          onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSelect?.(); setEditingTitle(true) }}
+          style={{ cursor: 'pointer', userSelect: 'none' }}>  ✎ rename</text>
+      )}
       <foreignObject x={-W / 2} y={-H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
