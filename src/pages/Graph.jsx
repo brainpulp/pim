@@ -9084,7 +9084,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
                 </div>
               ))}
               {showAff && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
-                style={{ position: 'absolute', zIndex: 9, left: -28, top: '50%', transform: 'translateY(-50%)', cursor: 'grab', color: '#7b8fcc', fontSize: 11, lineHeight: 1 }}>⣿</span>}
+                style={{ position: 'absolute', zIndex: 12, left: 0, top: 0, width: 15, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', color: '#aeb8ff', fontSize: 11, lineHeight: 1, background: 'rgba(18,20,42,0.72)', borderRight: '1px solid rgba(91,106,240,0.4)' }}>⣿</span>}
               {showAff && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
             </div>
           ))}
