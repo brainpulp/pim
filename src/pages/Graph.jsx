@@ -2604,13 +2604,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const openMenuAt = (clientX, clientY, target, isCtrl, forceBg) => {
       if (!el || readOnly) return
       if (target?.closest?.(OVERLAY_SEL)) return
-      // A table manages its own right-click menu (add/delete rows & columns, collapse, delete). Don't
-      // also pop the node/background menu over it — unless Shift forces the background menu.
-      if (!forceBg && target?.closest?.('[data-table-surface]')) return
       const rect = el.getBoundingClientRect()
       if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
       const px = clientX - rect.left, py = clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
+      // A free image placed OVER a table/card node is the user's overlay — right-clicking it must open the
+      // PHOTO menu, not the table/card menu underneath. A background image (rendered below the table in
+      // paint order) has the table as its DOM target, so the table-surface / cardnode routing below would
+      // otherwise steal it. Resolve the image by coordinate first, preferring the topmost (front, then
+      // latest-in-array) one. Only kicks in over a table/card surface, so plain node/background right-clicks
+      // are unaffected.
+      if (!forceBg && !isCtrl && target?.closest?.('[data-table-surface],[data-cardnode]')) {
+        const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+        let hitImg = null
+        imgs.forEach(im => {
+          if (im.visible === false) return
+          if (Math.abs(sx - im.x) <= im.width / 2 && Math.abs(sy - im.y) <= im.height / 2) {
+            if (!hitImg || (im.z === 'front' ? 1 : 0) >= (hitImg.z === 'front' ? 1 : 0)) hitImg = im
+          }
+        })
+        if (hitImg) {
+          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
+          setSelectedImageIds(prev => prev.has(hitImg.id) ? prev : new Set([hitImg.id]))
+          setPhotoMenu({ px, py, imageId: hitImg.id })
+          return
+        }
+      }
+      // A table manages its own right-click menu (add/delete rows & columns, collapse, delete). Don't
+      // also pop the node/background menu over it — unless Shift forces the background menu.
+      if (!forceBg && target?.closest?.('[data-table-surface]')) return
       // Big "card" nodes (YouTube slideshow, table, kanban, list, strategy, media) have small circular
       // hitboxes, so a right-click on the card body would otherwise fall through to the background Insert
       // menu. Route it to THAT node's own menu instead — the menu should pertain to the item clicked.

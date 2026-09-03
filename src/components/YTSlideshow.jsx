@@ -289,9 +289,10 @@ export function SlidePlayer({ clip, autoplay = false, muted = false, captions = 
 // onChange(start, end, which) — `which` is 'start' | 'end', so the caller can scrub the preview to
 // whichever edge is being moved.
 const trimBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '1px 7px', cursor: 'pointer', fontSize: 10.5, whiteSpace: 'nowrap' }
-// Dual-handle trim slider. A SEPARATE zoom slider narrows the visible window (centered on the selection)
-// so a short clip is placeable in a long video — but zoom never moves on its own, and the window is frozen
-// for the duration of a handle drag so handles can't drift. Live preview via onScrub (drag) / onLoop (release).
+// Dual-handle trim slider. A SEPARATE zoom slider narrows the visible window for fine control on a long
+// video — but the window is MANUAL: it only re-centers on the selection at the moment you change the zoom
+// level. It never follows the selection on its own afterwards (that auto-follow made the view jump around
+// while trimming). Live preview via onScrub (drag) / onLoop (release).
 function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
   const trackRef = useRef(null)
   const [zoom, setZoom] = useState(1)   // 1 = whole video; higher = narrower window
@@ -300,18 +301,19 @@ function TrimSlider({ start, end, max, onChange, onScrub, onLoop }) {
   const s = Math.max(0, Math.min(start || 0, M)), e = Math.min(M, (end && end > s) ? end : M)
   const stateRef = useRef({ s, e, M })
   stateRef.current = { s, e, M }
-  const winRef = useRef({ w0: 0, w1: M })
-  // Window follows the selection at the chosen zoom — but only recompute when NOT dragging (frozen mid-drag).
-  if (!dragging) {
-    if (zoom <= 1) winRef.current = { w0: 0, w1: M }
-    else {
-      const width = M / zoom
-      const mid = (s + e) / 2
-      let w0 = Math.max(0, Math.min(mid - width / 2, M - width))
-      winRef.current = { w0, w1: w0 + width }
-    }
-  }
-  const { w0, w1 } = winRef.current
+  // The visible window [w0,w1]. Recomputed ONLY when the zoom level (or video length) changes — centered on
+  // wherever the selection is at that instant — then left alone. No auto-follow while you trim.
+  const [win, setWin] = useState({ w0: 0, w1: M })
+  const winRef = useRef(win); winRef.current = win
+  useEffect(() => {
+    const { s: cs, e: ce, M: m } = stateRef.current
+    if (zoom <= 1) { setWin({ w0: 0, w1: m }); return }
+    const width = m / zoom
+    const mid = (cs + ce) / 2
+    const w0 = Math.max(0, Math.min(mid - width / 2, m - width))
+    setWin({ w0, w1: w0 + width })
+  }, [zoom, M])   // eslint-disable-line — intentionally NOT depending on s/e: the window must not follow the selection
+  const { w0, w1 } = win
   const span = Math.max(1, w1 - w0)
 
   const drag = (which) => (ev0) => {
