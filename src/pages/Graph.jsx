@@ -2690,9 +2690,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     const onContext = ev => {
       const t = ev.target
-      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // keep native menu on form fields
+      // A right-DRAG (pan) just ended → always swallow the trailing contextmenu, even over an input or
+      // contentEditable table cell (Linux/Win fire it AFTER mouseup). Checked BEFORE the form-field
+      // exception so right-drag-panning over a table never leaks the browser menu.
+      if (suppressContext) { suppressContext = false; ev.preventDefault(); return }
+      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // plain right-click on a form field → keep native menu
       ev.preventDefault()
-      if (suppressContext) { suppressContext = false; return }   // trailing event from a drag → ignore
       if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
       openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey, ev.shiftKey)   // untracked gesture (trackpad tap) → open now
     }
