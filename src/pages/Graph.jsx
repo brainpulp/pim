@@ -9328,6 +9328,7 @@ function DrawPalette({ palette, hasFrames, onStartDrag, onSwitchSlides, onClose 
 function VideoEmbed({ img, play, previewing, onReady }) {
   const ref = useRef(null)
   const [errCode, setErrCode] = useState(0)
+  const [ended, setEnded] = useState(false)   // reached the trim end (or natural end) → freeze the frame, hide all UI
   const curTimeRef = useRef(0)
   const curDurRef = useRef(0)
   const cutsRef = useRef(img.cuts); cutsRef.current = img.cuts
@@ -9364,21 +9365,28 @@ function VideoEmbed({ img, play, previewing, onReady }) {
   useEffect(() => {
     if (img.videoKind === 'youtube') return
     const v = ref.current; if (!v) return
+    setEnded(false)
     v.playbackRate = speed
     v.muted = !!img.muted
     const seekStart = () => { if (start) { try { v.currentTime = start } catch { /* not seekable yet */ } } }
+    // Freeze on the trim end: pin the frame exactly at `end` and mark ended (which hides all UI).
+    const finish = () => { try { if (end) v.currentTime = end } catch { /* ignore */ } v.pause(); setEnded(true) }
     const onTime = () => {
       const tgt = cutSkipTarget(v.currentTime, cutsRef.current)
       if (tgt != null) { try { v.currentTime = tgt } catch { /* ignore */ } return }
       if (end && v.currentTime >= end) {
         if (img.loop) { try { v.currentTime = start } catch { /* ignore */ } v.play().catch(() => {}) }
-        else v.pause()
+        else finish()
       }
     }
+    const onNativeEnd = () => { if (!img.loop) finish() }         // no trim end → freeze the real last frame too
+    const onPlaying = () => setEnded(false)                       // any (re)play clears the frozen state
     v.addEventListener('loadedmetadata', seekStart)
     v.addEventListener('timeupdate', onTime)
+    v.addEventListener('ended', onNativeEnd)
+    v.addEventListener('play', onPlaying)
     if (v.readyState >= 1) seekStart()
-    return () => { v.removeEventListener('loadedmetadata', seekStart); v.removeEventListener('timeupdate', onTime) }
+    return () => { v.removeEventListener('loadedmetadata', seekStart); v.removeEventListener('timeupdate', onTime); v.removeEventListener('ended', onNativeEnd); v.removeEventListener('play', onPlaying) }
   }, [speed, img.muted, start, end, img.loop, img.videoKind, img.src])
 
   // YouTube: playback speed can't be set by URL param — poke the player via the JS API postMessage
@@ -9474,10 +9482,14 @@ function VideoEmbed({ img, play, previewing, onReady }) {
       </div>
     )
   }
+  // When ended, show NOTHING but the frozen frame — no controls, no chrome. Clicking it (invisible
+  // affordance, no visible UI) rewinds to the trim start and replays.
+  const replay = () => { const v = ref.current; if (!v) return; try { v.currentTime = start } catch { /* ignore */ } setEnded(false); v.play().catch(() => {}) }
   return <video ref={ref} src={img.src} playsInline preload="metadata"
     onError={e => setErrCode(e.currentTarget?.error?.code || 4)}
-    controls={img.controls !== false} autoPlay={!!img.autoplay} loop={!!img.loop && !end} muted={!!img.muted}
-    style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }} />
+    onClick={ended ? (e => { e.stopPropagation(); replay() }) : undefined}
+    controls={img.controls !== false && !ended} autoPlay={!!img.autoplay} loop={!!img.loop && !end} muted={!!img.muted}
+    style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block', cursor: ended ? 'pointer' : 'default' }} />
 }
 
 // contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
