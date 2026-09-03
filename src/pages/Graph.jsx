@@ -6284,6 +6284,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     const k = zoomTransformRef.current.k || 1
                     d3.select(svgRef.current).call(zoomBehaviorRef.current.translateBy, -dx / k, -dy / k)
                   }}
+                  onWheelZoom={(dy, cx, cy) => {
+                    if (!svgRef.current || !zoomBehaviorRef.current) return
+                    const rect = svgRef.current.getBoundingClientRect()
+                    const factor = Math.pow(2, -dy * 0.002)   // matches D3's default (non-ctrl) wheel-zoom rate
+                    d3.select(svgRef.current).call(zoomBehaviorRef.current.scaleBy, factor, [cx - rect.left, cy - rect.top])
+                  }}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onRename={label => updateLabel(n.id, label)}
@@ -8875,7 +8881,7 @@ const st = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onWheelScroll, onHeaderDown, onSelect, onRename, onCell, onSetCellBg, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onWheelScroll, onWheelZoom, onHeaderDown, onSelect, onRename, onCell, onSetCellBg, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
@@ -8921,14 +8927,21 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
   // element itself. At an editable zoom a plain wheel scrolls/pans the canvas (a table reads like a
   // document); Ctrl/⌘+wheel (or drag-only zoom level) is left to bubble to the canvas zoom.
   const wheelCfg = useRef({})
-  wheelCfg.current = { dragOnly, onWheelScroll }
+  wheelCfg.current = { dragOnly, onWheelScroll, onWheelZoom }
   useEffect(() => {
     const el = rootRef.current; if (!el) return
     const onWheel = (e) => {
-      const { dragOnly, onWheelScroll } = wheelCfg.current
-      if (dragOnly || e.ctrlKey || e.metaKey) return
-      e.preventDefault(); e.stopPropagation()
+      const { dragOnly, onWheelScroll, onWheelZoom } = wheelCfg.current
       const m = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1   // lines / pages → pixels
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom at NORMAL speed: D3's own ctrl+wheel handler multiplies the delta by 10 (for trackpad
+        // pinch), which makes mouse ctrl+wheel jump. Drive the zoom ourselves instead.
+        e.preventDefault(); e.stopPropagation()
+        onWheelZoom?.(e.deltaY * m, e.clientX, e.clientY)
+        return
+      }
+      if (dragOnly) return   // zoomed out: a plain wheel zooms via the canvas (normal speed)
+      e.preventDefault(); e.stopPropagation()
       onWheelScroll?.(e.deltaX * m, e.deltaY * m)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -9674,7 +9687,13 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     // While previewing, hold the src stable (drop start/end so a trim edit doesn't reload the iframe —
     // the scrubber seeks via the handle instead).
     const embedImg = previewing ? { ...img, start: 0, end: 0 } : img
-    return <iframe ref={ref} src={youtubeEmbedUrl(embedImg)} style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
+    // Shrink YouTube's (cross-origin, un-styleable) controls: render the iframe at a large LOGICAL size
+    // so YouTube draws desktop-proportion controls, then scale it down to fill the box. Controls end up
+    // a small, consistent fraction of the video regardless of its on-canvas size/zoom.
+    const bw = Math.max(1, img.width || 320), bh = Math.max(1, img.height || 180)
+    const LW = 900, LH = Math.max(1, Math.round(LW * bh / bw)), s = bw / LW
+    return <iframe ref={ref} src={youtubeEmbedUrl(embedImg)}
+      style={{ width: LW, height: LH, border: 0, display: 'block', transformOrigin: 'top left', transform: `scale(${s})` }}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title="YouTube video" />
   }
   if (errCode) {
