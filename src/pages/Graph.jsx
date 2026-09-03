@@ -4638,23 +4638,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // mouseup and glue the drag). Independent of which drag handler runs. Once media is non-interactive
   // the pointer passes through it, so the mouseup reaches the page and the class is removed — self-heals.
   useEffect(() => {
-    let down = null, armed = false
-    const clear = () => { if (armed) { armed = false; document.body.classList.remove('pim-drag-nomedia') } }
-    const onDown = e => { if (e.button === 0 && !e.target?.closest?.('input,textarea,[contenteditable="true"]')) { down = { x: e.clientX, y: e.clientY } } }
-    const onMove = e => {
-      if (!down || armed) return
-      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) { armed = true; document.body.classList.add('pim-drag-nomedia') }
-    }
-    const onUp = () => { down = null; clear() }
-    const onKey = e => { if (e.key === 'Escape') { down = null; clear() } }
+    // ANY left mousedown that reaches the page disables media pointer-events until release. A click on
+    // a YouTube iframe's own controls happens INSIDE the (cross-origin) iframe and never reaches this
+    // capture listener, so this never blocks the player — but it does kill the iframe's ability to
+    // swallow the mouseup during a drag, which was the "glue". No movement threshold = no race.
+    const add = () => document.body.classList.add('pim-drag-nomedia')
+    const remove = () => document.body.classList.remove('pim-drag-nomedia')
+    const onDown = e => { if (e.button === 0 && !e.target?.closest?.('input,textarea,select,[contenteditable="true"]')) add() }
+    const onUp = () => remove()
+    const onKey = e => { if (e.key === 'Escape') remove() }
     window.addEventListener('mousedown', onDown, true)
-    window.addEventListener('mousemove', onMove, true)
     window.addEventListener('mouseup', onUp, true)
     window.addEventListener('pointerup', onUp, true)
     window.addEventListener('blur', onUp)
     window.addEventListener('keydown', onKey, true)
     return () => {
-      window.removeEventListener('mousedown', onDown, true); window.removeEventListener('mousemove', onMove, true)
+      window.removeEventListener('mousedown', onDown, true)
       window.removeEventListener('mouseup', onUp, true); window.removeEventListener('pointerup', onUp, true)
       window.removeEventListener('blur', onUp); window.removeEventListener('keydown', onKey, true)
       document.body.classList.remove('pim-drag-nomedia')
