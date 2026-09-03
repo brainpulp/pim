@@ -8921,18 +8921,24 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
       const k = eff() || 1
       if (kind === 'row') {
         const ly = (ev.clientY - gr.top) / k
-        let found = null
-        for (let i = 0; i < rows.length; i++) { if (ly >= rowTop[i] && ly < rowTop[i] + rowHeights[i]) { found = rows[i].id; break } }
-        if (!found && rows.length) found = ly < rowTop[0] ? rows[0].id : rows[rows.length - 1].id
-        target = found
+        let ti = -1
+        for (let i = 0; i < rows.length; i++) { if (ly >= rowTop[i] && ly < rowTop[i] + rowHeights[i]) { ti = i; break } }
+        if (ti < 0 && rows.length) ti = ly < rowTop[0] ? 0 : rows.length - 1
+        target = rows[ti]?.id ?? null
+        const gi = rows.findIndex(r => r.id === id)
+        // Insertion line: at the target's top when dropping before it, its bottom when dropping after.
+        if (target && target !== id) setDrop({ kind: 'row', pos: ti <= gi ? rowTop[ti] : rowTop[ti] + rowHeights[ti] })
+        else setDrop(null)
       } else {
         const lx = (ev.clientX - gr.left) / k
-        let found = null
-        for (let i = 0; i < columns.length; i++) { if (lx >= colX[i] && lx < colX[i] + colW(columns[i])) { found = columns[i].id; break } }
-        if (!found && columns.length) found = lx < colX[0] ? columns[0].id : columns[columns.length - 1].id
-        target = found
+        let ci = -1
+        for (let i = 0; i < columns.length; i++) { if (lx >= colX[i] && lx < colX[i] + colW(columns[i])) { ci = i; break } }
+        if (ci < 0 && columns.length) ci = lx < colX[0] ? 0 : columns.length - 1
+        target = columns[ci]?.id ?? null
+        const gi = columns.findIndex(c => c.id === id)
+        if (target && target !== id) setDrop({ kind: 'col', pos: ci <= gi ? colX[ci] : colX[ci] + colW(columns[ci]) })
+        else setDrop(null)
       }
-      setDrop(target && target !== id ? { kind, id: target } : null)
     }
     const up = () => {
       window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up)
@@ -9116,12 +9122,10 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
           {showAff && columns.length > 0 && <div className="tc-linediv" onMouseDown={e => startColResize(e, columns[columns.length - 1])} title="Drag to resize column" style={{ position: 'absolute', left: W - 3, top: 0, width: 6, height: colHdrH, cursor: 'col-resize', zIndex: 7 }} />}
           {showAff && rows.length > 0 && <div className="tc-linediv" onMouseDown={e => startRowResize(e, rows[rows.length - 1].id, rowHeights[rowHeights.length - 1])} title="Drag to resize row" style={{ position: 'absolute', left: -6, top: rowTop[rows.length - 1] + rowHeights[rowHeights.length - 1] - 3, width: 6, height: 6, cursor: 'row-resize', zIndex: 7 }} />}
 
-          {/* Live reorder destination — a solid highlight over the target COLUMN or ROW. Kept above the
-              cells and grips (high z) so it's actually visible during the drag. */}
-          {drop && drop.kind === 'col' && (() => { const ci = columns.findIndex(c => c.id === drop.id); if (ci < 0) return null
-            return <div style={{ position: 'absolute', left: colX[ci], top: 0, width: colW(columns[ci]), height: H, background: 'rgba(91,106,240,0.30)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 20 }} /> })()}
-          {drop && drop.kind === 'row' && (() => { const ri = rows.findIndex(r => r.id === drop.id); if (ri < 0) return null
-            return <div style={{ position: 'absolute', left: 0, top: rowTop[ri], width: W, height: rowHeights[ri], background: 'rgba(91,106,240,0.30)', boxShadow: `inset 0 0 0 2px ${accent}`, pointerEvents: 'none', zIndex: 20 }} /> })()}
+          {/* Live reorder destination — an insertion LINE at the boundary where the item will land.
+              Kept above the cells and grips (high z) so it's clearly visible during the drag. */}
+          {drop && drop.kind === 'col' && <div style={{ position: 'absolute', left: drop.pos - 1.5, top: 0, width: 3, height: H, background: accent, borderRadius: 2, pointerEvents: 'none', zIndex: 20, boxShadow: `0 0 5px ${accent}` }} />}
+          {drop && drop.kind === 'row' && <div style={{ position: 'absolute', left: 0, top: drop.pos - 1.5, width: W, height: 3, background: accent, borderRadius: 2, pointerEvents: 'none', zIndex: 20, boxShadow: `0 0 5px ${accent}` }} />}
 
           {/* Move-the-table borders — drag any of the 4 edges. Hovering ANY of them lights the whole-table
               selection ring (same style/thickness as selecting it), not each border individually. */}
