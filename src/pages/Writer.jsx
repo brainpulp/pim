@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import useGraphStore from '../lib/graphStore'
+import useGraphStore, { NODE_R } from '../lib/graphStore'
 
 // ─── Writer ──────────────────────────────────────────────────────────────────
 // Full-screen, keyboard-driven outliner over the same nodes+edges as the graph, with a lightweight
@@ -124,6 +124,9 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const setNodeViewProp = useGraphStore(s => s.setNodeViewProp)
   const setDrillRoot = useGraphStore(s => s.setDrillRoot)
   const exitDrill = useGraphStore(s => s.exitDrill)
+  const updateImage = useGraphStore(s => s.updateImage)
+  const deleteImage = useGraphStore(s => s.deleteImage)
+  const selectImageFromOutline = useGraphStore(s => s.selectImageFromOutline)
 
   const nodeProps = useMemo(() => (views.find(v => v.id === activeViewId)?.nodeProps) || {}, [views, activeViewId])
   // Mirror the graph's drill-in state: when the canvas is drilled into a node, the outline re-roots there too.
@@ -152,6 +155,9 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const freshEmptyRef = useRef(new Set())
   const committedRef = useRef(new Set())   // rows whose typed text was committed by a first Enter (2nd Enter adds a sibling)
   const [framesOpen, setFramesOpen] = useState(false)   // collapsible "Frames" section
+  const [imagesOpen, setImagesOpen] = useState(true)    // collapsible "Images" section
+  const [editImgId, setEditImgId] = useState(null)      // image whose name is being renamed inline
+  const [imgNameDraft, setImgNameDraft] = useState('')
   const [search, setSearch] = useState('')
   const [showQuery, setShowQuery] = useState(false)                 // the database/query bar
   const [q, setQ] = useState({ type: null, priority: null, tag: null, done: 'all' })
@@ -240,6 +246,21 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
   // Frames are kept out of the edge-driven tree above; they get their own grouped section.
   const frameNodes = useMemo(() => nodes.filter(n => isFrame(n.id)), [nodes, frameIds])
+
+  // Root photos (not inside any anchored frame's box) → their own "Images" outline section. Frame box
+  // geometry mirrors the canvas: default half-size r*4.5 × r*3.5 (r = 44·scale), overridden by frameHalfW/H.
+  const rootPhotos = useMemo(() => {
+    const imgs = (views.find(v => v.id === activeViewId)?.images) || []
+    const boxes = frameNodes.map(f => {
+      const vp = nodeProps[f.id] || {}
+      if (vp.fx == null || vp.fy == null) return null       // unanchored frame → position unknown, skip
+      const r = NODE_R * (vp.scale || 1)
+      const hw = vp.frameHalfW ?? r * 4.5, hh = vp.frameHalfH ?? r * 3.5
+      return { x0: vp.fx - hw, x1: vp.fx + hw, y0: vp.fy - hh, y1: vp.fy + hh }
+    }).filter(Boolean)
+    const inFrame = im => boxes.some(b => im.x >= b.x0 && im.x <= b.x1 && im.y >= b.y0 && im.y <= b.y1)
+    return imgs.filter(im => !['video', 'audio', 'link', 'text'].includes(im.type) && !inFrame(im))
+  }, [views, activeViewId, frameNodes, nodeProps])
 
   useEffect(() => {
     if (pendingFocus.current && inputs.current[pendingFocus.current]) {
@@ -780,8 +801,9 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                       {isTask && <span style={{ ...ctl, width: 18 }}><input type="checkbox" checked={!!done} onChange={() => setNodeMeta(r.id, { done: !done })} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} /></span>}
                     </>)
                   })()}
-                  {/* media / slideshow node marker */}
+                  {/* media / slideshow / table node marker */}
                   {n.media && <span title={n.media.kind === 'video' ? 'Video' : n.media.kind === 'audio' ? 'Audio' : 'Image'} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{n.media.kind === 'video' ? '🎬' : n.media.kind === 'audio' ? '🎵' : '🖼️'}</span>}
+                  {n.table && <span title="Table" style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>📊</span>}
                   {n.ytss && <span title="Slideshow" style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>📺</span>}
                   {/* inline emojis */}
                   {emojis.map((em, i) => <span key={i} style={{ fontSize: hSize, lineHeight: 1.25, flexShrink: 0 }}>{em.type === 'custom' ? '🖼️' : em.emoji}</span>)}
@@ -842,6 +864,44 @@ export default function Writer({ projectName, embedded = false, maximized = fals
                   <span style={{ fontFamily: OUTLINE_FONT, fontSize: 14, color: fg }}>{n.label || 'Untitled frame'}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Images — root photos (not inside a frame), grouped in their own collapsible section.
+              Click to select + pan the canvas to it; hover for hide/delete; double-click name to rename. */}
+          {!flatMode && !drillRoot && rootPhotos.length > 0 && (
+            <div style={{ marginTop: 22, borderTop: `1px solid ${line}`, paddingTop: 10 }}>
+              <div onClick={() => setImagesOpen(o => !o)}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <span style={{ width: 18, textAlign: 'center', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1 }}>{imagesOpen ? '▾' : '▸'}</span>
+                <span style={{ fontFamily: OUTLINE_FONT, fontWeight: 600, fontSize: 12, letterSpacing: '0.08em', color: faint, textTransform: 'uppercase' }}>Images</span>
+                <span style={{ fontSize: 12, color: faint }}>{rootPhotos.length}</span>
+              </div>
+              {imagesOpen && rootPhotos.map(im => {
+                const hidden = im.visible === false
+                const name = im.caption || im.title || 'Image'
+                return (
+                  <div key={im.id} className="wr-row" onClick={() => selectImageFromOutline(im.id)}
+                    style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8, marginLeft: 24, padding: '3px 8px', borderRadius: 6, cursor: 'pointer', background: 'transparent' }}>
+                    {im.src && <img src={im.src} alt="" style={{ width: 22, height: 22, objectFit: 'cover', borderRadius: 3, flexShrink: 0, border: `1px solid ${line}`, opacity: hidden ? 0.4 : 1 }} />}
+                    {editImgId === im.id ? (
+                      <input autoFocus value={imgNameDraft} onClick={e => e.stopPropagation()} onChange={e => setImgNameDraft(e.target.value)}
+                        onBlur={() => { updateImage(im.id, { caption: imgNameDraft.trim() }); setEditImgId(null) }}
+                        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { updateImage(im.id, { caption: imgNameDraft.trim() }); setEditImgId(null) } if (e.key === 'Escape') setEditImgId(null) }}
+                        style={{ flex: 1, background: dark ? '#0d0d1e' : '#fff', border: `1px solid ${line}`, color: fg, borderRadius: 4, padding: '1px 5px', fontSize: 14, outline: 'none', fontFamily: OUTLINE_FONT }} />
+                    ) : (
+                      <span onDoubleClick={e => { e.stopPropagation(); setImgNameDraft(im.caption || im.title || ''); setEditImgId(im.id) }}
+                        style={{ flex: 1, fontFamily: OUTLINE_FONT, fontSize: 14, color: hidden ? faint : fg, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                    )}
+                    <span className="wr-hov" style={{ alignItems: 'center', gap: 4 }}>
+                      <span title={hidden ? 'Show in this view' : 'Hide in this view'} onClick={e => { e.stopPropagation(); updateImage(im.id, { visible: hidden }) }}
+                        style={{ cursor: 'pointer', color: hidden ? faint : bulletC, fontSize: 14, lineHeight: 1 }}>{hidden ? '◌' : '●'}</span>
+                      <span title="Delete image" onClick={e => { e.stopPropagation(); deleteImage(im.id) }}
+                        style={{ cursor: 'pointer', color: '#e0687e', fontSize: 15, lineHeight: 1 }}>×</span>
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

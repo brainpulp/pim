@@ -260,6 +260,10 @@ const useGraphStore = create((set, get) => ({
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
   navFocusNodeId: null,   // node the keyboard arrow-nav is focused on (highlighted distinctly in the outliner)
   setNavFocusNodeId: (id) => set({ navFocusNodeId: id }),
+  // Shared image selection (from the docked outliner's Images section) → the canvas selects that photo
+  // and pans/zooms to it. The nonce lets the same photo be re-selected (re-jumped) repeatedly.
+  selectedImageReq: null,   // { id, nonce } | null
+  selectImageFromOutline: (id) => set(s => ({ selectedImageReq: { id, nonce: (s.selectedImageReq?.nonce || 0) + 1 } })),
 
   // Shared canvas-panel toggles (Draw / Slides / Views). Lifted out of Graph.jsx so the nav "View" menu
   // in App.jsx can drive them too. Setters accept a value OR a React-style updater fn, so existing

@@ -4607,6 +4607,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setTimeout(() => focusNodeAndChildren(externalSelId), 20)   // let the sim settle a frame, then fit
   }, [externalSelId]) // eslint-disable-line
 
+  // Read image-selection requests from the docked outliner's Images section → select that photo here
+  // and pan/zoom to it (the nonce lets the same photo be re-jumped repeatedly).
+  const imageSelReq = useGraphStore(s => s.selectedImageReq)
+  useEffect(() => {
+    if (!imageSelReq?.id) return
+    const gs = useGraphStore.getState()
+    const im = (gs.views.find(v => v.id === gs.activeViewId)?.images || []).find(i => i.id === imageSelReq.id)
+    if (!im) return
+    setSelected(null); setSelectedNodeIds(new Set())
+    setSelectedImageIds(new Set([im.id]))
+    const w = (im.width || 120) * 1.8, h = (im.height || 120) * 1.8
+    applyCamRect({ cx: im.x, cy: im.y, w, h }, true, 380)
+  }, [imageSelReq]) // eslint-disable-line
+
   // Drill zoom memory: entering a drill fits the drilled subtree to the screen; exiting restores the
   // exact pan/zoom you had before you drilled in. Centralised here so every drill entry point (node
   // menu, outline, breadcrumb) behaves the same.
