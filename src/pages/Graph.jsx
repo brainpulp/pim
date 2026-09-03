@@ -4633,6 +4633,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     applyCamRect({ cx: im.x, cy: im.y, w, h }, true, 380)
   }, [imageSelReq]) // eslint-disable-line
 
+  // Global drag guard (fixes "glued" media drags): the instant ANY left-button drag moves past a small
+  // threshold, disable pointer-events on all media (cross-origin YouTube iframes otherwise swallow the
+  // mouseup and glue the drag). Independent of which drag handler runs. Once media is non-interactive
+  // the pointer passes through it, so the mouseup reaches the page and the class is removed — self-heals.
+  useEffect(() => {
+    let down = null, armed = false
+    const clear = () => { if (armed) { armed = false; document.body.classList.remove('pim-drag-nomedia') } }
+    const onDown = e => { if (e.button === 0 && !e.target?.closest?.('input,textarea,[contenteditable="true"]')) { down = { x: e.clientX, y: e.clientY } } }
+    const onMove = e => {
+      if (!down || armed) return
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) { armed = true; document.body.classList.add('pim-drag-nomedia') }
+    }
+    const onUp = () => { down = null; clear() }
+    const onKey = e => { if (e.key === 'Escape') { down = null; clear() } }
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('mousemove', onMove, true)
+    window.addEventListener('mouseup', onUp, true)
+    window.addEventListener('pointerup', onUp, true)
+    window.addEventListener('blur', onUp)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true); window.removeEventListener('mousemove', onMove, true)
+      window.removeEventListener('mouseup', onUp, true); window.removeEventListener('pointerup', onUp, true)
+      window.removeEventListener('blur', onUp); window.removeEventListener('keydown', onKey, true)
+      document.body.classList.remove('pim-drag-nomedia')
+    }
+  }, [])
+
   // Drill zoom memory: entering a drill fits the drilled subtree to the screen; exiting restores the
   // exact pan/zoom you had before you drilled in. Centralised here so every drill entry point (node
   // menu, outline, breadcrumb) behaves the same.
@@ -10129,12 +10157,19 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         )}
         {/* Top drag-bar to move it (the body's pointer events belong to the player/link). Not needed on
             a YouTube poster — the whole poster is pass-through, so dragging anywhere moves the node. */}
-        {((isVideo && !ytPosterMode) || isLink || isAudio || isText) && (
-          <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
-            <rect x={vL} y={vT - 3} width={cw} height={16} rx={2} fill="#5b6af0" opacity={0.85} />
-            <text x={vL + cw / 2} y={vT + 6} textAnchor="middle" fontSize={9} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>⠿ drag to move</text>
-          </g>
-        )}
+        {((isVideo && !ytPosterMode) || isLink || isAudio || isText) && (() => {
+          // Scale the drag bar with the media size so a small (or small+zoomed-in) clip doesn't get a
+          // giant bar. Capped so normal-size media keep the familiar bar.
+          const barH = Math.max(4, Math.min(16, ch * 0.11))
+          const fs = barH * 0.58
+          const label = cw > fs * 13 ? '⠿ drag to move' : cw > fs * 3 ? '⠿ drag' : '⠿'
+          return (
+            <g onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id) }} style={{ cursor: 'move' }}>
+              <rect x={vL} y={vT - barH * 0.2} width={cw} height={barH} rx={Math.min(2, barH * 0.25)} fill="#5b6af0" opacity={0.85} />
+              <text x={vL + cw / 2} y={vT - barH * 0.2 + barH * 0.74} textAnchor="middle" fontSize={fs} fill="#fff" style={{ userSelect: 'none', pointerEvents: 'none' }}>{label}</text>
+            </g>
+          )
+        })()}
         {/* Audio/Video: two autoplay toggles below the card. "On zoom" also fires when you arrow-nav
             into the media; "On slide" plays it while its frame is presented (and when nav'd into). */}
         {(isAudio || isVideo) && (() => {

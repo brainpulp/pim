@@ -74,8 +74,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 /* While dragging (a canvas element), no media element may capture the pointer — a cross-origin
    YouTube iframe otherwise swallows the mouseup and "glues" the drag. Kills capture globally. */
-body.pim-dragging iframe,
-body.pim-dragging video,
-body.pim-dragging audio,
-body.pim-dragging embed,
-body.pim-dragging object { pointer-events: none !important; }
+body.pim-dragging iframe,   body.pim-drag-nomedia iframe,
+body.pim-dragging video,    body.pim-drag-nomedia video,
+body.pim-dragging audio,    body.pim-drag-nomedia audio,
+body.pim-dragging embed,    body.pim-drag-nomedia embed,
+body.pim-dragging object,   body.pim-drag-nomedia object { pointer-events: none !important; }
