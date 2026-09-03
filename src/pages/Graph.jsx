@@ -6226,7 +6226,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   fill={getVP(n.id).fillColor} scale={getVP(n.id).tableScale || 1} palette={COLOR_PALETTE}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   collapsed={!!getVP(n.id).tableCollapsed}
+                  collapsedScale={getVP(n.id).collapsedTableScale || 1}
                   onToggleCollapse={() => setNodeViewProp(n.id, 'tableCollapsed', !getVP(n.id).tableCollapsed)}
+                  onSetCollapsedScale={k => setNodeViewProp(n.id, 'collapsedTableScale', k)}
                   onPivotTop={dy => {
                     const sn = simNodesRef.current.find(x => x.id === n.id); const vp = getVP(n.id)
                     if (sn) { sn.y = (sn.y || 0) + dy; if (sn.fy != null) sn.fy = sn.y }
@@ -8821,7 +8823,7 @@ const st = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onPivotTop, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
@@ -8856,12 +8858,11 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const prevHRef = useRef(H)
   useEffect(() => {
     const prev = prevHRef.current
-    if (prev !== H) {
-      const dy = (H - prev) / 2
-      prevHRef.current = H
-      if (Math.abs(dy) > 0.01) onPivotTop?.(dy)   // parent shifts the anchor down by dy so the top stays put
-    }
-  }, [H])
+    prevHRef.current = H
+    if (collapsed) return                          // don't shift while collapsed (the pill is top-pinned itself)
+    const dy = (H - prev) / 2
+    if (prev !== H && Math.abs(dy) > 0.01) onPivotTop?.(dy)   // parent shifts the anchor down by dy so the top stays put
+  }, [H, collapsed])
   const colX = []; { let a = 0; columns.forEach(c => { colX.push(a); a += colW(c) }) }
   const rowTop = []; { let a = colHdrH; rowHeights.forEach(h => { rowTop.push(a); a += h }) }
 
@@ -8952,23 +8953,36 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   // clickable, and the gap between grid and affordance drops the hover.
   const PADT = 24, PADR = 34, PADB = 26, PADL = 30
 
-  // Collapsed: render as a compact node — a table icon + the title — that expands on double-click (or ⊞).
+  // Collapsed: render as a compact, scalable node — a table icon + the title — pinned so its TOP-CENTRE
+  // sits exactly where the expanded table's top edge was (node.y − H/2), so collapsing doesn't shift it.
+  // Expands on double-click (or ⊞). Scaling grows it down/out from that fixed top-centre.
   if (collapsed) {
     const label = title || 'Table'
     const cw = Math.max(120, Math.min(300, label.length * 8 + 60))
     const ch = 34
+    const cs = collapsedScale || 1
+    const topY = (node.y || 0) - H / 2      // the expanded table's top edge
+    const startCScale = (e) => {
+      e.preventDefault(); e.stopPropagation()
+      const sx = e.clientX, sy = e.clientY, s0 = cs, k = zoomRef?.current?.k || 1
+      const move = ev => onSetCollapsedScale?.(Math.max(0.4, Math.min(6, s0 + ((ev.clientX - sx) + (ev.clientY - sy)) / 2 / (k * 120))))
+      const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+      window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+    }
     return (
-      <g transform={`translate(${(node.x || 0) - cw / 2},${(node.y || 0) - ch / 2}) scale(${scale})`}>
-        <foreignObject data-card="true" x={-6} y={-6} width={cw + 12} height={ch + 12} style={{ overflow: 'visible' }}>
+      <g transform={`translate(${(node.x || 0) - cs * cw / 2},${topY}) scale(${cs})`}>
+        <foreignObject data-card="true" x={-6} y={-6} width={cw + 12} height={ch + 14} style={{ overflow: 'visible' }}>
           <div onMouseDown={e => { stop(e); onHeaderDown(e) }} onClick={e => { stop(e); onSelect() }}
             onDoubleClick={e => { stop(e); onToggleCollapse?.() }} title="Double-click to expand"
-            style={{ width: cw, height: ch, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 10px',
+            style={{ position: 'relative', width: cw, height: ch, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 10px',
               background: bg || '#181d3a', border: `1.5px solid ${selected ? accent : '#2d3a6a'}`, borderRadius: 9, cursor: 'move',
               boxShadow: selected ? `0 0 0 1.5px ${accent}` : '0 4px 14px rgba(0,0,0,0.4)', fontFamily: '-apple-system, sans-serif' }}>
             <span style={{ fontSize: 15, flexShrink: 0 }}>📊</span>
             <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
             <button onMouseDown={stop} onClick={e => { stop(e); onToggleCollapse?.() }} title="Expand"
               style={{ background: 'transparent', border: 'none', color: '#8fa0d8', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '2px 4px', flexShrink: 0 }}>⊞</button>
+            {selected && <div title="Drag to resize" onMouseDown={startCScale}
+              style={{ position: 'absolute', right: -5, bottom: -5, width: 11, height: 11, background: accent, borderRadius: 2, cursor: 'nwse-resize', boxShadow: '0 0 0 1px rgba(0,0,0,0.4)' }} />}
           </div>
         </foreignObject>
       </g>
