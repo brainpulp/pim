@@ -1282,6 +1282,13 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
+  // Per-cell background colour (right-click). Stored on the row as cellBg[colId]; null/undefined clears it.
+  setTableCellBg: (nodeId, rowId, colId, color) => set(s => ({
+    nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : {
+      ...n, table: { ...n.table, rows: n.table.rows.map(r => r.id !== rowId ? r : { ...r, cellBg: { ...(r.cellBg || {}), [colId]: color || undefined } }) },
+    }),
+  })),
+
   addTableRow: (nodeId) => {
     const rid = uid()
     set(s => ({

@@ -1749,6 +1749,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addTableNode      = useGraphStore(s => s.addTableNode)
   const addTableNodeFrom  = useGraphStore(s => s.addTableNodeFrom)
   const setTableCell      = useGraphStore(s => s.setTableCell)
+  const setTableCellBg    = useGraphStore(s => s.setTableCellBg)
   const addTableRow       = useGraphStore(s => s.addTableRow)
   const addTableColumn    = useGraphStore(s => s.addTableColumn)
   const insertTableRow    = useGraphStore(s => s.insertTableRow)
@@ -6244,6 +6245,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onRename={label => updateLabel(n.id, label)}
                   onCell={(rowId, colId, value) => setTableCell(n.id, rowId, colId, value)}
+                  onSetCellBg={(rowId, colId, color) => setTableCellBg(n.id, rowId, colId, color)}
                   onAddRow={() => addTableRow(n.id)}
                   onAddColumn={type => addTableColumn(n.id, type)}
                   onInsertRow={at => insertTableRow(n.id, at)}
@@ -8828,7 +8830,7 @@ const st = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onWheelScroll, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedScale = 1, palette = [], selected, zoomRef, collapsed, onToggleCollapse, onSetCollapsedScale, onPivotTop, onWheelScroll, onHeaderDown, onSelect, onRename, onCell, onSetCellBg, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
@@ -9109,7 +9111,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
           {rows.map((r, ri) => (
             <div key={r.id} data-trow={r.id} className="tc-row" style={{ display: 'flex', height: rowHeights[ri], position: 'relative' }}>
               {columns.map((col, ci) => (
-                <div key={col.id} onContextMenu={e => openCtx(e, ri, ci)} style={{ ...cellBox(colW(col)), ...(col.wrap && col.type === 'text' ? { alignItems: 'stretch', padding: '3px 5px' } : {}) }}>
+                <div key={col.id} onContextMenu={e => openCtx(e, ri, ci)} style={{ ...cellBox(colW(col)), ...(r.cellBg?.[col.id] ? { background: r.cellBg[col.id] } : {}), ...(col.wrap && col.type === 'text' ? { alignItems: 'stretch', padding: '3px 5px' } : {}) }}>
                   <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} textColor={txt} editable={!dragOnly} />
                 </div>
               ))}
@@ -9175,6 +9177,16 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
             </>}
             <div style={tc.menuItem(false)} onClick={() => { onInsertColumn(ctx.ci, 'text'); setCtx(null) }}>← Add column left</div>
             <div style={tc.menuItem(false)} onClick={() => { onInsertColumn(ctx.ci + 1, 'text'); setCtx(null) }}>→ Add column right</div>
+            {ctx.ri >= 0 && rows[ctx.ri] && columns[ctx.ci] && (<>
+              <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
+              <div style={{ ...tc.menuLabel, padding: '2px 8px 3px' }}>Cell colour</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 8px 4px', maxWidth: 172 }}>
+                <div title="None" onClick={() => { onSetCellBg?.(rows[ctx.ri].id, columns[ctx.ci].id, null); setCtx(null) }}
+                  style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid #5b6af0', background: 'repeating-conic-gradient(#555 0% 25%, #222 0% 50%) 50% / 8px 8px' }} />
+                {(palette || []).map(c => <div key={c} title={c} onClick={() => { onSetCellBg?.(rows[ctx.ri].id, columns[ctx.ci].id, c); setCtx(null) }}
+                  style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
+              </div>
+            </>)}
             <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
             {ctx.ri >= 0 && rows[ctx.ri] && <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteRow(rows[ctx.ri].id); setCtx(null) }}>Delete row</div>}
             {columns[ctx.ci] && <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(columns[ctx.ci].id); setCtx(null) }}>Delete column</div>}
@@ -9245,12 +9257,22 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
     window.addEventListener('mousedown', onDown, true)
     return () => { window.removeEventListener('wheel', onWheel, true); window.removeEventListener('mousedown', onDown, true) }
   }, [editing])
-  const placeTb = () => { const r = ref.current?.getBoundingClientRect(); if (r) setTb({ left: r.left, top: r.top - 32 }) }
+  const [tcOpen, setTcOpen] = useState(false)   // text-colour swatch row open
+  const placeTb = () => { const r = ref.current?.getBoundingClientRect(); if (r) setTb({ left: r.left, top: r.top - (tcOpen ? 62 : 32) }) }
   const exec = (cmd) => { document.execCommand(cmd, false); ref.current?.focus(); if (ref.current) onChange(ref.current.innerHTML) }
+  // Apply a text colour to the current selection. mousedown preventDefault on the swatch keeps the cell
+  // focused (selection intact), so no native picker / focus loss.
+  const applyColor = (c) => {
+    const el = ref.current; if (!el) return
+    try { document.execCommand('styleWithCSS', false, true) } catch { /* ignore */ }
+    document.execCommand('foreColor', false, c)
+    el.focus(); onChange(el.innerHTML)
+  }
   const btn = (label, cmd, style) => (
     <button onMouseDown={e => { e.preventDefault(); stop(e); exec(cmd) }} onClick={stop}
       style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 6px', borderRadius: 4, ...style }}>{label}</button>
   )
+  const TEXT_COLORS = ['#e8ecff', '#ffffff', '#7080a0', '#ff6b6b', '#f6ad55', '#ffd84d', '#6ee7a8', '#5b6af0', '#a78bfa', '#f472b6', '#4ade80', '#38bdf8']
   return (<>
     <div ref={ref} contentEditable={editable} suppressContentEditableWarning data-tcell="1"
       onMouseDown={editable ? stop : undefined} onClick={editable ? stop : undefined}
@@ -9265,15 +9287,26 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
         fontFamily: 'inherit', fontSize: 12, lineHeight: wrap ? '16px' : 1.3 }} />
     {editing && editable && tb && createPortal(
       <div data-tcell-tb="1" onMouseDown={e => { e.preventDefault(); stop(e) }} onClick={stop}
-        style={{ position: 'fixed', left: tb.left, top: tb.top, zIndex: 10000, display: 'flex', alignItems: 'center', gap: 1,
+        style={{ position: 'fixed', left: tb.left, top: tb.top, zIndex: 10000, display: 'flex', flexDirection: 'column', gap: 3,
           background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 7, padding: 2, boxShadow: '0 6px 20px rgba(0,0,0,0.7)' }}>
-        {btn('B', 'bold', { fontWeight: 800 })}
-        {btn('I', 'italic', { fontStyle: 'italic' })}
-        {btn('U', 'underline', { textDecoration: 'underline' })}
-        {btn('S', 'strikeThrough', { textDecoration: 'line-through' })}
-        <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
-        {btn('•', 'insertUnorderedList')}
-        {btn('1.', 'insertOrderedList', { fontSize: 12 })}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {btn('B', 'bold', { fontWeight: 800 })}
+          {btn('I', 'italic', { fontStyle: 'italic' })}
+          {btn('U', 'underline', { textDecoration: 'underline' })}
+          {btn('S', 'strikeThrough', { textDecoration: 'line-through' })}
+          <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
+          {btn('•', 'insertUnorderedList')}
+          {btn('1.', 'insertOrderedList', { fontSize: 12 })}
+          <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
+          <button title="Text colour" onMouseDown={e => { e.preventDefault(); stop(e); setTcOpen(v => !v) }} onClick={stop}
+            style={{ background: tcOpen ? '#232a5c' : 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, fontWeight: 800, lineHeight: 1, padding: '3px 6px', borderRadius: 4 }}>A</button>
+        </div>
+        {tcOpen && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, padding: '1px 3px 2px', maxWidth: 170 }}>
+            {TEXT_COLORS.map(c => <div key={c} title={c} onMouseDown={e => { e.preventDefault(); stop(e); applyColor(c) }}
+              style={{ width: 16, height: 16, borderRadius: 3, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)' }} />)}
+          </div>
+        )}
       </div>, document.body)}
   </>)
 }
