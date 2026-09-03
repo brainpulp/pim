@@ -9366,14 +9366,42 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
   }, [editing])
   const [tcOpen, setTcOpen] = useState(false)   // text-colour swatch row open
   const placeTb = () => { const r = ref.current?.getBoundingClientRect(); if (r) setTb({ left: r.left, top: r.top - (tcOpen ? 62 : 32) }) }
-  const exec = (cmd) => { document.execCommand(cmd, false); ref.current?.focus(); if (ref.current) onChange(ref.current.innerHTML) }
-  // Apply a text colour to the current selection. mousedown preventDefault on the swatch keeps the cell
-  // focused (selection intact), so no native picker / focus loss.
+  // If nothing is selected, select the whole cell first — so a format click with just a caret (the common
+  // case) applies to the whole cell instead of silently doing nothing.
+  const ensureSel = () => {
+    const el = ref.current; if (!el) return
+    el.focus()
+    const sel = window.getSelection()
+    const inCell = sel && sel.rangeCount && el.contains(sel.anchorNode)
+    if (!inCell || sel.isCollapsed) { const r = document.createRange(); r.selectNodeContents(el); sel.removeAllRanges(); sel.addRange(r) }
+  }
+  const exec = (cmd) => { ensureSel(); document.execCommand(cmd, false); ref.current?.focus(); if (ref.current) onChange(ref.current.innerHTML) }
+  // Apply a text colour to the current selection (whole cell if nothing selected). mousedown preventDefault
+  // on the swatch keeps the cell focused, so no native picker / focus loss.
   const applyColor = (c) => {
     const el = ref.current; if (!el) return
+    ensureSel()
     try { document.execCommand('styleWithCSS', false, true) } catch { /* ignore */ }
     document.execCommand('foreColor', false, c)
     el.focus(); onChange(el.innerHTML)
+  }
+  // Bump the font size of the selection (whole cell if nothing selected) by ±delta px, wrapping it in a
+  // styled span. Uses the Selection API directly (execCommand('fontSize') only offers 7 coarse steps).
+  // Text size is a WHOLE-CELL property: all the cell's content lives in one wrapper <span data-sz> whose
+  // font-size we adjust in place. Predictable (no nested spans) and persists in the saved HTML.
+  const bumpSize = (delta) => {
+    const el = ref.current; if (!el) return
+    el.focus()
+    let wrap = el.firstElementChild
+    const wrapped = el.childNodes.length === 1 && wrap && wrap.dataset && wrap.dataset.sz === '1'
+    if (!wrapped) {
+      wrap = document.createElement('span'); wrap.dataset.sz = '1'
+      while (el.firstChild) wrap.appendChild(el.firstChild)
+      el.appendChild(wrap)
+    }
+    const cur = parseFloat(wrap.style.fontSize) || 12
+    wrap.style.fontSize = Math.max(8, Math.min(48, Math.round(cur + delta))) + 'px'
+    onChange(el.innerHTML)
   }
   const btn = (label, cmd, style) => (
     <button onMouseDown={e => { e.preventDefault(); stop(e); exec(cmd) }} onClick={stop}
@@ -9404,6 +9432,11 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
           <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
           {btn('•', 'insertUnorderedList')}
           {btn('1.', 'insertOrderedList', { fontSize: 12 })}
+          <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
+          <button title="Smaller text" onMouseDown={e => { e.preventDefault(); stop(e); bumpSize(-2) }} onClick={stop}
+            style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 10, fontWeight: 800, lineHeight: 1, padding: '3px 5px', borderRadius: 4 }}>A−</button>
+          <button title="Bigger text" onMouseDown={e => { e.preventDefault(); stop(e); bumpSize(2) }} onClick={stop}
+            style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 15, fontWeight: 800, lineHeight: 1, padding: '3px 5px', borderRadius: 4 }}>A+</button>
           <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
           <button title="Text colour" onMouseDown={e => { e.preventDefault(); stop(e); setTcOpen(v => !v) }} onClick={stop}
             style={{ background: tcOpen ? '#232a5c' : 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, fontWeight: 800, lineHeight: 1, padding: '3px 6px', borderRadius: 4 }}>A</button>
