@@ -1299,6 +1299,35 @@ const useGraphStore = create((set, get) => ({
     return cid
   },
 
+  // Insert a blank row at a specific index (right-click "add row above/below").
+  insertTableRow: (nodeId, atIndex) => {
+    const rid = uid()
+    set(s => ({
+      nodes: s.nodes.map(n => {
+        if (n.id !== nodeId || !n.table) return n
+        const rows = [...n.table.rows]
+        rows.splice(Math.max(0, Math.min(rows.length, atIndex)), 0, { id: rid, cells: {} })
+        return { ...n, table: { ...n.table, rows } }
+      }),
+    }))
+    return rid
+  },
+
+  // Insert a column at a specific index (right-click "add column left/right").
+  insertTableColumn: (nodeId, atIndex, type = 'text') => {
+    const cid = uid()
+    const col = { id: cid, name: 'Column', type, width: type === 'checkbox' ? 62 : 120, ...(type === 'select' ? { options: ['Option'] } : {}) }
+    set(s => ({
+      nodes: s.nodes.map(n => {
+        if (n.id !== nodeId || !n.table) return n
+        const cols = [...n.table.columns]
+        cols.splice(Math.max(0, Math.min(cols.length, atIndex)), 0, col)
+        return { ...n, table: { ...n.table, columns: cols } }
+      }),
+    }))
+    return cid
+  },
+
   deleteTableRow: (nodeId, rowId) => set(s => ({
     nodes: s.nodes.map(n => n.id !== nodeId || !n.table ? n : { ...n, table: { ...n.table, rows: n.table.rows.filter(r => r.id !== rowId) } }),
   })),

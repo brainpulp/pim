@@ -1751,6 +1751,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setTableCell      = useGraphStore(s => s.setTableCell)
   const addTableRow       = useGraphStore(s => s.addTableRow)
   const addTableColumn    = useGraphStore(s => s.addTableColumn)
+  const insertTableRow    = useGraphStore(s => s.insertTableRow)
+  const insertTableColumn = useGraphStore(s => s.insertTableColumn)
   const deleteTableRow    = useGraphStore(s => s.deleteTableRow)
   const deleteTableColumn = useGraphStore(s => s.deleteTableColumn)
   const updateTableColumn = useGraphStore(s => s.updateTableColumn)
@@ -6223,6 +6225,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   onCell={(rowId, colId, value) => setTableCell(n.id, rowId, colId, value)}
                   onAddRow={() => addTableRow(n.id)}
                   onAddColumn={type => addTableColumn(n.id, type)}
+                  onInsertRow={at => insertTableRow(n.id, at)}
+                  onInsertColumn={(at, type) => insertTableColumn(n.id, at, type)}
                   onDeleteRow={rowId => deleteTableRow(n.id, rowId)}
                   onDeleteColumn={colId => deleteTableColumn(n.id, colId)}
                   onUpdateColumn={(colId, patch) => updateTableColumn(n.id, colId, patch)}
@@ -8803,7 +8807,7 @@ const st = {
 const TYPE_LABELS = { text: 'Text', number: 'Number', checkbox: 'Checkbox', select: 'Select', date: 'Date' }
 const TC_LINE = 'rgba(150,163,204,0.5)'   // grid line — reads on the dark canvas, subtle on light
 const TC_TXT = '#e8ecff'
-function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
+function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [], selected, zoomRef, onHeaderDown, onSelect, onRename, onCell, onAddRow, onAddColumn, onInsertRow, onInsertColumn, onDeleteRow, onDeleteColumn, onUpdateColumn, onMoveColumn, onMoveRow, onSetRowHeight, onSetColor, onSetTextColor, onDelete, onSetScale }) {
   const columns = table.columns || [], rows = table.rows || []
   const txt = textColor || TC_TXT   // per-table text colour (view-dependent); falls back to the default
   const colHdrH = 24
@@ -8839,6 +8843,14 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   const [borderHov, setBorderHov] = useState(false)   // hovering any of the 4 move-borders → light the whole-table ring
   const [drop, setDrop] = useState(null)              // live reorder destination: { kind:'col'|'row', id }
   const [dragging, setDragging] = useState(false)     // a reorder drag is in progress
+  const [ctx, setCtx] = useState(null)                // right-click menu: { x, y, ri, ci } in card-local coords
+  const rootRef = useRef(null)
+  const openCtx = (e, ri, ci) => {
+    e.preventDefault(); e.stopPropagation()
+    const rect = rootRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setCtx({ x: e.clientX - rect.left, y: e.clientY - rect.top, ri, ci })
+  }
 
   const eff = () => (zoomRef?.current?.k || 1) * (scale || 1)
   const startColResize = (e, col) => {
@@ -8893,7 +8905,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
   return (
     <g transform={`translate(${(node.x || 0) - W / 2},${(node.y || 0) - H / 2}) scale(${scale})`}>
     <foreignObject data-card="true" x={-PADL} y={-PADT} width={W + PADL + PADR} height={H + PADT + PADB} style={{ overflow: 'visible' }}>
-      <div onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
+      <div ref={rootRef} onMouseEnter={() => setHov(true)} onMouseLeave={() => { setHov(false); setMenuCol(null); setShowColors(false); setShowTextColors(false); setBorderHov(false) }}
         onMouseDown={stop} onClick={e => { stop(e); onSelect() }} onWheel={stop}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
           pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
@@ -8940,8 +8952,8 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
         <div style={{ position: 'relative', borderTop: `1px solid ${TC_LINE}`, borderLeft: `1px solid ${TC_LINE}`, width: W, boxSizing: 'border-box', background: bg || 'transparent', boxShadow: (selected || borderHov) ? `0 0 0 1.5px ${accent}` : 'none' }}>
           {/* Column header row */}
           <div style={{ display: 'flex', height: colHdrH }}>
-            {columns.map(col => (
-              <div key={col.id} data-tcol={col.id} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2, overflow: menuCol === col.id ? 'visible' : 'hidden', zIndex: menuCol === col.id ? 30 : undefined }}>
+            {columns.map((col, ci) => (
+              <div key={col.id} data-tcol={col.id} onContextMenu={e => openCtx(e, -1, ci)} style={{ ...cellBox(colW(col)), position: 'relative', gap: 2, overflow: menuCol === col.id ? 'visible' : 'hidden', zIndex: menuCol === col.id ? 30 : undefined }}>
                 {hov && <span title="Drag to reorder column" onMouseDown={e => startReorder(e, col.id, 'data-tcol', onMoveColumn)} style={{ position: 'relative', zIndex: 9, cursor: 'grab', color: '#7b8fcc', fontSize: 10, lineHeight: 1, flexShrink: 0 }}>⣿</span>}
                 {editColId === col.id ? (
                   <input autoFocus defaultValue={col.name} onMouseDown={stop} onClick={stop}
@@ -8975,8 +8987,8 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
           {/* Data rows */}
           {rows.map((r, ri) => (
             <div key={r.id} data-trow={r.id} className="tc-row" style={{ display: 'flex', height: rowHeights[ri], position: 'relative' }}>
-              {columns.map(col => (
-                <div key={col.id} style={{ ...cellBox(colW(col)), ...(col.wrap && col.type === 'text' ? { alignItems: 'stretch', padding: '3px 5px' } : {}) }}>
+              {columns.map((col, ci) => (
+                <div key={col.id} onContextMenu={e => openCtx(e, ri, ci)} style={{ ...cellBox(colW(col)), ...(col.wrap && col.type === 'text' ? { alignItems: 'stretch', padding: '3px 5px' } : {}) }}>
                   <TableCell col={col} value={r.cells?.[col.id]} onChange={v => onCell(r.id, col.id, v)} textColor={txt} />
                 </div>
               ))}
@@ -9024,6 +9036,24 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, palette = [
         {hov && <button style={tc.addRowBtn} onMouseDown={stop} onClick={e => { stop(e); onAddRow() }}>＋ row</button>}
         {hov && <div title="Drag to resize table" onMouseDown={startScale}
           style={{ position: 'absolute', right: -5, bottom: -5, width: 11, height: 11, background: accent, borderRadius: 2, cursor: 'nwse-resize', boxShadow: '0 0 0 1px rgba(0,0,0,0.4)' }} />}
+
+        {/* Right-click context menu — add / delete rows & columns right where you clicked. */}
+        {ctx && (<>
+          <div onMouseDown={e => { stop(e); setCtx(null) }} onContextMenu={e => { e.preventDefault(); stop(e); setCtx(null) }}
+            style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div onMouseDown={stop} onClick={stop} onWheel={stop}
+            style={{ position: 'absolute', left: ctx.x, top: ctx.y, zIndex: 41, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, minWidth: 150, boxShadow: '0 6px 20px rgba(0,0,0,0.7)' }}>
+            {ctx.ri >= 0 && <>
+              <div style={tc.menuItem(false)} onClick={() => { onInsertRow(ctx.ri); setCtx(null) }}>↑ Add row above</div>
+              <div style={tc.menuItem(false)} onClick={() => { onInsertRow(ctx.ri + 1); setCtx(null) }}>↓ Add row below</div>
+            </>}
+            <div style={tc.menuItem(false)} onClick={() => { onInsertColumn(ctx.ci, 'text'); setCtx(null) }}>← Add column left</div>
+            <div style={tc.menuItem(false)} onClick={() => { onInsertColumn(ctx.ci + 1, 'text'); setCtx(null) }}>→ Add column right</div>
+            <div style={{ borderTop: '1px solid #23233e', margin: '4px 0' }} />
+            {ctx.ri >= 0 && rows[ctx.ri] && <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteRow(rows[ctx.ri].id); setCtx(null) }}>Delete row</div>}
+            {columns[ctx.ci] && <div style={tc.menuItem(false, '#f0a0a0')} onClick={() => { onDeleteColumn(columns[ctx.ci].id); setCtx(null) }}>Delete column</div>}
+          </div>
+        </>)}
       </div>
       </div>
     </foreignObject>
