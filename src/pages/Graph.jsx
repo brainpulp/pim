@@ -2941,6 +2941,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (e.key === 'ArrowLeft') { e.preventDefault(); advanceBuild(-1); return }
         if (e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); jumpSlide(1); return }
         if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); jumpSlide(-1); return }
+        // 'f' → play a slideshow inside the current slide in clean, chrome-free browser fullscreen.
+        if (e.key === 'f' || e.key === 'F') {
+          e.preventDefault()
+          const frame = slideSimNodes[presentingSlideIdx ?? 0]
+          if (frame) {
+            const fvp = getVP(frame.id)
+            const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
+            const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
+            const ytssIn = simNodesRef.current.find(n => ytssNodeSet.has(n.id) && visibleNodeIdsRef.current.has(n.id) &&
+              ((getVP(n.id).containedIn === frame.id) || (Math.abs((n.x || 0) - (frame.x || 0)) < hw && Math.abs((n.y || 0) - (frame.y || 0)) < hh)))
+            if (ytssIn) { ytssHandlesRef.current[ytssIn.id]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(ytssIn.id) }
+          }
+          return
+        }
         return
       }
 
@@ -7265,7 +7279,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 {(() => { const st = slideSimNodes[presentingSlideIdx ?? 0]; const ns = st ? (getVP(st.id).stages || []).length : 0; return ns > 1 ? <div style={{ fontSize:'0.68rem', color:'#7c8cff' }}>build {presentStageIdx + 1} / {ns}</div> : null })()}
               </span>
               <button style={canvasBtnStyle} onClick={() => advanceBuild(1)} title="Next build (→ / Space)">Next →</button>
-              <span style={{ color:'#5a6a9a', fontSize:'0.62rem', maxWidth:120, lineHeight:1.2 }}>↑↓ jump slides</span>
+              <span style={{ color:'#7c8cff', fontSize:'0.62rem', maxWidth:130, lineHeight:1.2 }}>↑↓ jump slides · <b>f</b> play fullscreen</span>
             </div>
           </div>
         )}
