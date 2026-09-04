@@ -1003,7 +1003,9 @@ function MenuFlyout({ icon, label, children, minWidth = 168 }) {
   const rowRef = useRef(null)
   const flyRef = useRef(null)
   const timer = useRef(null)
-  const enter = () => { clearTimeout(timer.current); setOpen(true) }
+  // Open on a short hover delay (not instantly) so sweeping the cursor down the menu doesn't fire off a
+  // cascade of submenus; close on a slightly longer delay so you can travel diagonally into the submenu.
+  const enter = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setOpen(true), 130) }
   const leave = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setOpen(false), 260) }
   // Position the submenu with `position: fixed` off the row's rect so it escapes any
   // ancestor with `overflow` clipping (e.g. a scrollable menu) instead of being cut off.
@@ -1069,6 +1071,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const hideTimerRef = useRef(null)
   const showTimerRef = useRef(null)
   const hoveredNodeIdRef = useRef(null)
+  // True from the mousedown on a node until its mouseup — so the undocked floating style panel does NOT
+  // retarget/pop mid-drag (dragging a frame must never spring the colour swatches). A clean click (no
+  // drag) reopens it explicitly on mouseup.
+  const nodeGestureRef = useRef(false)
   const panSaveTimerRef = useRef(null)
   const [notePopupId, setNotePopupId] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // nodeId or null
@@ -1115,7 +1121,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [dupGhost, setDupGhost] = useState(null)         // alt-drag duplicate: translucent preview { x, y, label, fill, shape, scale }
   const [dupChildrenPrompt, setDupChildrenPrompt] = useState(null) // { srcId, newId, cx, cy } after alt-drop when source has children
   const [floatDock, setFloatDock] = useState(() => { try { return localStorage.getItem('pim_style_undock') === '1' } catch { return false } })
-  useEffect(() => { try { localStorage.setItem('pim_style_undock', floatDock ? '1' : '0') } catch { /* ignore */ } }, [floatDock])
+  const floatDockRef = useRef(floatDock)
+  useEffect(() => { floatDockRef.current = floatDock; try { localStorage.setItem('pim_style_undock', floatDock ? '1' : '0') } catch { /* ignore */ } }, [floatDock])
   const [floatRect, setFloatRect] = useState(() => { try { return JSON.parse(localStorage.getItem('pim_style_floatpos') || 'null') || { x: 80, y: 90 } } catch { return { x: 80, y: 90 } } })
   useEffect(() => { try { localStorage.setItem('pim_style_floatpos', JSON.stringify(floatRect)) } catch { /* ignore */ } }, [floatRect])
   // Keyboard-navigation camera: how close the arrow-key nav zooms when a single node is framed.
@@ -1142,6 +1149,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // left-click retargets the floating window, not just a right-click).
   useEffect(() => {
     if (!floatDock) return
+    if (nodeGestureRef.current) return   // mid node-drag → don't spring the panel; mouseup reopens on a clean click
     if (selected?.type === 'node') setNodeMenu(m => (m?.nodeId === selected.id ? m : { nodeId: selected.id, px: 0, py: 0 }))
   }, [floatDock, selected])
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
@@ -2618,6 +2626,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
       const px = clientX - rect.left, py = clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
+      // ── RULE 1 (highest priority): if the topmost DOM element under the cursor IS a free image, open the
+      // PHOTO menu. Resolving straight from the DOM target is bulletproof — it does not depend on paint order,
+      // z-index, or coordinate hit-testing, so an image over ANY node/table always wins. (Background images
+      // painted BEHIND a table have the table as their DOM target; those are caught by the coordinate pass
+      // below.) This is deliberately first so image right-click can never be stolen by table/card routing.
+      if (!forceBg && !isCtrl) {
+        const imgEl = target?.closest?.('[data-imgid]')
+        const imgId = imgEl?.getAttribute?.('data-imgid')
+        if (imgId && (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).some(im => im.id === imgId)) {
+          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
+          setSelectedImageIds(prev => prev.has(imgId) ? prev : new Set([imgId]))
+          setPhotoMenu({ px, py, imageId: imgId })
+          return
+        }
+      }
       // A free image placed OVER a table/card node is the user's overlay — right-clicking it must open the
       // PHOTO menu, not the table/card menu underneath. A background image (rendered below the table in
       // paint order) has the table as its DOM target, so the table-surface / cardnode routing below would
@@ -2653,19 +2676,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           setContextMenu(null); setPhotoMenu(null); setBulkMenu(null)
           setSelected({ id: cardId, type: 'node' }); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set())
           setNodeMenu({ nodeId: cardId, px, py })
-          return
-        }
-      }
-      // Right-click resolved straight from the DOM target — robust even when a free image overlaps a node
-      // (coordinate hit-testing would pick the node underneath). Media NODES carry data-cardnode and were
-      // already routed to their node menu above, so this only catches free canvas images.
-      if (!forceBg && !isCtrl) {
-        const imgEl = target?.closest?.('[data-imgid]')
-        const imgId = imgEl?.getAttribute?.('data-imgid')
-        if (imgId && (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).some(im => im.id === imgId)) {
-          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
-          setSelectedImageIds(prev => prev.has(imgId) ? prev : new Set([imgId]))
-          setPhotoMenu({ px, py, imageId: imgId })
           return
         }
       }
@@ -3204,6 +3214,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // of them together; otherwise it's a normal single selection.
     const curNodeSel = selectedNodeIdsRef.current
     const multiDrag = curNodeSel.has(nodeId) && curNodeSel.size > 1
+    nodeGestureRef.current = true   // guard the undocked style panel from popping until this gesture ends
     if (!multiDrag) {
       setSelected({ id: nodeId, type: 'node' })
       setSelectedNodeIds(new Set())
@@ -3503,6 +3514,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
         }
       }
+      // Gesture over. If it was a clean click (no drag) while the style panel is undocked, retarget/open
+      // it now — the retarget effect was suppressed during the gesture so a drag can't spring it.
+      nodeGestureRef.current = false
+      if (!didDrag && floatDockRef.current) setNodeMenu(m => (m?.nodeId === nodeId ? m : { nodeId, px: 0, py: 0 }))
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -6276,6 +6291,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
+                  onSetScale={k => setNodeViewProp(n.id, 'ytssScale', k)}
+                  zoomK={T.k}
                   onSelect={() => setSelected({ id: n.id, type: 'node' })}
                   onEnter={() => { setSelected({ id: n.id, type: 'node' }); enterYtssAndPlay(n.id) }}
                   onFullscreen={() => { ytssHandlesRef.current[n.id]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(n.id) }}
@@ -6516,8 +6533,33 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         {/* Bulk right-click menu — applies to every node in the current multi-selection. */}
         {bulkMenu && (() => {
           const ids = bulkMenu.ids
+          const allFrames = ids.length > 0 && ids.every(id => getVP(id)?.shape === 'frame')
           const close = () => { setBulkMenu(null); setBulkPanel(null) }
           const setAll = (prop, val) => { pushUndo(); ids.forEach(id => setNodeViewProp(id, prop, val)) }
+          // Align / distribute the selected nodes by their centres, then anchor them there.
+          const liveNodes = () => ids.map(id => simNodesRef.current.find(n => n.id === id)).filter(Boolean)
+          const alignNodes = (anchor) => {
+            const ns = liveNodes(); if (ns.length < 2) return
+            pushUndo()
+            const xs = ns.map(n => n.x), ys = ns.map(n => n.y)
+            const minX = Math.min(...xs), maxX = Math.max(...xs), cx = (minX + maxX) / 2
+            const minY = Math.min(...ys), maxY = Math.max(...ys), cy = (minY + maxY) / 2
+            ns.forEach(n => {
+              if (anchor === 'left') n.x = minX; else if (anchor === 'right') n.x = maxX; else if (anchor === 'centerH') n.x = cx
+              else if (anchor === 'top') n.y = minY; else if (anchor === 'bottom') n.y = maxY; else if (anchor === 'middleV') n.y = cy
+              n.fx = n.x; n.fy = n.y; setAnchor(n.id, n.x, n.y)
+            })
+            simRef.current?.alpha(0.3).restart(); scheduleRender(); close()
+          }
+          const distributeNodes = (axis) => {
+            const ns = liveNodes(); if (ns.length < 3) return
+            pushUndo()
+            const k = axis === 'H' ? 'x' : 'y', fk = axis === 'H' ? 'fx' : 'fy'
+            const sorted = [...ns].sort((a, b) => a[k] - b[k])
+            const lo = sorted[0][k], hi = sorted[sorted.length - 1][k], step = (hi - lo) / (sorted.length - 1)
+            sorted.forEach((n, i) => { const v = lo + step * i; n[k] = v; n[fk] = v; setAnchor(n.id, n.x, n.y) })
+            simRef.current?.alpha(0.3).restart(); scheduleRender(); close()
+          }
           const item = (icon, label, onClick) => (
             <div onClick={onClick}
               onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
@@ -6550,6 +6592,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             size:   () => <>{listPanel([['Small', 0.6], ['Medium', 1], ['Large', 1.5], ['Extra large', 2.2]], v => setAll('scale', v))}</>,
             motion: () => <>{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
             style:  () => storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(null, st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>,
+            align:  () => <>
+              {item(null, 'Align left', () => alignNodes('left'))}
+              {item(null, 'Align centre (H)', () => alignNodes('centerH'))}
+              {item(null, 'Align right', () => alignNodes('right'))}
+              {item(null, 'Align top', () => alignNodes('top'))}
+              {item(null, 'Align middle (V)', () => alignNodes('middleV'))}
+              {item(null, 'Align bottom', () => alignNodes('bottom'))}
+              {ids.length >= 3 && <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />}
+              {ids.length >= 3 && item(null, 'Distribute horizontally', () => distributeNodes('H'))}
+              {ids.length >= 3 && item(null, 'Distribute vertically', () => distributeNodes('V'))}
+            </>,
+            tools:  () => <>{item('⚖️', usptoBusy ? 'Checking USPTO…' : 'Check USPTO (live hits)', () => { if (!usptoBusy) { runUSPTOCheck(ids); close() } })}</>,
           }
           const row = (icon, label, panel) => <MenuFlyout icon={icon} label={label} minWidth={190}>{PANELS[panel]()}</MenuFlyout>
           return (
@@ -6557,7 +6611,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <div onMouseDown={close} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div data-graphmenu onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
                 style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto', overflowX: 'hidden' }}>
-                <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} nodes selected</div>
+                <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} {allFrames ? 'frame' : 'node'}{ids.length === 1 ? '' : 's'} selected</div>
                 {(
                   <>
                     {row('🎨', 'Fill color', 'fill')}
@@ -6565,13 +6619,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     {row('▢', 'Border color', 'stroke')}
                     {row('┃', 'Border width', 'width')}
                     {row('┅', 'Border style', 'dash')}
-                    {row('◆', 'Shape', 'shape')}
+                    {!allFrames && row('◆', 'Shape', 'shape')}
                     {row('⇲', 'Size', 'size')}
                     {row('◐', 'Opacity', 'opacity')}
-                    {row('🌀', 'Motion', 'motion')}
+                    {!allFrames && row('🌀', 'Motion', 'motion')}
+                    {row('⧉', 'Align & distribute', 'align')}
                     {row('🎭', 'Apply style', 'style')}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
-                    {item('⚖️', usptoBusy ? 'Checking USPTO…' : 'Check USPTO (live hits)', () => { if (!usptoBusy) { runUSPTOCheck(ids); close() } })}
+                    {row('🛠️', 'Tools', 'tools')}
                     {item('🏷️', 'Tag these…', () => { const t = prompt('Tag to add to the selected nodes'); if (t && t.trim()) { const tag = t.trim().replace(/^#/, ''); ids.forEach(id => addNodeTag(id, tag)) } close() })}
                     <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
                     {item('⚓', 'Release anchors', () => { ids.forEach(id => releaseAnchor(id)); ids.forEach(id => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.fx = null; sn.fy = null } }); simRef.current?.alpha(0.4).restart(); close() })}

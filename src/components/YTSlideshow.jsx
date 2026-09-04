@@ -908,13 +908,24 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename, onSetScale, zoomK = 1 }) {
   const [editingTitle, setEditingTitle] = useState(false)
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
   const W = 480 * (node.__scale || 1), H = 270 * (node.__scale || 1)
   const label = node.label || 'Slideshow'
+  // Corner scale handle (bottom-right). Drag out to grow / in to shrink; pins the top-left. While
+  // dragging, disable media pointer-events so the embedded YouTube iframe can't swallow the mouseup.
+  const startScale = (e) => {
+    if (e.button !== 0) return
+    e.preventDefault(); e.stopPropagation()
+    const sx = e.clientX, sy = e.clientY, s0 = node.__scale || 1, k = zoomK || 1
+    document.body.classList.add('pim-drag-nomedia')
+    const move = ev => onSetScale?.(Math.max(0.4, Math.min(4, s0 + ((ev.clientX - sx) + (ev.clientY - sy)) / 2 / (k * 320))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); document.body.classList.remove('pim-drag-nomedia') }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
   const bd = active ? '#4ade80' : (isDropTarget ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a'))
   return (
     <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
@@ -991,9 +1002,17 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
                 <IconBtn name="next" title="Next clip" size={30} onClick={() => onSetIdx?.((idx + 1) % clips.length)} />
               </div>
             </>)}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 4, textAlign: 'center', color: '#aab4dd', fontSize: 10.5, pointerEvents: 'none' }}>drag anywhere to move · double-click to play</div>
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 4, textAlign: 'center', color: '#aab4dd', fontSize: 10.5, pointerEvents: 'none' }}>drag anywhere to move · double-click to play · drag corner to resize</div>
           </div>
         </foreignObject>
+      )}
+      {/* Corner resize handle (bottom-right) — SVG so it paints on top of the video and stays clickable. */}
+      {selected && !active && (
+        <g transform={`translate(${W / 2},${H / 2})`} onMouseDown={startScale}
+          style={{ cursor: 'nwse-resize' }} title="Drag to resize">
+          <circle r={9} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
+          <path d="M4 -4 L-4 4 M4 0 L0 4" stroke="#5b6af0" strokeWidth={1.5} fill="none" strokeLinecap="round" />
+        </g>
       )}
     </g>
   )

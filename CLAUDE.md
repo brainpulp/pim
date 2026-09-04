@@ -231,6 +231,62 @@ hit-testing.
 
 **Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Concretely: `#333`, `#334`, `#444`, `#445`, `#556`, `#667`, `#778` (and similar near-black greys) are BANNED as a text/label `color` anywhere in the app — they're fine only for borders/dividers. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
 
+## Interaction contract — canvas (NEVER REGRESS)
+
+This is the single source of truth for how pointer gestures behave on the graph canvas. Interaction
+bugs (right-click, drag, menus) have regressed repeatedly — **before touching any gesture handler, read
+this and keep it true.** Handlers live in `Graph.jsx`: `handleNodeMouseDown`, `handleImageMouseDown`,
+`handleMediaNodeMouseDown`, `handleCanvasMouseDown`, and `openMenuAt` (the right-click router).
+
+### Invariants (hold for EVERY element type)
+1. **A drag never opens a menu or panel.** Menus/panels open only on a clean click or right-click where
+   the pointer did not move past the threshold. The undocked style panel is guarded by `nodeGestureRef`
+   (set at node mousedown, cleared at mouseup); a clean click reopens it, a drag never springs it.
+2. **The right-click menu always corresponds to what is under the cursor.** `openMenuAt` resolves the
+   target in a fixed priority order (below) — DOM target first, then coordinate hit-testing. It must
+   never open a menu for something the user isn't pointing at.
+3. **A right-DRAG (pan) never opens a menu.** Tracked press + `suppressContext` swallow the trailing
+   `contextmenu`. Movement threshold = 5px.
+4. **`stopPropagation` on every element's own `onMouseDown`** so the canvas marquee/pan doesn't also fire.
+5. **Media (YouTube iframe / `<video>`) must not swallow `mouseup` during a drag.** Any drag that could
+   cross a media element adds `body.pim-drag-nomedia` (or `pim-dragging`), which disables media
+   pointer-events via CSS, and removes it on mouseup.
+
+### `openMenuAt` right-click priority order (do not reorder without updating this list)
+1. **Overlay guard** — click inside a toolbar/menu/input/textarea/button → no canvas menu.
+2. **Free image by DOM target** — topmost DOM element is `[data-imgid]` → **photo menu**. Bulletproof:
+   independent of paint order / z-index / coordinate math. Image over ANY node/table always wins.
+3. **Free image over a table/card, by coordinate** — catches background images painted *behind* a table
+   (their DOM target is the table, so rule 2 misses them).
+4. **Table surface** — `[data-table-surface]` → the table's own menu (unless Shift forces background).
+5. **Card node** — `[data-cardnode]` (slideshow/table/kanban/list/strategy/media) → that node's menu.
+6. **Shift+right-click** → force background/insert menu (escape hatch in dense canvases).
+7. **Active multi-selection (>1)** → bulk menu (any right-click, no need to land on a node).
+8. **Regular node by coordinate** → node menu (frames are skipped here).
+9. **Free image by coordinate** (fallback).
+10. **Empty canvas** → background/insert menu.
+
+### Per-gesture, per-element
+| Element | Left-click | Left-drag | Double-click | Right-click | Corner handle |
+|---|---|---|---|---|---|
+| Regular node | select | move (anchors) | edit label | node menu | scale (br) |
+| Frame | select | move + carry contained | edit title | node/bulk menu | resize (4 corners) |
+| Container | select | move + carry contents | edit title | node menu | resize |
+| Free image | select | move | (crop drill) | **photo menu** | resize (aspect) |
+| Media node | select | move | — | node menu | resize |
+| Slideshow (ytss) | select | move | play (enter) | node menu | **scale (br → `ytssScale`)** |
+| Table card | select | move (header) | edit cell | table menu | scale + col/row resize |
+| Empty canvas | deselect | marquee select | create node | background menu | — |
+| Edge | select | (marquee starts) | remove edge | — | — |
+
+### Multi-select
+- **Ctrl/Cmd-click** toggles a node in/out of the selection (no drag).
+- **Drag on empty canvas** = rubber-band marquee (D3 pan suppressed for its duration, filter restored on
+  mouseup via `zoomFilterRef`).
+- With >1 selected, dragging any member moves the whole group; right-click opens the **bulk menu**, whose
+  header reflects the selection ("N frames selected" when all are frames). Frame-only selections hide
+  Shape/Motion (not meaningful) and expose Align & distribute + Tools (USPTO).
+
 ## Past gotchas / never regress
 - `"Invalid schema: pim"` → never use `.schema('pim')` in db.js
 - Anchor not releasing → must also set `simNode.fx/fy = null` directly on D3 node
