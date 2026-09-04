@@ -127,6 +127,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const updateImage = useGraphStore(s => s.updateImage)
   const deleteImage = useGraphStore(s => s.deleteImage)
   const selectImageFromOutline = useGraphStore(s => s.selectImageFromOutline)
+  const setTableCell = useGraphStore(s => s.setTableCell)
 
   const nodeProps = useMemo(() => (views.find(v => v.id === activeViewId)?.nodeProps) || {}, [views, activeViewId])
   // Mirror the graph's drill-in state: when the canvas is drilled into a node, the outline re-roots there too.
@@ -147,6 +148,19 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   const [capturing, setCapturing] = useState(null)
 
   const [collapsed, setCollapsed] = useState(() => new Set())
+  // Tables expand into a synthetic "By column / By row" subtree in the outline (see rows builder). Start
+  // each table COLLAPSED so a big table doesn't flood the outline — seed its id into `collapsed` once.
+  const seededTablesRef = useRef(new Set())
+  useEffect(() => {
+    const add = nodes.filter(n => n.table && !seededTablesRef.current.has(n.id)).map(n => n.id)
+    if (!add.length) return
+    add.forEach(id => seededTablesRef.current.add(id))
+    setCollapsed(c => { const s = new Set(c); add.forEach(id => s.add(id)); return s })
+  }, [nodes])
+  // Synthetic table GROUPS (each column / each row) start CLOSED so expanding a table shows only the two
+  // branches and their group headers, not every cell at once. This tracks the ones explicitly opened.
+  const [openSyn, setOpenSyn] = useState(() => new Set())
+  const toggleSyn = (id) => setOpenSyn(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [expanded, setExpanded] = useState(() => new Set())
   const [focusId, setFocusId] = useState(null)
   const [focusRoot, setFocusRoot] = useState(null)   // zoom-into-item
@@ -223,12 +237,44 @@ export default function Writer({ projectName, embedded = false, maximized = fals
       return nodes.filter(n => hit(n) && !isFrame(n.id) && (!qActive || matchesQuery(n))).map(n => ({ id: n.id, depth: 0, parentId: parentOf[n.id] || null, hasChildren: (childrenOf[n.id] || []).length > 0 }))
     }
     const out = []; const seen = new Set()
+    // A table cell shown readably (checkbox → ✓/✗; everything else as-is). Editing controls live in the render.
+    const readable = (val, col) => {
+      if (val == null || val === '') return ''
+      if (col?.type === 'checkbox') return (val === true || val === 'true' || val === 1 || val === '1') ? '✓' : '✗'
+      return String(val)
+    }
+    // A table has no real tree, so surface it as the SAME content cloned two ways: "By column" and "By row".
+    // Gen 2 = the columns / the rows (keyed by the first column, whose header — the corner cell — is ignored);
+    // Gen 3 = the data cells, each prefixed with its cross-axis key in [brackets] so every leaf is self-describing.
+    const pushTableSyn = (node, depth) => {
+      const t = node.table; const cols = t.columns || []; const rws = t.rows || []
+      const idc = cols[0]; const dataCols = cols.slice(1); const tid = node.id
+      const rowKey = (r) => { const v = idc ? r.cells?.[idc.id] : null; return readable(v, idc) || '(row)' }
+      const cb = `syn:${tid}:bycol`
+      out.push({ id: cb, depth: depth + 1, synthetic: true, hasChildren: dataCols.length > 0, syn: { kind: 'branch', label: 'By column' } })
+      if (!collapsed.has(cb)) dataCols.forEach(col => {
+        const g = `${cb}:${col.id}`
+        out.push({ id: g, depth: depth + 2, synthetic: true, hasChildren: rws.length > 0, syn: { kind: 'group', label: col.name || '(column)' } })
+        if (openSyn.has(g)) rws.forEach(r => out.push({ id: `${g}:${r.id}`, depth: depth + 3, synthetic: true, hasChildren: false, syn: { kind: 'cell', tid, rowId: r.id, colId: col.id, col, prefix: rowKey(r), value: r.cells?.[col.id] } }))
+      })
+      const rb = `syn:${tid}:byrow`
+      out.push({ id: rb, depth: depth + 1, synthetic: true, hasChildren: rws.length > 0, syn: { kind: 'branch', label: 'By row' } })
+      if (!collapsed.has(rb)) rws.forEach(r => {
+        const g = `${rb}:${r.id}`
+        out.push({ id: g, depth: depth + 2, synthetic: true, hasChildren: dataCols.length > 0, syn: { kind: 'group', label: rowKey(r) } })
+        if (openSyn.has(g)) dataCols.forEach(col => out.push({ id: `${g}:${col.id}`, depth: depth + 3, synthetic: true, hasChildren: false, syn: { kind: 'cell', tid, rowId: r.id, colId: col.id, col, prefix: col.name || '(column)', value: r.cells?.[col.id] } }))
+      })
+    }
     const walk = (id, depth) => {
       if (seen.has(id) || !byId[id] || isFrame(id)) return
       seen.add(id)
+      const node = byId[id]; const isTbl = !!node.table
       const kids = childrenOf[id] || []
-      out.push({ id, depth, parentId: parentOf[id] || null, hasChildren: kids.length > 0 })
-      if (!collapsed.has(id)) kids.forEach(k => walk(k, depth + 1))
+      out.push({ id, depth, parentId: parentOf[id] || null, hasChildren: kids.length > 0 || isTbl })
+      if (!collapsed.has(id)) {
+        if (isTbl) pushTableSyn(node, depth)
+        kids.forEach(k => walk(k, depth + 1))
+      }
     }
     // Scope = the outline's own zoom (focusRoot) OR, failing that, the graph's drill-in node (drillRoot).
     const scopeRoot = focusRoot || drillRoot
@@ -241,7 +287,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
     startIds.forEach(r => walk(r, 0))
     if (!scopeRoot) nodes.forEach(n => { if (!seen.has(n.id) && !reachable.has(n.id) && !isFrame(n.id)) walk(n.id, 0) })
     return out
-  }, [byId, childrenOf, parentOf, roots, collapsed, nodes, focusRoot, drillRoot, searchLC, flatMode, qActive, q, nodeProps, frameIds])
+  }, [byId, childrenOf, parentOf, roots, collapsed, openSyn, nodes, focusRoot, drillRoot, searchLC, flatMode, qActive, q, nodeProps, frameIds])
 
   const rowIndex = useMemo(() => Object.fromEntries(rows.map((r, i) => [r.id, i])), [rows])
   // Frames are kept out of the edge-driven tree above; they get their own grouped section.
@@ -537,6 +583,60 @@ export default function Writer({ projectName, embedded = false, maximized = fals
   // invisible, so use a bright near-white there (never dark-on-dark).
   const bulletC = dark ? '#e8eeff' : '#000000'
   const chevC = dark ? '#e8eeff' : '#000000'
+  // Render a synthetic table row (the By column / By row outline projection). Branches & groups are plain
+  // labels with a collapse chevron; cells are inline-editable and write straight back to the table.
+  const SynCellEditor = ({ s }) => {
+    const commit = (v) => setTableCell(s.tid, s.rowId, s.colId, v)
+    const iStyle = { flex: 1, minWidth: 80, border: 'none', outline: 'none', background: 'transparent', fontSize: fontPx, fontFamily: 'inherit', color: fg, padding: '1px 0' }
+    if (s.col?.type === 'checkbox') {
+      const on = s.value === true || s.value === 'true' || s.value === 1 || s.value === '1'
+      return <input type="checkbox" checked={on} onChange={e => commit(e.target.checked)} style={{ width: 15, height: 15, accentColor: '#5b6af0', cursor: 'pointer' }} />
+    }
+    if (s.col?.type === 'select') {
+      return (
+        <select value={s.value ?? ''} onChange={e => commit(e.target.value)} style={{ ...iStyle, cursor: 'pointer' }}>
+          <option value=""></option>
+          {(s.col.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      )
+    }
+    return (
+      <input key={String(s.value ?? '')} defaultValue={s.value ?? ''} placeholder="—"
+        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { e.currentTarget.value = s.value ?? ''; e.currentTarget.blur() } }}
+        onBlur={e => { const v = e.target.value; if (v !== (s.value ?? '')) commit(v) }}
+        style={iStyle} />
+    )
+  }
+  const renderSynRow = (r) => {
+    const s = r.syn
+    const indent = r.depth * 26 + 46
+    const lineH = Math.round(fontPx * 1.35)
+    // Groups open on demand (openSyn); branches use the normal collapse set (open by default).
+    const isGroup = s.kind === 'group'
+    const open = isGroup ? openSyn.has(r.id) : !collapsed.has(r.id)
+    const chev = (
+      <span onClick={() => r.hasChildren && (isGroup ? toggleSyn(r.id) : toggleCollapse(r.id))} title={r.hasChildren ? 'Collapse / expand' : ''}
+        style={{ width: 18, height: lineH, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, userSelect: 'none', cursor: r.hasChildren ? 'pointer' : 'default', color: chevC, fontSize: 20, fontWeight: 700, lineHeight: 1, visibility: r.hasChildren ? 'visible' : 'hidden' }}>
+        {open ? '▾' : '▸'}
+      </span>
+    )
+    return (
+      <div key={r.id} style={{ marginLeft: indent }}>
+        <div className="wr-row" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4, borderRadius: 6, minHeight: lineH }}>
+          {chev}
+          {s.kind === 'cell' ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0 }}>
+              <span title="key" style={{ color: faint, fontSize: fontPx * 0.92, whiteSpace: 'nowrap', flexShrink: 0 }}>[{s.prefix}]</span>
+              <SynCellEditor s={s} />
+            </div>
+          ) : (
+            <span style={{ color: s.kind === 'branch' ? bulletC : fg, fontWeight: s.kind === 'branch' ? 700 : 600, fontSize: fontPx, opacity: s.kind === 'branch' ? 0.9 : 1 }}>{s.label}</span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   const focusNode = focusId ? byId[focusId] : null
   const fs = focusNode?.writeStyle || {}
   const styleFocused = (patch) => { if (focusId) setNodeWriteStyle(focusId, patch); inputs.current[focusId]?.focus() }
@@ -755,6 +855,7 @@ export default function Writer({ projectName, embedded = false, maximized = fals
             </div>
           )}
           {rows.map(r => {
+            if (r.synthetic) return renderSynRow(r)
             const n = byId[r.id]; const ws = n.writeStyle || {}; const m = n.meta || {}
             const emojis = (nodeProps[r.id]?.nodeEmojis || [])
             const imgs = (nodeProps[r.id]?.nodeImages || [])
