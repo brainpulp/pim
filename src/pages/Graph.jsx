@@ -8968,7 +8968,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
   // Below a certain on-screen size the table is too small to edit — the whole surface becomes a drag
   // handle (move only), no cell editing / affordances. Effective size = canvas zoom × table scale.
   const effK = (zoomRef?.current?.k || 1) * (scale || 1)
-  const dragOnly = effK < 0.5
+  const dragOnly = effK < 0.85   // enter drag/scroll mode "closer" (while still fairly zoomed-in)
   // Pivot-on-top: the table is centered at node.y (transform translates by −H/2). When H changes
   // (column reflow, row add), keep the TOP edge fixed by shifting the anchor y by half the delta.
   const prevHRef = useRef(H)
@@ -9145,8 +9145,9 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
         onContextMenu={e => openCtx(e, rows.length - 1, columns.length - 1)}
         style={{ position: 'relative', width: W + PADL + PADR, height: H + PADT + PADB, fontFamily: '-apple-system, sans-serif',
           pointerEvents: (hov || dragging) ? 'auto' : 'none' }}>
-      {/* grid-anchor is always interactive so hovering it reveals the (otherwise click-through) padding */}
-      <div onMouseEnter={() => setHov(true)} style={{ position: 'absolute', left: PADL, top: PADT, width: W, pointerEvents: 'auto' }}>
+      {/* grid-anchor is always interactive so hovering it reveals the (otherwise click-through) padding.
+          In drag/scroll mode (zoomed out past the edit threshold) it gets an outline to signal the switch. */}
+      <div onMouseEnter={() => setHov(true)} style={{ position: 'absolute', left: PADL, top: PADT, width: W, pointerEvents: 'auto', borderRadius: 4, outline: dragOnly ? '2.5px solid #5b6af0' : 'none', outlineOffset: 3, boxShadow: dragOnly ? '0 0 0 6px rgba(91,106,240,0.14)' : 'none' }}>
 
         {/* Hover-only header: drag handle · title · colour · delete (floats above the grid) */}
         {showAff && (
