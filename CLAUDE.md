@@ -279,8 +279,20 @@ this and keep it true.** Handlers live in `Graph.jsx`: `handleNodeMouseDown`, `h
 | Empty canvas | deselect | marquee select | create node | background menu | — |
 | Edge | select | (marquee starts) | remove edge | — | — |
 
+### Platform: secondary-click vs multi-select (NEVER REGRESS — this broke right-click repeatedly)
+- **On a Mac, Ctrl+click IS the secondary (right) click.** It fires a `contextmenu` event carrying
+  `ctrlKey:true`. It MUST open the context menu. Multi-select on Mac uses **Cmd** (`metaKey`).
+- **On Windows/Linux, Ctrl is the multi-select modifier** and the physical right button opens menus.
+- Rules that enforce this (`IS_MAC` in `Graph.jsx`): a `contextmenu` event ALWAYS opens the menu
+  (never treat `ctrlKey` as multi-select there); `onDown` tracks `Ctrl+left` as a menu press only on
+  Mac; `handleNodeMouseDown`/`handleImageMouseDown` treat `Ctrl+left` as multi-select only on non-Mac,
+  and as a no-op secondary-click on Mac. **Never pass `ctrlKey` as an "isCtrl / skip menus" flag again.**
+- **Double-click per element type is fixed** (see table): a **Text box** edits/selects text — it must NOT
+  fire the photo Caption prompt (exclude `isText` from the caption `onDoubleClick`). A **photo** opens its
+  caption; a **frame/node** edits its title/label.
+
 ### Multi-select
-- **Ctrl/Cmd-click** toggles a node in/out of the selection (no drag).
+- **Cmd-click (Mac) / Ctrl-click (Win/Linux)** toggles a node in/out of the selection (no drag).
 - **Drag on empty canvas** = rubber-band marquee (D3 pan suppressed for its duration, filter restored on
   mouseup via `zoomFilterRef`).
 - With >1 selected, dragging any member moves the whole group; right-click opens the **bulk menu**, whose

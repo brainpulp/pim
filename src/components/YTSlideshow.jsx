@@ -817,10 +817,12 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.loop} onChange={e => onPatch({ loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Loop</label>
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.keepPlaying} onChange={e => onPatch({ keepPlaying: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Keep playing (ignore focus) <span style={{ color: '#7080a0', fontSize: 11 }}>— don't pause when deselected</span></label>
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.captions} onChange={e => onPatch({ captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Captions (CC) <span style={{ color: '#7080a0', fontSize: 11 }}>— if available</span></label>
-        {/* Play fullscreen — clean, chrome-free playback (poster covers any YouTube pause/end overlay). */}
+        {/* When this slide is presented, jump straight to clean, chrome-free fullscreen playback. */}
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.fullscreenOnSlide} onChange={e => onPatch({ fullscreenOnSlide: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Play fullscreen when presented</label>
+        {/* Play fullscreen NOW — clean, chrome-free playback (poster covers any YouTube pause/end overlay). */}
         {hasVideo && onPlayFullscreen && (
           <button onClick={onPlayFullscreen} style={{ marginTop: 2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
-            <Icon name="full" size={15} /> Play fullscreen
+            <Icon name="full" size={15} /> Play fullscreen now
           </button>
         )}
       </div>

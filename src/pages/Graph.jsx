@@ -5262,6 +5262,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
 
       const startClientX = e.clientX, startClientY = e.clientY
+      // World point under the cursor at drag START — captured ONCE with the drag-start transform. The
+      // per-frame delta is (worldUnderCursorNow − this), so an auto-pan (which changes the transform)
+      // moves the image WITH the content and keeps it locked under the cursor. (Recomputing the start
+      // from startClient with the *current* transform each frame cancels the pan out → the image drifts.)
+      const _T0 = zoomTransformRef.current
+      const startWX = (startClientX - _T0.x) / _T0.k, startWY = (startClientY - _T0.y) / _T0.k
       const origins = {}
       dragIds.forEach(id => {
         const img = images.find(i => i.id === id)
@@ -5296,9 +5302,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // auto-pan, which changes the transform, keeps the images under the cursor into off-screen space).
       const applyImageDrag = () => {
         const T2 = zoomTransformRef.current
-        const startSx = (startClientX - T2.x) / T2.k, startSy = (startClientY - T2.y) / T2.k
         const sx = (lastClientX - T2.x) / T2.k, sy = (lastClientY - T2.y) / T2.k
-        const dx = sx - startSx, dy = sy - startSy
+        const dx = sx - startWX, dy = sy - startWY
         dragIds.forEach(id => { if (origins[id]) updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy }) })
         // Feedback: highlight the node this media would attach to (drop = becomes its child), OR the
         // slideshow it would be added to (drop = becomes a slide).
@@ -5705,6 +5710,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       setYtssActiveId(yid); setYtssIdxMap(m => ({ ...m, [yid]: startIdx })); ytssPlayingRef.current = true
       setTimeout(() => ytssHandlesRef.current[yid]?.loadClip?.(clips[startIdx], true), 120)
     }
+
+    // A free video on this slide flagged "Play fullscreen when presented" → jump to the clean
+    // fullscreen player automatically. (Esc returns to the slide.)
+    const frameF = slideSimNodes[idx]
+    if (frameF) {
+      const fvpF = { ...DEFAULT_NODE_PROPS, ...(getVP(frameF.id) || {}) }
+      const { halfW: fHWd, halfH: fHHd } = shapeDims('frame', NODE_R * (fvpF.scale || 1))
+      const fhwF = fvpF.frameHalfW ?? fHWd, fhhF = fvpF.frameHalfH ?? fHHd
+      const imgsF = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+      const fsVid = imgsF.find(im => im.fullscreenOnSlide && im.type === 'video' && im.youtubeId && im.visible !== false &&
+        Math.abs((im.x || 0) - (frameF.x || 0)) <= fhwF && Math.abs((im.y || 0) - (frameF.y || 0)) <= fhhF)
+      if (fsVid) setTimeout(() => setVideoFullscreen({ youtubeId: fsVid.youtubeId, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1, captions: fsVid.captions === true }), 220)
+    }
   }
   const advanceBuild = (dir) => {
     const cur = presentingSlideIdxRef.current ?? 0
@@ -5918,6 +5936,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             {!organize && simNodesRef.current.filter(n => visibleNodeIds.has(n.id) && getVP(n.id).shape === 'frame').map(n => (
               <FrameNode key={n.id} node={n}
                 viewProps={getVP(n.id)}
+                zoomK={T.k}
                 isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
                 inSlides={slideIds.includes(n.id)}
                 isPresenting={isPresenting}
@@ -7315,6 +7334,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           slideSimNodes={slideSimNodes}
           allSimNodes={simNodesRef.current}
           frameSimNodes={frameSimNodes}
+          storeNodeById={storeNodeById}
+          ytssIdxMap={ytssIdxMap}
           viewImages={activeView?.images || []}
           slideIds={slideIds}
           slideshows={slideshows}
@@ -7582,7 +7603,7 @@ function ThreeDWrapper({ children, onFocus }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const [dragIdx, setDragIdx] = useState(null)
@@ -7719,7 +7740,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
         })
         const showLineBefore = dragIdx !== null && dropIdx === i && dragIdx !== i
         return [
-          showLineBefore && <div key={`line-${i}`} style={{ height:2, background:'#5b6af0', borderRadius:1, margin:'2px 0 6px' }} />,
+          showLineBefore && <div key={`line-${i}`} style={{ height:3, background:'#22e06a', borderRadius:2, margin:'2px 0 6px', boxShadow:'0 0 6px rgba(34,224,106,0.7)' }} />,
           <div key={fn.id} data-slide-idx={i}
             onMouseDown={e => handleCardMouseDown(e, i)}
             onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSlideMenu({ frameId: fn.id, label: fn.label || 'Frame', x: e.clientX, y: e.clientY }) }}
@@ -7735,11 +7756,31 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                 {viewImages.map(img => {
                   const relX = (img.x || 0) - (fn.x || 0)
                   const relY = (img.y || 0) - (fn.y || 0)
-                  if (Math.abs(relX) > halfW + img.width / 2 || Math.abs(relY) > halfH + img.height / 2) return null
+                  const w = img.width || 60, h = img.height || 40
+                  if (Math.abs(relX) > halfW + w / 2 || Math.abs(relY) > halfH + h / 2) return null
+                  // Every free element must show in the thumbnail, not just images with a raw src:
+                  // a YouTube/file video shows its poster, a Text box shows its text, others a labelled tile.
+                  const poster = img.src || (img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : img.poster) || null
+                  const plainText = img.type === 'text' ? String(img.html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').trim() : ''
                   return (
                     <g key={img.id} transform={`translate(${relX},${relY}) rotate(${img.rotation || 0})`}>
-                      {img.bgColor && <rect x={-img.width/2} y={-img.height/2} width={img.width} height={img.height} fill={img.bgColor} rx={2} />}
-                      <image href={img.src} x={-img.width/2} y={-img.height/2} width={img.width} height={img.height} />
+                      {img.bgColor && <rect x={-w/2} y={-h/2} width={w} height={h} fill={img.bgColor} rx={2} />}
+                      {img.type === 'text' ? (
+                        <text x={0} y={0} textAnchor="middle" dominantBaseline="central"
+                          fontSize={Math.max(7, Math.min(h * 0.5, (img.fontScale ? 26 * img.fontScale : 22))) }
+                          fill={img.textColor || '#eef1ff'} style={{ userSelect: 'none' }}>
+                          {plainText.slice(0, 40) || 'Text'}
+                        </text>
+                      ) : poster ? (
+                        <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
+                      ) : (
+                        <>
+                          <rect x={-w/2} y={-h/2} width={w} height={h} fill="#1c2440" stroke="#2d3a6a" strokeWidth={1} rx={3} />
+                          <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(9, h * 0.3)} fill="#8fa0d8" style={{ userSelect: 'none' }}>
+                            {img.type === 'video' ? '▶' : img.type === 'audio' ? '♪' : img.type === 'link' ? '🔗' : '▦'}
+                          </text>
+                        </>
+                      )}
                     </g>
                   )
                 })}
@@ -7747,9 +7788,50 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, viewImages, s
                   const nvp = getVP(n.id)
                   const nr = NODE_R * (nvp.scale || 1)
                   const nFs = Math.max(9, Math.round(12 * (nvp.scale || 1)))
+                  const sn = storeNodeById[n.id] || {}
+                  const dx = (n.x||0)-(fn.x||0), dy = (n.y||0)-(fn.y||0)
+                  // Card nodes (slideshow / table / media) aren't simple shapes — draw a faithful mini of each.
+                  if (sn.ytss) {
+                    const clips = sn.ytss.clips || []
+                    const clip = clips[Math.max(0, Math.min(ytssIdxMap[n.id] || 0, clips.length - 1))]
+                    const sc = nvp.ytssScale || 1, w = 480 * sc * 0.5, h = 270 * sc * 0.5
+                    const yid = clip?.youtubeId
+                    const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (clip?.src || null)
+                    return (
+                      <g key={n.id} transform={`translate(${dx},${dy})`}>
+                        <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
+                        {poster
+                          ? <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
+                          : <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(10, h*0.3)} fill="#8fa0d8">▶</text>}
+                      </g>
+                    )
+                  }
+                  if (sn.table) {
+                    const w = 150 * (nvp.tableScale || 1), h = 90 * (nvp.tableScale || 1)
+                    return (
+                      <g key={n.id} transform={`translate(${dx},${dy})`}>
+                        <rect x={-w/2} y={-h/2} width={w} height={h} rx={3} fill={nvp.fillColor || '#101026'} stroke="#2d3a6a" strokeWidth={1} />
+                        {[0.33,0.66].map((f,i) => <line key={'v'+i} x1={-w/2 + w*f} y1={-h/2} x2={-w/2 + w*f} y2={h/2} stroke="#2d3a6a" strokeWidth={1} />)}
+                        {[0.33,0.66].map((f,i) => <line key={'h'+i} x1={-w/2} y1={-h/2 + h*f} x2={w/2} y2={-h/2 + h*f} stroke="#2d3a6a" strokeWidth={1} />)}
+                      </g>
+                    )
+                  }
+                  if (sn.media) {
+                    const w = (nvp.mediaW || 260), h = (nvp.mediaH || 150)
+                    const yid = sn.media.youtubeId
+                    const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (sn.media.poster || sn.media.src || null)
+                    return (
+                      <g key={n.id} transform={`translate(${dx},${dy})`}>
+                        <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
+                        {poster
+                          ? <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
+                          : <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(10, h*0.3)} fill="#8fa0d8">▶</text>}
+                      </g>
+                    )
+                  }
                   const { halfW: nW, halfH: nH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', nFs, nvp.labelWidth)
                   return (
-                    <g key={n.id} transform={`translate(${(n.x||0)-(fn.x||0)},${(n.y||0)-(fn.y||0)})`}>
+                    <g key={n.id} transform={`translate(${dx},${dy})`}>
                       <ShapeBody shape={nvp.shape||'circle'} halfW={nW} halfH={nH} r={nr}
                         fill={nvp.fillColor || '#12122a'} stroke="none" strokeWidth={0} />
                       {nvp.shape !== 'frame' && (
@@ -10122,6 +10204,10 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   // YouTube iframe otherwise swallows the scroll wheel so the canvas can't zoom over it (Miro-style).
   const [videoActive, setVideoActive] = useState(false)
   useEffect(() => { if (!isSelected) setVideoActive(false) }, [isSelected])
+  // Text boxes edit on DOUBLE-click (like a photo captions on double-click), not on select — so a single
+  // click just selects and the whole box drags (no "drag to move" bar needed). Reset on deselect.
+  const [textEditing, setTextEditing] = useState(false)
+  useEffect(() => { if (!isSelected) setTextEditing(false) }, [isSelected])
   // YouTube videos show a clean, user-pickable POSTER frame (no YouTube chrome) until played — we
   // only mount the iframe on demand. `playing` is set by the play button / double-click / autoplay.
   const isYT = isVideo && img.videoKind === 'youtube'
@@ -10211,7 +10297,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
       data-img="true" data-imgid={id}
       onClick={e => e.stopPropagation()}
       onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
-      onDoubleClick={(!isVideo && !isLink && !isText && img.type !== 'audio' && !isCropping) ? (e => { e.stopPropagation(); onCaption?.() }) : undefined}
+      onDoubleClick={isText ? (e => { e.stopPropagation(); setTextEditing(true) }) : ((!isVideo && !isLink && img.type !== 'audio' && !isCropping) ? (e => { e.stopPropagation(); onCaption?.() }) : undefined)}
       style={{ cursor: isCropping ? 'default' : 'move' }}
     >
       {(hasCrop || blur > 0 || edgeBlur > 0) && (
@@ -10286,7 +10372,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // Rich text box — a contentEditable card. Editable when selected; pass-through otherwise so the
         // canvas pans/zooms over it. Content (HTML) saved on input.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
-          <RichTextBox html={img.html} editable={isSelected} selected={isSelected} bgColor={bgColor}
+          <RichTextBox html={img.html} editable={textEditing} selected={isSelected} bgColor={bgColor}
             borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo} fontScale={img.fontScale}
             valign={img.valign} zoomK={zoomK}
             onChange={html => onTextChange?.(html)} onResize={(mode, e) => onMouseDown(e, id, mode)} />
@@ -10445,7 +10531,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         )}
         {/* Top drag-bar to move it (the body's pointer events belong to the player/link). Not needed on
             a YouTube poster — the whole poster is pass-through, so dragging anywhere moves the node. */}
-        {((isVideo && !ytPosterMode) || isLink || isAudio || isText) && (() => {
+        {((isVideo && !ytPosterMode) || isLink || isAudio) && !textEditing && (() => {
           // Scale the drag bar with the media size so a small (or small+zoomed-in) clip doesn't get a
           // giant bar. Capped so normal-size media keep the familiar bar.
           const barH = Math.max(4, Math.min(16, ch * 0.11))
@@ -10593,7 +10679,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
 }
 
 // â"€â"€â"€ FrameNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
+function FrameNode({ node, viewProps, zoomK = 1, isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [hover, setHover] = useState(false)
@@ -10626,13 +10712,18 @@ function FrameNode({ node, viewProps, isSelected, inSlides, isPresenting, onMous
       {/* Invisible hit target - makes frame draggable even with no fill */}
       <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
         fill="transparent" stroke="none" style={{ cursor: 'move' }} />
-      {/* Frame body â€" hidden in presentation mode or when outlines hidden */}
-      {!isPresenting && !hideOutline && <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
-        fill={fill} fillOpacity={fillOpacity}
-        stroke={isSelected ? '#5b6af0' : '#4a7abf'}
-        strokeWidth={isSelected ? 2.5 : 1.5}
-        strokeDasharray="10,6"
-      />}
+      {/* Frame body — hidden in presentation mode or when outlines hidden. Border thickness is held at a
+          constant on-screen size (like a photo's selection outline), clamped; the selected frame matches
+          the photo's thickness with a distinct finer dash so the two read as the same family. */}
+      {!isPresenting && !hideOutline && (() => {
+        const ui = Math.min(6, Math.max(0.16, 1 / (zoomK || 1)))
+        return <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
+          fill={fill} fillOpacity={fillOpacity}
+          stroke={isSelected ? '#5b6af0' : '#4a7abf'}
+          strokeWidth={1.5 * ui}
+          strokeDasharray={isSelected ? `${2 * ui},${4 * ui}` : `${9 * ui},${6 * ui}`}
+        />
+      })()}
 
       {/* Title at top-left */}
       {!editing && !isPresenting && !hideOutline && (
