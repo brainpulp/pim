@@ -5976,15 +5976,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
             {connecting && <line x1={connecting.x1} y1={connecting.y1} x2={connecting.x2} y2={connecting.y2} stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,4" opacity={0.7} />}
 
-            {/* Group visual indicators */}
-            {Object.entries(groupBounds).map(([gid, b]) => (
+            {/* Group visual indicators (stroke/dash held ~constant on screen) */}
+            {(() => { const gk = Math.min(6, Math.max(0.16, 1 / (T.k || 1))); return Object.entries(groupBounds).map(([gid, b]) => (
               <rect key={gid}
                 x={b.x1 - 6} y={b.y1 - 6}
                 width={b.x2 - b.x1 + 12} height={b.y2 - b.y1 + 12}
-                fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="6,4"
+                fill="none" stroke="#5b6af0" strokeWidth={1.5 * gk} strokeDasharray={`${6 * gk},${4 * gk}`}
                 rx={6} opacity={0.7} pointerEvents="none"
               />
-            ))}
+            )) })()}
 
             {/* Rubber-band selection rect — rendered after nodes (below) so it's on top */}
 
@@ -5997,9 +5997,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const by1 = Math.min(...sel.map(i => i.y - i.height / 2))
               const bx2 = Math.max(...sel.map(i => i.x + i.width / 2))
               const by2 = Math.max(...sel.map(i => i.y + i.height / 2))
+              const gk = Math.min(6, Math.max(0.16, 1 / (T.k || 1)))
               return (
                 <rect x={bx1-3} y={by1-3} width={bx2-bx1+6} height={by2-by1+6}
-                  fill="none" stroke="#ffffff" strokeWidth={1} strokeDasharray="4,3"
+                  fill="none" stroke="#ffffff" strokeWidth={1 * gk} strokeDasharray={`${4 * gk},${3 * gk}`}
                   opacity={0.35} pointerEvents="none" />
               )
             })()}
@@ -10141,6 +10142,11 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   }, [isAudio, mediaPlay, img.autoplayOnZoom, img.autoplayOnSlide, img.src])
   const hw = width / 2, hh = height / 2
 
+  // Selection-chrome scale: hold handles/rotate/border/badges at a roughly CONSTANT on-screen size,
+  // clamped so they never balloon when zoomed in or vanish when zoomed out. Chrome sizes below are
+  // authored in screen-ish px and multiplied by `ui` (= 1/zoom, clamped) to convert to canvas units.
+  const ui = Math.min(6, Math.max(0.16, 1 / (zoomK || 1)))
+
   // Crop rect (normalised source rect → local box coords). Defaults to the whole box.
   const crop = img.crop || { x: 0, y: 0, w: 1, h: 1 }
   const hasCrop = crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1
@@ -10393,7 +10399,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
           )
         }
         return isSelected ? (
-          <text x={0} y={hh + 15} textAnchor="middle" fontSize={fs} fill="#7080a0"
+          <text x={0} y={hh + 12 * ui} textAnchor="middle" fontSize={Math.min(fs, 12 * ui)} fill="#7080a0"
             style={{ cursor: 'text' }} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCaption?.() }}>＋ caption</text>
         ) : null
       })()}
@@ -10413,11 +10419,11 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         )
       })()}
       {isSelected && !isCropping && (<>
-        <rect x={vL - 3} y={vT - 3} width={cw + 6} height={ch + 6}
-          fill="none" stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+        <rect x={vL - 3 * ui} y={vT - 3 * ui} width={cw + 6 * ui} height={ch + 6 * ui}
+          fill="none" stroke="#5b6af0" strokeWidth={1.5 * ui} strokeDasharray={`${5 * ui},${3 * ui}`} rx={2 * ui} />
         {/* Attached-to-a-node badge (child of that node — moves & can delete with it) */}
         {img.attachedTo && (
-          <g transform={`translate(${vR - 10},${vT + 2})`} style={{ pointerEvents: 'none' }}>
+          <g transform={`translate(${vR - 10 * ui},${vT + 2 * ui}) scale(${ui})`} style={{ pointerEvents: 'none' }}>
             <circle r={9} fill="#12122aee" stroke="#5b6af0" strokeWidth={1} />
             <IconGlyph name="link" size={12} color="#9fb0e8" />
           </g>
@@ -10538,17 +10544,17 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         {/* Text box handles live inside the box (RichTextBox), so nothing here. Photos get corner handles,
             sized to stay grabbable at any zoom (counter-scale the zoom, clamped). */}
         {!isText && (() => {
-          const hzS = Math.max(4, Math.min(22, 5 / (zoomK || 1)))   // half-size in canvas units
+          const hzS = 5 * ui   // constant on-screen half-size (canvas units = 5px / zoom, clamped)
           return corners.map(([c, hx, hy, cur]) => (
-            <rect key={c} x={hx - hzS} y={hy - hzS} width={hzS * 2} height={hzS * 2} rx={1.5}
-              fill="#fff" stroke="#5b6af0" strokeWidth={Math.max(1, 1.5 / (zoomK || 1))}
+            <rect key={c} x={hx - hzS} y={hy - hzS} width={hzS * 2} height={hzS * 2} rx={1.5 * ui}
+              fill="#fff" stroke="#5b6af0" strokeWidth={1.5 * ui}
               onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'resize', c) }}
               style={{ cursor: cur }} />
           ))
         })()}
-        {/* Rotate — top-center */}
-        <line x1={(vL + vR) / 2} y1={vT} x2={(vL + vR) / 2} y2={vT - 22} stroke="#a78bfa" strokeWidth={1} opacity={0.6} />
-        <g transform={`translate(${(vL + vR) / 2},${vT - 28})`}
+        {/* Rotate — top-center (constant on-screen size) */}
+        <line x1={(vL + vR) / 2} y1={vT} x2={(vL + vR) / 2} y2={vT - 22 * ui} stroke="#a78bfa" strokeWidth={1 * ui} opacity={0.6} />
+        <g transform={`translate(${(vL + vR) / 2},${vT - 28 * ui}) scale(${ui})`}
           onMouseDown={e => { e.stopPropagation(); onMouseDown(e, id, 'rotate') }} style={{ cursor: 'grab' }}>
           <circle r={8} fill="#16162a" stroke="#a78bfa" strokeWidth={1.5} />
           <IconGlyph name="refresh" size={13} color="#a78bfa" />
