@@ -5815,10 +5815,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onDoubleClick={e => {
             if (readOnly) return
             if (e.target.closest?.('[data-node]') || e.target.closest?.('[data-frame]') || e.target.closest?.('[data-img]') || e.target.closest?.('[data-card]')) return
+            // Pass-through items (videos/images/cards are pointer-events:none until armed) never become the
+            // event target, so a double-click over them lands on the background. Reject when the point falls
+            // inside any item's box — only bare canvas should spawn a node.
+            const cx = e.clientX, cy = e.clientY
+            const overItem = [...(svgRef.current?.querySelectorAll('[data-imgid],[data-cardnode],[data-table-surface]') || [])].some(el => {
+              const r = el.getBoundingClientRect()
+              return r.width > 0 && cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom
+            })
+            if (overItem) return
             const rect = svgRef.current.getBoundingClientRect()
-            const [sx, sy] = zoomTransformRef.current.invert([e.clientX - rect.left, e.clientY - rect.top])
+            const [sx, sy] = zoomTransformRef.current.invert([cx - rect.left, cy - rect.top])
             // Conventional: a small "name your node" input at the cursor; create on Enter.
-            setNewNodeAt({ px: e.clientX - rect.left, py: e.clientY - rect.top, sx, sy })
+            setNewNodeAt({ px: cx - rect.left, py: cy - rect.top, sx, sy })
           }}
           onMouseDown={e => {
             if (e.button === 2) return   // right-button handled by d3-zoom start/end (pan vs menu)
@@ -9223,7 +9232,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
                 </div>
               ))}
               {showAff && <span className="tc-rowgrip" title="Drag to reorder row" onMouseDown={e => startReorder(e, r.id, 'data-trow', onMoveRow)}
-                style={{ position: 'absolute', zIndex: 12, left: 0, top: 0, width: 15, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', color: '#aeb8ff', fontSize: 11, lineHeight: 1, background: 'rgba(18,20,42,0.72)', borderRight: '1px solid rgba(91,106,240,0.4)' }}>⣿</span>}
+                style={{ position: 'absolute', zIndex: 12, left: -16, top: 0, width: 15, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', color: '#aeb8ff', fontSize: 11, lineHeight: 1 }}>⣿</span>}
               {showAff && <button className="tc-rowdel" style={tc.rowDel} title="Delete row" onMouseDown={stop} onClick={e => { stop(e); onDeleteRow(r.id) }}>×</button>}
             </div>
           ))}
@@ -9485,7 +9494,7 @@ const tc = {
   select: { width: '100%', background: 'transparent', border: 'none', color: TC_TXT, fontSize: 12, padding: 0, height: '100%', outline: 'none', cursor: 'pointer' },
   addRowBtn: { position: 'absolute', zIndex: 9, left: 0, top: '100%', marginTop: 2, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 11, padding: '2px 4px', whiteSpace: 'nowrap' },
   addColBtn: { position: 'absolute', zIndex: 9, left: '100%', top: 0, height: 24, background: 'transparent', border: 'none', color: '#8ecbff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '0 5px' },
-  rowDel: { position: 'absolute', zIndex: 9, left: -17, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#f0a0a0', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 },
+  rowDel: { position: 'absolute', zIndex: 9, left: -31, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#f0a0a0', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 },
   colorPop: { position: 'absolute', top: 20, right: 0, zIndex: 30, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', display: 'flex', flexWrap: 'wrap', gap: 4, width: 150 },
 }
 
