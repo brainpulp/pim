@@ -7493,6 +7493,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onUpload={() => uploadSlideToYtss(ytssInspectorId)}
+            onReplaceClipFile={(clipIdx) => {
+              // Swap a YouTube clip for an uploaded video file: no ads, no YouTube chrome. Preserve the
+              // clip's trim/speed/title; drop the youtubeId so it plays via the native file player.
+              const nodeId = ytssInspectorId
+              const inp = document.createElement('input')
+              inp.type = 'file'; inp.accept = 'video/*,audio/*'
+              inp.onchange = () => {
+                const f = inp.files?.[0]; if (!f) return
+                const blobUrl = URL.createObjectURL(f)
+                const kind = f.type.startsWith('audio/') ? 'audio' : 'video'
+                const cur = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.ytss?.clips || []
+                const patched = cur.map((c, j) => j === clipIdx ? { ...c, kind, src: blobUrl, youtubeId: undefined } : c)
+                setYtssClips(nodeId, patched)
+                uploadMediaFile(f, projectId).then(url => {
+                  if (!url) return
+                  const cur2 = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.ytss?.clips || []
+                  setYtssClips(nodeId, cur2.map((c, j) => j === clipIdx ? { ...c, src: url } : c))
+                  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+                })
+              }
+              inp.click()
+            }}
             onExtract={clip => { const s = simNodesRef.current.find(n => n.id === ytssInspectorId); extractSlide(clip, (s?.x || 0) + 340, (s?.y || 0)) }}
             onClose={closeInspector}
           />
@@ -7570,12 +7592,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               inp.click()
             }}
             onResetPoster={() => onPatchPoster?.(null)}
-            onPlayFullscreen={() => setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true, speed: video.speed || 1, captions: video.captions === true })} />
+            onReplaceFile={() => {
+              // One-click "make this ad-free": swap the YouTube clip for an uploaded video/audio file.
+              // The file plays through a native player — no ads, no YouTube chrome. Trim/speed/etc. are
+              // preserved; the youtubeId is dropped so it stops being an embed.
+              const inp = document.createElement('input')
+              inp.type = 'file'; inp.accept = 'video/*,audio/*'
+              inp.onchange = () => {
+                const f = inp.files?.[0]; if (!f) return
+                const blobUrl = URL.createObjectURL(f)
+                onPatch?.({ videoKind: 'file', youtubeId: null, src: blobUrl, poster: null })   // instant local preview
+                uploadMediaFile(f, projectId).then(url => { if (url) { onPatch?.({ src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+              }
+              inp.click()
+            }}
+            onPlayFullscreen={() => (video.youtubeId
+              ? setVideoFullscreen({ youtubeId: video.youtubeId, start: video.start || 0, end: video.end || 0, muted: video.muted === true, speed: video.speed || 1, captions: video.captions === true })
+              : setVideoFullscreen({ src: video.src, start: video.start || 0, end: video.end || 0, muted: video.muted === true, speed: video.speed || 1 }))} />
         </>)
       })()}
 
-      {videoFullscreen?.youtubeId && (
-        <YTFullscreenPlayer clips={[{ id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
+      {(videoFullscreen?.youtubeId || videoFullscreen?.src) && (
+        <YTFullscreenPlayer clips={[videoFullscreen.youtubeId
+          ? { id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }
+          : { id: 'one', kind: 'video', src: videoFullscreen.src, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
           startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} onExit={() => setVideoFullscreen(null)} />
       )}
     </div>

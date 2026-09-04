@@ -442,7 +442,7 @@ function Collapsible({ label, defaultOpen = false, children }) {
 }
 
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
-export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions, onUpload }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions, onUpload, onReplaceClipFile }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -610,6 +610,14 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                   <input type="checkbox" checked={!!cur.captions} onChange={e => patch(sel, { captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Captions
                 </label>
               )}
+              {/* One-click ad-free: swap this YouTube clip for an uploaded video file (native player, no
+                  ads, no YouTube chrome). Trim/speed/etc. carry over. */}
+              {k === 'youtube' && onReplaceClipFile && (
+                <button onClick={() => onReplaceClipFile(sel)}
+                  style={{ marginTop: 4, gridColumn: '1 / -1', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, background: '#183a2a', border: '1px solid #2f6a48', color: '#a7f3d0', borderRadius: 7, padding: '7px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  ⤒ Replace with uploaded file <span style={{ color: '#6fae8c', fontWeight: 400 }}>— ad-free</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -662,7 +670,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 }
 
 // ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
-export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, onPreviewPause, getDuration, getTime }) {
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onReplaceFile, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, onPreviewPause, getDuration, getTime }) {
   const [dur, setDur] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [previewPlaying, setPreviewPlaying] = useState(true)
@@ -721,6 +729,14 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
             <button onClick={() => { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') }}
               style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12 }}>Set</button>
           </div>
+        )}
+        {/* One-click ad-free: replace this YouTube embed with an uploaded video file (native player,
+            no ads, no YouTube chrome). Only shown for a YouTube video; a file video is already clean. */}
+        {yt && onReplaceFile && (
+          <button onClick={onReplaceFile}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#183a2a', border: '1px solid #2f6a48', color: '#a7f3d0', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+            <Icon name="add" size={14} /> Replace with uploaded file <span style={{ color: '#6fae8c', fontWeight: 400 }}>— ad-free</span>
+          </button>
         )}
         {/* Trim */}
         {hasVideo && <>
