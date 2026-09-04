@@ -18,6 +18,11 @@ import { EMOJIS } from '../components/Drawing'
 import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget } from '../components/YTSlideshow'
 import { playDrop } from '../lib/sound'
 
+// Platform: on a Mac, Ctrl+click IS the secondary (right) click — it fires a `contextmenu` event and
+// must open the context menu. Multi-select there uses Cmd (metaKey). On Windows/Linux, Ctrl is the
+// multi-select modifier and the physical right button opens menus. Gesture handlers branch on this.
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '')
+
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
 // Channels the parent can map a property to (label + the view prop each writes).
 const STYLE_CHANNELS = [
@@ -2723,18 +2728,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     //    pointer didn't move — so right-drag panning is clean.
     //  • The native `contextmenu` event opens it only when there was NO tracked press (e.g. a trackpad
     //    two-finger / secondary tap that sends no button-2 mousedown), so those devices still get a menu.
-    let press = null           // { x, y, t, moved, ctrl }
+    let press = null           // { x, y, t, moved, menu, shift }
     let suppressContext = false // a right-DRAG just ended → swallow the trailing `contextmenu` (Linux/Win fire it AFTER mouseup)
     const onDown = ev => {
       suppressContext = false  // new gesture — clear any stale suppression
-      if (ev.button === 2) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: false, shift: ev.shiftKey }
-      else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, ctrl: true, shift: ev.shiftKey }
+      // A secondary-click press that should open the context menu on mouseup: the physical right button
+      // (any platform), or — ONLY on a Mac — a Ctrl+left click (that's the Mac secondary click). On
+      // Windows/Linux, Ctrl+left is the multi-select modifier, never a menu, so it's not tracked here.
+      if (ev.button === 2) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, menu: true, shift: ev.shiftKey }
+      else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey && IS_MAC) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, menu: true, shift: ev.shiftKey }
       else press = null
     }
     const onMove = ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) >= 5) press.moved = true }
     const onUp = ev => {
       if (press && press.moved) suppressContext = true   // dragged → the contextmenu that fires right after must NOT open the menu
-      else if (press && (ev.button === 2 || (ev.button === 0 && press.ctrl))) openMenuAt(press.x, press.y, press.t, press.ctrl, press.shift)
+      else if (press && press.menu) openMenuAt(press.x, press.y, press.t, false, press.shift)   // clean secondary-click → open the menu
       press = null
     }
     const onContext = ev => {
@@ -2746,7 +2754,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // plain right-click on a form field → keep native menu
       ev.preventDefault()
       if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
-      openMenuAt(ev.clientX, ev.clientY, t, ev.ctrlKey && !ev.metaKey, ev.shiftKey)   // untracked gesture (trackpad tap) → open now
+      // A `contextmenu` event is ALWAYS a genuine secondary-click (incl. a Mac Ctrl+click or trackpad
+      // two-finger tap that carries ctrlKey) → open the full menu. Never treat ctrlKey as multi-select here.
+      openMenuAt(ev.clientX, ev.clientY, t, false, ev.shiftKey)
     }
     // Slide-scrub focus: arrow keys page through slides ONLY when the slide sidebar was the last thing
     // clicked. Clicking anywhere else (canvas, a node, another panel) disables it, so arrows go back to
@@ -3216,13 +3226,16 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       return
     }
 
-    // Ctrl/Cmd-click toggles a node in/out of the multi-selection (no drag) — build a selection by
-    // clicking several nodes, then right-click for bulk changes.
-    if (e.metaKey || e.ctrlKey) {
+    // Cmd-click (Mac) / Ctrl-click (Win/Linux) toggles a node in/out of the multi-selection (no drag) —
+    // build a selection by clicking several nodes, then right-click for bulk changes. On a Mac, Ctrl+click
+    // is the secondary (right) click, NOT a multi-select — so it must fall through to open the menu.
+    if (e.metaKey || (e.ctrlKey && !IS_MAC)) {
       setSelectedNodeIds(prev => { const s = new Set(prev); if (s.has(nodeId)) s.delete(nodeId); else s.add(nodeId); return s })
       setSelected(null); setSelectedImageIds(new Set())
       return
     }
+    // Mac Ctrl+left-click = secondary click: don't start a drag/selection here; the contextmenu opens the menu.
+    if (e.ctrlKey && !e.metaKey && IS_MAC) return
 
     // If this node is part of a multi-selection, keep that selection and move all
     // of them together; otherwise it's a normal single selection.
@@ -5196,6 +5209,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }, [ytssNodeSet])
 
   const handleImageMouseDown = useCallback((e, imageId, mode = 'drag', arg) => {
+    // Mac Ctrl+left-click = secondary click → let the contextmenu open the photo menu; don't select/drag.
+    if (mode === 'drag' && e.button === 0 && e.ctrlKey && !e.metaKey && IS_MAC) return
     e.preventDefault(); e.stopPropagation()
     canvasFocused.current = true
     setSelected(null)
@@ -5206,7 +5221,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const T = zoomTransformRef.current
 
     if (mode === 'drag') {
-      const isShift = e.shiftKey || e.ctrlKey || e.metaKey
+      const isShift = e.shiftKey || e.metaKey || (e.ctrlKey && !IS_MAC)
 
       if (isShift) {
         // Shift-click toggles only the individual image — never expands to whole group
@@ -10196,7 +10211,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
       data-img="true" data-imgid={id}
       onClick={e => e.stopPropagation()}
       onMouseDown={e => { if (e.button !== 0 || isCropping) return; e.stopPropagation(); onMouseDown(e, id) }}
-      onDoubleClick={(!isVideo && !isLink && img.type !== 'audio' && !isCropping) ? (e => { e.stopPropagation(); onCaption?.() }) : undefined}
+      onDoubleClick={(!isVideo && !isLink && !isText && img.type !== 'audio' && !isCropping) ? (e => { e.stopPropagation(); onCaption?.() }) : undefined}
       style={{ cursor: isCropping ? 'default' : 'move' }}
     >
       {(hasCrop || blur > 0 || edgeBlur > 0) && (
