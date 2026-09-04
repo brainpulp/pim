@@ -9413,14 +9413,32 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
     wrap.style.fontSize = Math.max(8, Math.min(48, Math.round(cur + delta))) + 'px'
     onChange(el.innerHTML)
   }
+  // Insert an interactive checkbox at the caret — a real <input> kept atomic (contenteditable=false).
+  const insertChecklist = () => {
+    const el = ref.current; if (!el) return
+    el.focus()
+    document.execCommand('insertHTML', false, '<input type="checkbox" class="tc-chk" contenteditable="false"> ')
+    onChange(el.innerHTML)
+  }
+  // Clicking a checkbox toggles it (persist via the `checked` ATTRIBUTE so it survives the saved HTML).
+  const onCellClick = (e) => {
+    if (editable) stop(e)
+    const t = e.target
+    if (t && t.matches && t.matches('input.tc-chk')) {
+      e.preventDefault()
+      if (t.hasAttribute('checked')) t.removeAttribute('checked'); else t.setAttribute('checked', '')
+      t.checked = t.hasAttribute('checked')
+      onChange(ref.current?.innerHTML || '')
+    }
+  }
   const btn = (label, cmd, style) => (
     <button onMouseDown={e => { e.preventDefault(); stop(e); exec(cmd) }} onClick={stop}
       style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 6px', borderRadius: 4, ...style }}>{label}</button>
   )
   const TEXT_COLORS = ['#e8ecff', '#ffffff', '#7080a0', '#ff6b6b', '#f6ad55', '#ffd84d', '#6ee7a8', '#5b6af0', '#a78bfa', '#f472b6', '#4ade80', '#38bdf8']
   return (<>
-    <div ref={ref} contentEditable={editable} suppressContentEditableWarning data-tcell="1"
-      onMouseDown={editable ? stop : undefined} onClick={editable ? stop : undefined}
+    <div ref={ref} contentEditable={editable} suppressContentEditableWarning data-tcell="1" spellCheck={false}
+      onMouseDown={editable ? stop : undefined} onClick={onCellClick}
       onFocus={() => { setEditing(true); placeTb() }}
       onScroll={placeTb}
       onBlur={() => { setEditing(false); setTb(null); onChange(ref.current?.innerHTML || '') }}
@@ -9442,6 +9460,8 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
           <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
           {btn('•', 'insertUnorderedList')}
           {btn('1.', 'insertOrderedList', { fontSize: 12 })}
+          <button title="Insert checkbox" onMouseDown={e => { e.preventDefault(); stop(e); insertChecklist() }} onClick={stop}
+            style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 6px', borderRadius: 4 }}>☑</button>
           <span style={{ width: 1, height: 15, background: '#2d3a6a', margin: '0 2px' }} />
           <button title="Smaller text" onMouseDown={e => { e.preventDefault(); stop(e); bumpSize(-2) }} onClick={stop}
             style={{ background: 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 10, fontWeight: 800, lineHeight: 1, padding: '3px 5px', borderRadius: 4 }}>A−</button>
