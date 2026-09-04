@@ -79,7 +79,8 @@ function loadYTApi() {
 
 // A single reusable YT player. Exposes an imperative handle via onReady(api). `clip` = {youtubeId,start,end}.
 // While not playing, a poster (thumbnail) covers the iframe so no YouTube UI shows. On end, calls onEnded.
-export function YTPlayer({ clip, autoplay = false, muted = false, captions = false, loop = false, interactive = true, externalControl = false, onReady, onEnded, onStateChange, style }) {
+export function YTPlayer({ clip, autoplay = false, muted = false, captions = false, loop = false, interactive = true, externalControl = false, coverOnPause = false, onReady, onEnded, onStateChange, style }) {
+  const coverOnPauseRef = useRef(coverOnPause); coverOnPauseRef.current = coverOnPause
   const holderRef = useRef(null)
   const playerRef = useRef(null)
   const [ready, setReady] = useState(false)
@@ -113,6 +114,10 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
           onStateChange: (e) => {
             // 1 = playing → drop the poster; 0 = ended → loop or advance; 2 = paused
             if (e.data === 1) setCovered(false)
+            // Paused → re-cover with our poster so YouTube's pause/end overlay (share, watch-later,
+            // related-video cards, YouTube logo) can NEVER show. Gated so the trim editor, which needs
+            // to see the paused frame, is unaffected.
+            if (e.data === 2 && coverOnPauseRef.current) setCovered(true)
             if (e.data === 0) {
               if (loopRef.current) { try { e.target.seekTo(Math.round(clipRef.current?.start || 0), true); e.target.playVideo() } catch { /* */ } }
               else { setCovered(true); cbRef.current.onEnded?.() }
@@ -278,11 +283,11 @@ function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
 }
 
 // ── Polymorphic slide player: dispatches to the right engine by kind, one uniform handle ──────
-export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, onReady, onEnded, style }) {
+export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, coverOnPause = false, onReady, onEnded, style }) {
   const kind = clipKind(clip)
   if (kind === 'image') return <ImageSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
   if (kind === 'video' || kind === 'audio') return <MediaFilePlayer clip={clip} kind={kind} autoplay={autoplay} muted={muted} interactive={interactive} onReady={onReady} onEnded={onEnded} style={style} />
-  return <YTPlayer clip={clip} autoplay={autoplay} muted={muted} captions={captions} loop={clip.loop} interactive={interactive} externalControl={false} onReady={onReady} onEnded={onEnded} style={style} />
+  return <YTPlayer clip={clip} autoplay={autoplay} muted={muted} captions={captions} loop={clip.loop} interactive={interactive} externalControl={false} coverOnPause={coverOnPause} onReady={onReady} onEnded={onEnded} style={style} />
 }
 
 // ── Dual-handle trim slider ───────────────────────────────────────────────────
@@ -812,6 +817,12 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.loop} onChange={e => onPatch({ loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Loop</label>
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.keepPlaying} onChange={e => onPatch({ keepPlaying: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Keep playing (ignore focus) <span style={{ color: '#7080a0', fontSize: 11 }}>— don't pause when deselected</span></label>
         <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.captions} onChange={e => onPatch({ captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Captions (CC) <span style={{ color: '#7080a0', fontSize: 11 }}>— if available</span></label>
+        {/* Play fullscreen — clean, chrome-free playback (poster covers any YouTube pause/end overlay). */}
+        {hasVideo && onPlayFullscreen && (
+          <button onClick={onPlayFullscreen} style={{ marginTop: 2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+            <Icon name="full" size={15} /> Play fullscreen
+          </button>
+        )}
       </div>
     </div>
   )
@@ -884,7 +895,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive onReady={h => { handleRef.current = h }} onEnded={onEnded} />}
+        {cur && <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />}
       </div>
       {ended && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
@@ -908,7 +919,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename, onSetScale, zoomK = 1 }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, editing = false, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename, onSetScale, zoomK = 1 }) {
   const [editingTitle, setEditingTitle] = useState(false)
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
@@ -957,7 +968,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} onReady={onReady} onEnded={onEnded} />
+            ? <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>

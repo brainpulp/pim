@@ -6287,7 +6287,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               return (
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
                   currentIdx={ytssIdxMap[n.id] || 0} active={active} playing={active || inspecting}
-                  ended={ytssEndedId === n.id}
+                  ended={ytssEndedId === n.id} editing={inspecting}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
