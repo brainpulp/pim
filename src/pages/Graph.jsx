@@ -2889,6 +2889,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
 
+      // F5 → start presenting from the first slide (PowerPoint/Keynote convention). Only when slides exist
+      // and we're not already presenting; otherwise F5 keeps its normal browser behavior (refresh).
+      if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.shiftKey && presentingSlideIdxRef.current === null && slideSimNodes.length > 0) {
+        e.preventDefault(); presentSlide(0, 'fwd'); return
+      }
+
       // ── YouTube slideshow "entered": it owns the arrows until Esc. ──
       //   ←/→ prev/next clip · Space play/pause · Shift+←/→ ∓10s · Esc exit
       if (ytssActiveRef.current && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -5705,23 +5711,33 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const yid = frameYtss(slideSimNodes[idx])
     if (ytssActiveRef.current && ytssActiveRef.current !== yid) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) }
     if (yid) {
-      const clips = useGraphStore.getState().nodes.find(n => n.id === yid)?.ytss?.clips || []
+      const yNode = useGraphStore.getState().nodes.find(n => n.id === yid)
+      const clips = yNode?.ytss?.clips || []
       const startIdx = direction === 'back' ? Math.max(0, clips.length - 1) : 0
-      setYtssActiveId(yid); setYtssIdxMap(m => ({ ...m, [yid]: startIdx })); ytssPlayingRef.current = true
-      setTimeout(() => ytssHandlesRef.current[yid]?.loadClip?.(clips[startIdx], true), 120)
+      setYtssIdxMap(m => ({ ...m, [yid]: startIdx }))
+      if (yNode?.ytss?.fullscreen) {
+        // Slideshow flagged fullscreen → present it in the clean fullscreen player (not inline).
+        setYtssActiveId(null)
+        setTimeout(() => { setYtssEndedId(null); setYtssFullscreenId(yid) }, 150)
+      } else {
+        setYtssActiveId(yid); ytssPlayingRef.current = true
+        setTimeout(() => ytssHandlesRef.current[yid]?.loadClip?.(clips[startIdx], true), 120)
+      }
     }
 
     // A free video on this slide flagged "Play fullscreen when presented" → jump to the clean
-    // fullscreen player automatically. (Esc returns to the slide.)
+    // fullscreen player automatically (YouTube OR uploaded file). Esc returns to the slide.
     const frameF = slideSimNodes[idx]
     if (frameF) {
       const fvpF = { ...DEFAULT_NODE_PROPS, ...(getVP(frameF.id) || {}) }
       const { halfW: fHWd, halfH: fHHd } = shapeDims('frame', NODE_R * (fvpF.scale || 1))
       const fhwF = fvpF.frameHalfW ?? fHWd, fhhF = fvpF.frameHalfH ?? fHHd
       const imgsF = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
-      const fsVid = imgsF.find(im => im.fullscreenOnSlide && im.type === 'video' && im.youtubeId && im.visible !== false &&
+      const fsVid = imgsF.find(im => im.fullscreenOnSlide && im.type === 'video' && (im.youtubeId || im.src) && im.visible !== false &&
         Math.abs((im.x || 0) - (frameF.x || 0)) <= fhwF && Math.abs((im.y || 0) - (frameF.y || 0)) <= fhhF)
-      if (fsVid) setTimeout(() => setVideoFullscreen({ youtubeId: fsVid.youtubeId, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1, captions: fsVid.captions === true }), 220)
+      if (fsVid) setTimeout(() => setVideoFullscreen(fsVid.youtubeId
+        ? { youtubeId: fsVid.youtubeId, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1, captions: fsVid.captions === true }
+        : { src: fsVid.src, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1 }), 200)
     }
   }
   const advanceBuild = (dir) => {
@@ -7714,14 +7730,23 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
     <div ref={containerRef} data-slide-sidebar="1" onMouseDown={e => e.stopPropagation()}
       style={{ width: 190, flexShrink: 0, borderLeft: '1px solid #1e1e2e', background: '#0d0d1a',
         overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px 8px 16px' }}>
+      {/* Prominent Present button, pinned at the very top. Keyboard: F5 starts from the first slide. */}
+      <button
+        onClick={() => { if (slideSimNodes.length) (onPresent ? onPresent(0) : (setPresentingSlideIdx(0), zoomToFrame(slideSimNodes[0]))) }}
+        disabled={!slideSimNodes.length}
+        title="Present from the first slide (F5)"
+        style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, width:'100%', marginBottom:8,
+          background: slideSimNodes.length ? 'linear-gradient(180deg,#5b6af0,#4652d6)' : '#20233a',
+          border:'none', color: slideSimNodes.length ? '#fff' : '#5a6088', borderRadius:9, padding:'10px 12px',
+          cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.92rem', fontWeight:700,
+          boxShadow: slideSimNodes.length ? '0 4px 14px rgba(91,106,240,0.4)' : 'none' }}>
+        ▶ Present <span style={{ fontSize:'0.68rem', fontWeight:600, opacity:0.85, background:'rgba(255,255,255,0.18)', borderRadius:4, padding:'1px 5px' }}>F5</span>
+      </button>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, paddingBottom:6, borderBottom:'1px solid #1e1e2e' }}>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           <button onClick={onClose} style={{ background:'transparent', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1 }}>‹</button>
           <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
         </div>
-        <button style={{ ...canvasBtnStyle, fontSize:'0.7rem', padding:'2px 6px' }}
-          onClick={() => { if (slideSimNodes.length) (onPresent ? onPresent(0) : (setPresentingSlideIdx(0), zoomToFrame(slideSimNodes[0]))) }}
-          disabled={!slideSimNodes.length}>▶ Present</button>
       </div>
 
       {/* Slideshow selector */}

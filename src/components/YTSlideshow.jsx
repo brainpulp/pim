@@ -16,16 +16,21 @@ export const parseYoutubeId = (str) => {
   return null
 }
 export const ytThumb = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
-export const fmtTime = (sec) => {
-  const s = Math.max(0, Math.round(sec || 0))
-  const m = Math.floor(s / 60), r = s % 60
-  return `${m}:${String(r).padStart(2, '0')}`
+// Format seconds as m:ss, or m:ss.d with `dec` decimal places for frame-ish precision.
+export const fmtTime = (sec, dec = 0) => {
+  const total = Math.max(0, sec || 0)
+  if (dec <= 0) { const s = Math.round(total); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+  let whole = Math.floor(total)
+  let frac = Math.round((total - whole) * 10 ** dec)
+  if (frac >= 10 ** dec) { whole += 1; frac = 0 }
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}.${String(frac).padStart(dec, '0')}`
 }
+// Parse "m:ss", "m:ss.d", "ss", or "ss.d" → seconds (float). null if unparseable.
 export const parseTime = (str) => {
   const t = String(str || '').trim()
-  if (/^\d+$/.test(t)) return +t
-  const m = t.match(/^(\d+):(\d{1,2})$/)
-  if (m) return (+m[1]) * 60 + (+m[2])
+  if (/^\d+(\.\d+)?$/.test(t)) return parseFloat(t)
+  const m = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/)
+  if (m) return (+m[1]) * 60 + parseFloat(m[2])
   return null
 }
 
@@ -321,17 +326,22 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
   const { w0, w1 } = win
   const span = Math.max(1, w1 - w0)
 
+  // Snap to 0.1s. All bounds come from the LIVE stateRef (never a stale prop) so start/end can't fight
+  // each other or the preview mid-drag — that was the source of the erratic jumps.
+  const timeAtClientX = (clientX) => {
+    const r = trackRef.current.getBoundingClientRect()
+    const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
+    const { w0: a, w1: b } = winRef.current
+    return Math.round((a + frac * (b - a)) * 10) / 10
+  }
   const drag = (which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation()
     setDragging(true)
     const move = (ev) => {
-      const r = trackRef.current.getBoundingClientRect()
-      const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const { w0: a, w1: b } = winRef.current
-      const t = Math.round(a + frac * (b - a))
+      const t = timeAtClientX(ev.clientX)
       const { s: cs, e: ce, M: m } = stateRef.current
-      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 1)); onChange(nv, end, 'start'); onScrub?.(nv, 'start') }
-      else { const nv = Math.min(m, Math.max(t, cs + 1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
+      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 0.1)); onChange(nv, ce, 'start'); onScrub?.(nv, 'start') }
+      else { const nv = Math.min(m, Math.max(t, cs + 0.1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
     }
     const up = () => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
@@ -340,6 +350,13 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
       onLoop?.(cs, ce)
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  // Click anywhere on the track (not a handle) → seek the preview there WITHOUT changing the trim, so you
+  // can scrub/preview any point, including outside the trimmed region.
+  const seekAt = (ev0) => {
+    if (ev0.button !== 0) return
+    ev0.stopPropagation()
+    onScrub?.(timeAtClientX(ev0.clientX), 'seek')
   }
 
   const pct = (t) => Math.max(0, Math.min(1, (t - w0) / span)) * 100
@@ -350,7 +367,7 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
   const phPct = phInWin ? pct(playhead) : null
   return (
     <div style={{ margin: '2px 8px' }}>
-      <div ref={trackRef} style={{ position: 'relative', height: 24 }}>
+      <div ref={trackRef} onMouseDown={seekAt} style={{ position: 'relative', height: 24, cursor: 'pointer' }}>
         <div style={{ position: 'absolute', top: 10, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
         {zoomed && w0 > 0 && <div style={{ position: 'absolute', top: 7, left: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
         {zoomed && w1 < M && <div style={{ position: 'absolute', top: 7, right: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
@@ -376,52 +393,80 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
 }
 
 // ── Snip ("inverse trim") editor: red bands over the timeline mark ranges to SKIP during playback. ──
-function CutsEditor({ cuts = [], max, getTime, onChange }) {
+// Full editing surface: drag the red handles on the timeline OR punch exact in/out times in the numeric
+// fields; ⇤/⇥ snap a boundary to the current playhead; ▷ previews the snip; the playhead is shown live.
+function CutsEditor({ cuts = [], max, getTime, playhead, onScrub, onChange }) {
   const trackRef = useRef(null)
   const M = Math.max(max || 1, 1)
   const stateRef = useRef({ cuts, M }); stateRef.current = { cuts, M }
   const pct = t => Math.max(0, Math.min(1, t / M)) * 100
+  const snap = t => Math.round(Math.max(0, Math.min(M, t)) * 10) / 10   // 0.1s
+  const sorted = (arr) => [...arr].sort((a, b) => Math.min(a.s, a.e) - Math.min(b.s, b.e))
+  const commit = (arr) => onChange(sorted(arr))
+  const setCut = (i, patch) => onChange(cuts.map((c, j) => j === i ? { ...c, ...patch } : c))
   const addCut = () => {
-    const at = Math.max(0, Math.min(M, (getTime?.() ?? M / 2)))
+    const at = snap(getTime?.() ?? M / 2)
     const w = Math.min(Math.max(3, M * 0.05), M * 0.3)
-    const s = Math.round(Math.max(0, Math.min(at, M - w))), e = Math.round(Math.min(M, s + w))
-    onChange([...(cuts || []), { s, e }].sort((a, b) => a.s - b.s))
+    const s = snap(Math.max(0, Math.min(at, M - w))), e = snap(Math.min(M, s + w))
+    commit([...(cuts || []), { s, e }])
   }
   const dragHandle = (i, which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation()
     const move = ev => {
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const t = Math.round(frac * stateRef.current.M)
-      onChange(stateRef.current.cuts.map((c, j) => j !== i ? c : (which === 's' ? { ...c, s: Math.min(t, c.e - 1) } : { ...c, e: Math.max(t, c.s + 1) })))
+      const t = snap(frac * stateRef.current.M)
+      onChange(stateRef.current.cuts.map((c, j) => j !== i ? c : (which === 's' ? { ...c, s: Math.min(t, c.e - 0.1) } : { ...c, e: Math.max(t, c.s + 0.1) })))
     }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); commit(stateRef.current.cuts) }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
+  // Editable m:ss.d field that commits on blur/Enter and reverts on a bad value.
+  const TimeField = ({ value, onCommit, title }) => (
+    <input defaultValue={fmtTime(value, 1)} key={value} title={title}
+      onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.currentTarget.value = fmtTime(value, 1); e.currentTarget.blur() } }}
+      onBlur={e => { const v = parseTime(e.target.value); if (v == null) { e.target.value = fmtTime(value, 1); return } onCommit(snap(v)) }}
+      style={{ width: 62, background: '#0f0f22', border: '1px solid #3a2530', borderRadius: 5, color: '#f2c9cf', fontSize: 11.5, padding: '3px 6px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
+  )
+  const phPct = playhead != null && playhead >= 0 && playhead <= M ? pct(playhead) : null
   return (
     <div style={{ margin: '2px 8px' }}>
       <div ref={trackRef} style={{ position: 'relative', height: 22 }}>
         <div style={{ position: 'absolute', top: 9, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
+        {phPct != null && <div style={{ position: 'absolute', top: 1, left: `calc(${phPct}% - 1px)`, width: 2, height: 18, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />}
         {cuts.map((c, i) => {
           const s = pct(Math.min(c.s, c.e)), e = pct(Math.max(c.s, c.e))
           return (
             <div key={i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
               <div style={{ position: 'absolute', top: 7, left: `${s}%`, width: `${Math.max(0, e - s)}%`, height: 8, borderRadius: 2, background: 'rgba(248,113,113,0.45)', border: '1px solid #f87171' }} />
-              <div onMouseDown={dragHandle(i, 's')} style={{ position: 'absolute', top: 1, left: `calc(${s}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
-              <div onMouseDown={dragHandle(i, 'e')} style={{ position: 'absolute', top: 1, left: `calc(${e}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              <div onMouseDown={dragHandle(i, 's')} title="Drag the snip start" style={{ position: 'absolute', top: 1, left: `calc(${s}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              <div onMouseDown={dragHandle(i, 'e')} title="Drag the snip end" style={{ position: 'absolute', top: 1, left: `calc(${e}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
             </div>
           )
         })}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 3 }}>
-        {cuts.map((c, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: '#8fa0d8' }}>
-            <span style={{ color: '#f0a0a0' }}>✂</span><span>{fmtTime(Math.min(c.s, c.e))}–{fmtTime(Math.max(c.s, c.e))}</span>
-            <span style={{ flex: 1 }} />
-            <button onClick={() => onChange(cuts.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>remove</button>
-          </div>
-        ))}
-        <button onClick={addCut} style={{ ...trimBtn, alignSelf: 'flex-start', color: '#f0a0a0', borderColor: '#5a2a3a' }}>✂ Snip a section</button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 5 }}>
+        {cuts.map((c, i) => {
+          const cs = Math.min(c.s, c.e), ce = Math.max(c.s, c.e)
+          const iconBtn = { background: 'transparent', border: '1px solid #3a2530', color: '#f0a0a0', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap' }}>
+              <span style={{ color: '#f0a0a0' }}>✂</span>
+              <span style={{ color: '#7c86ad' }}>from</span>
+              <TimeField value={cs} title="Snip start (m:ss.s)" onCommit={v => setCut(i, { s: Math.min(v, ce - 0.1) })} />
+              {getTime && <button style={iconBtn} title="Set start to the current playhead" onClick={() => setCut(i, { s: Math.min(snap(getTime()), ce - 0.1) })}>⇤</button>}
+              <span style={{ color: '#7c86ad' }}>to</span>
+              <TimeField value={ce} title="Snip end (m:ss.s)" onCommit={v => setCut(i, { e: Math.max(v, cs + 0.1) })} />
+              {getTime && <button style={iconBtn} title="Set end to the current playhead" onClick={() => setCut(i, { e: Math.max(snap(getTime()), cs + 0.1) })}>⇥</button>}
+              {onScrub && <button style={iconBtn} title="Preview: jump to just before this snip" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
+              <span style={{ color: '#6a7290' }}>({fmtTime(ce - cs, 1)})</span>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => commit(cuts.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>remove</button>
+            </div>
+          )
+        })}
+        <button onClick={addCut} style={{ ...trimBtn, alignSelf: 'flex-start', color: '#f0a0a0', borderColor: '#5a2a3a' }}>✂ Snip at playhead</button>
       </div>
     </div>
   )
@@ -564,7 +609,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
             {(k === 'youtube' || k === 'video') && (
               <div style={{ marginTop: 6 }}>
                 <Collapsible label={`✂ Cuts${cur.cuts?.length ? ` (${cur.cuts.length})` : ''} — snip out sections`}>
-                  <CutsEditor cuts={cur.cuts || []} max={max} getTime={() => preview?.time?.() || 0} onChange={cuts => patch(sel, { cuts: cuts.length ? cuts : undefined })} />
+                  <CutsEditor cuts={cur.cuts || []} max={max} getTime={() => preview?.time?.() || 0} onScrub={scrubTo} onChange={cuts => patch(sel, { cuts: cuts.length ? cuts : undefined })} />
                 </Collapsible>
               </div>
             )}
@@ -696,18 +741,24 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
   const max = Math.max(dur || 0, video.end || 0, 30)
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const W = 340
+  const winW = typeof window !== 'undefined' ? window.innerWidth : 1200
+  const winH = typeof window !== 'undefined' ? window.innerHeight : 800
+  // Anchor the panel but never let it bleed off-screen: clamp the top so at least ~210px is visible, then
+  // cap its height to the remaining space — the body scrolls inside. (The old fixed 440px assumption made
+  // the now-taller panel spill off the bottom.)
+  const topRaw = anchor ? Math.max(8, Math.min(anchor.y, winH - 210)) : 0
   const pos = anchor
-    ? { position: 'fixed', left: Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - W - 8)), top: Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 440)), width: W }
+    ? { position: 'fixed', left: Math.max(8, Math.min(anchor.x, winW - W - 8)), top: topRaw, width: W, maxHeight: winH - topRaw - 8 }
     : { position: 'fixed', top: 0, right: 0, height: '100%', width: 380 }
   const row = { display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5 }
   return (
-    <div style={{ ...pos, background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, fontFamily: '-apple-system, sans-serif', overflow: 'hidden' }}
+    <div style={{ ...pos, background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, fontFamily: '-apple-system, sans-serif', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
       onMouseDown={e => e.stopPropagation()}>
-      <div style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #23234a', flex: '0 0 auto' }}>
         <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>{isFile ? 'Video' : 'YouTube video'}</div>
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
-      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
         {hasVideo && (
           <div style={{ fontSize: 11.5, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button title={previewPlaying ? 'Pause preview' : 'Play the trimmed clip on a loop'}
@@ -768,7 +819,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
           })()}
           {/* Cuts (inverse trim) — snip sections out of the middle */}
           <Collapsible label={`✂ Cuts${video.cuts?.length ? ` (${video.cuts.length})` : ''} — snip out sections`}>
-            <CutsEditor cuts={video.cuts || []} max={max} getTime={getTime} onChange={cuts => onPatch({ cuts: cuts.length ? cuts : undefined })} />
+            <CutsEditor cuts={video.cuts || []} max={max} getTime={getTime} playhead={curT} onScrub={onScrubTime} onChange={cuts => onPatch({ cuts: cuts.length ? cuts : undefined })} />
           </Collapsible>
         </>}
         {/* Speed */}
