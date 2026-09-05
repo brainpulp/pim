@@ -7002,7 +7002,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })()}
 
         {photoMenu && !cropImageId && (<>
-          <div onMouseDown={() => setPhotoMenu(null)} onContextMenu={e => { e.preventDefault(); setPhotoMenu(null) }}
+          {/* Backdrop: left-click closes. Do NOT close on `contextmenu` — on Windows/Linux the trailing
+              contextmenu from the very click that opened this menu fires AFTER mouseup (once the backdrop
+              has mounted) and would instantly close it. A right-click ELSEWHERE still routes correctly via
+              the window-level handler, which reopens/repositions the right menu. (Matches the node menu.) */}
+          <div onMouseDown={() => setPhotoMenu(null)} onContextMenu={e => e.preventDefault()}
             style={{ position: 'fixed', inset: 0, zIndex: 24 }} />
           <ImageToolbar
             images={activeView?.images || []}
