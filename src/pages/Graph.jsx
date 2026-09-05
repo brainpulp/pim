@@ -2648,7 +2648,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const imgEl = target?.closest?.('[data-imgid]')
         const imgId = imgEl?.getAttribute?.('data-imgid')
         if (imgId && (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).some(im => im.id === imgId)) {
-          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
+          setContextMenu(null); setNodeMenu(null); setBulkMenu(null); setCropImageId(null)   // a stuck crop state would hide the menu
           setSelectedImageIds(prev => prev.has(imgId) ? prev : new Set([imgId]))
           setPhotoMenu({ px, py, imageId: imgId })
           rcLog.current(`✓ PHOTO menu opened (image by DOM target: ${imgId})`)
@@ -2671,7 +2671,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
         }
         if (hit) {
-          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
+          setContextMenu(null); setNodeMenu(null); setBulkMenu(null); setCropImageId(null)   // a stuck crop state would hide the menu
           setSelectedImageIds(prev => prev.has(hit.id) ? prev : new Set([hit.id]))
           setPhotoMenu({ px, py, imageId: hit.id })
           rcLog.current(`✓ PHOTO menu opened (image by coordinate: ${hit.id})`)
@@ -2747,9 +2747,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       let hitImg = null
       imgs.forEach(im => { if (im.visible !== false && Math.abs(sx - im.x) <= im.width / 2 && Math.abs(sy - im.y) <= im.height / 2) hitImg = im })
       if (hitImg && !isCtrl) {
-        setContextMenu(null); setNodeMenu(null)
+        setContextMenu(null); setNodeMenu(null); setCropImageId(null)
         setSelectedImageIds(prev => prev.has(hitImg.id) ? prev : new Set([hitImg.id]))
         setPhotoMenu({ px, py, imageId: hitImg.id })
+        rcLog.current(`✓ PHOTO menu opened (image fallback: ${hitImg.id})`)
         return
       }
       if (isCtrl && (hitNode || hitImg)) return   // ctrl-click on a node/image → leave it to multi-select
@@ -7680,7 +7681,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       )}
       {RC_DEBUG && (
         <div style={{ position: 'fixed', left: 8, bottom: 8, zIndex: 99999, maxWidth: 460, background: 'rgba(0,0,0,0.9)', color: '#7CFC00', font: '12px ui-monospace, monospace', padding: '8px 10px', borderRadius: 6, border: '1px solid #2f6a48', whiteSpace: 'pre-wrap', pointerEvents: 'none' }}>
-          <b style={{ color: '#fff' }}>right-click debug</b>{'\n'}{rcDbg}
+          <b style={{ color: '#fff' }}>right-click debug</b>{'\n'}{rcDbg}{'\n'}
+          render: photoMenu={photoMenu ? `set(${photoMenu.imageId || '?'})` : 'null'} · crop={cropImageId ? 'SET — BLOCKS the menu!' : 'none'} · selImgs={selectedImageIds.size} · matched={(activeView?.images || []).filter(i => selectedImageIds.has(i.id)).length}
         </div>
       )}
     </div>
