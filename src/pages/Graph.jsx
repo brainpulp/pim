@@ -7006,7 +7006,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             style={{ position: 'fixed', inset: 0, zIndex: 24 }} />
           <ImageToolbar
             images={activeView?.images || []}
-            selectedImageIds={selectedImageIds}
+            selectedImageIds={selectedImageIds.size ? selectedImageIds : (photoMenu.imageId ? new Set([photoMenu.imageId]) : selectedImageIds)}
             anchor={photoMenu}
             onGroup={() => groupImages([...selectedImageIds])}
             onUngroup={() => ungroupImages([...selectedImageIds])}
