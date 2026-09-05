@@ -2920,7 +2920,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (e.key === 'ArrowRight') {
             e.preventDefault()
             if (cur < clips.length - 1) goClip(cur + 1)
-            else if (presenting) advanceBuild(1)
+            else if (presenting) { h?.pause?.(); ytssPlayingRef.current = false; advanceBuild(1) }   // freeze the last frame, then leave the slide (elegant transition)
             else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
             else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null) }   // → show the node on canvas
             return
@@ -5709,7 +5709,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
     // Auto-enter a YouTube slideshow living on this slide (and exit the previous slide's, if any).
     const yid = frameYtss(slideSimNodes[idx])
-    if (ytssActiveRef.current && ytssActiveRef.current !== yid) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) }
+    if (ytssActiveRef.current && ytssActiveRef.current !== yid) {
+      const prev = ytssActiveRef.current
+      ytssHandlesRef.current[prev]?.pause?.()   // freeze the last frame so it isn't still playing as we leave
+      if (yid) { setYtssActiveId(null) }        // the next slide has its own slideshow → switch immediately
+      // Otherwise keep the leaving slideshow entered (full-size, frozen) through the zoom-out transition,
+      // then quietly reset it off-screen — so it never "pops" back to a small node while still in view.
+      else { setTimeout(() => { if (ytssActiveRef.current === prev && presentingSlideIdxRef.current !== null) { setYtssActiveId(null); setYtssIdxMap(m => ({ ...m, [prev]: 0 })) } }, 650) }
+    }
     if (yid) {
       const yNode = useGraphStore.getState().nodes.find(n => n.id === yid)
       const clips = yNode?.ytss?.clips || []

@@ -1006,7 +1006,9 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); document.body.classList.remove('pim-drag-nomedia') }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }
-  const bd = active ? '#4ade80' : (isDropTarget ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a'))
+  // Green is ONLY the drop-target affordance (dragging media onto the slideshow). A playing/entered
+  // slideshow (incl. during a presentation) gets a quiet neutral border — never the loud green.
+  const bd = isDropTarget ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a')
   return (
     <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
       onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.(); onHeaderDown?.(e) } }}
