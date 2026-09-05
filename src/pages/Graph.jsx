@@ -1158,6 +1158,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (selected?.type === 'node') setNodeMenu(m => (m?.nodeId === selected.id ? m : { nodeId: selected.id, px: 0, py: 0 }))
   }, [floatDock, selected])
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
+  // Right-click diagnostic: append ?rcdebug=1 to the URL to show, in a corner badge, exactly what each
+  // right-click resolved to. Lets us pin a non-reproducible "right-click does nothing" without the console.
+  const RC_DEBUG = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('rcdebug') === '1'
+  const [rcDbg, setRcDbg] = useState('right-click something…')
+  const rcLog = useRef(() => {})
+  rcLog.current = (s) => { if (RC_DEBUG) setRcDbg(s) }
   const [rubberBand, setRubberBand] = useState(null) // { sx, sy, ex, ey } in canvas coords | null
   const rubberBandRef = useRef(null)
   const didRubberBandRef = useRef(false)   // set after a rubber-band drag so the trailing click doesn't clear it
@@ -2625,10 +2631,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const OVERLAY_SEL = '[data-nodetoolbar],[data-menu],[data-slide-sidebar],input,textarea,select,a,button'
     // Open the right menu at a screen point. isCtrl = a Ctrl+click (background menu only; nodes keep multi-select).
     const openMenuAt = (clientX, clientY, target, isCtrl, forceBg) => {
-      if (!el || readOnly) return
-      if (target?.closest?.(OVERLAY_SEL)) return
-      const rect = el.getBoundingClientRect()
-      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return
+      const elNow = svgRef.current   // read live (the closured `el` can be null if the effect set up before mount)
+      if (!elNow || readOnly) { rcLog.current(`openMenuAt: BAILED — ${!elNow ? 'no svg element' : 'readOnly view'}`); return }
+      const overlayHit = target?.closest?.(OVERLAY_SEL)
+      if (overlayHit) { rcLog.current(`openMenuAt: BAILED — over an overlay/control (${overlayHit.tagName}${overlayHit.getAttribute?.('data-nodetoolbar') != null ? ' nodetoolbar' : ''}${overlayHit.getAttribute?.('data-menu') != null ? ' menu' : ''}${overlayHit.getAttribute?.('data-slide-sidebar') != null ? ' slides' : ''})`); return }
+      const rect = elNow.getBoundingClientRect()
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) { rcLog.current('openMenuAt: BAILED — click outside the canvas bounds'); return }
       const px = clientX - rect.left, py = clientY - rect.top
       const [sx, sy] = zoomTransformRef.current.invert([px, py])
       // ── RULE 1 (highest priority): if the topmost DOM element under the cursor IS a free image, open the
@@ -2643,6 +2651,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
           setSelectedImageIds(prev => prev.has(imgId) ? prev : new Set([imgId]))
           setPhotoMenu({ px, py, imageId: imgId })
+          rcLog.current(`✓ PHOTO menu opened (image by DOM target: ${imgId})`)
           return
         }
       }
@@ -2665,6 +2674,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
           setSelectedImageIds(prev => prev.has(hit.id) ? prev : new Set([hit.id]))
           setPhotoMenu({ px, py, imageId: hit.id })
+          rcLog.current(`✓ PHOTO menu opened (image by coordinate: ${hit.id})`)
           return
         }
       }
@@ -2730,6 +2740,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         setSelected({ id: hitNode.id, type: 'node' })
         setSelectedImageIds(new Set()); setSelectedNodeIds(new Set())
         setNodeMenu({ nodeId: hitNode.id, px, py })
+        rcLog.current(`✓ NODE menu opened (${hitNode.id})`)
         return
       }
       const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
@@ -2744,6 +2755,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       if (isCtrl && (hitNode || hitImg)) return   // ctrl-click on a node/image → leave it to multi-select
       setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
+      rcLog.current(`✓ BACKGROUND menu opened at world (${Math.round(sx)},${Math.round(sy)}) — nothing under the cursor`)
     }
     // Menu triggers, split by gesture so a right-DRAG (pan) never opens the menu:
     //  • A tracked press (right mouse button, or Ctrl+left) opens the menu on MOUSEUP, and only if the
@@ -2771,13 +2783,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     const onContext = ev => {
       const t = ev.target
+      rcLog.current(`ctxmenu: tgt=${t?.tagName}${t?.getAttribute?.('data-imgid') ? '#img' : ''} suppress=${suppressContext} press=${press ? (press.moved ? 'moved' : 'clean') : 'null'}`)
       // A right-DRAG (pan) just ended → always swallow the trailing contextmenu, even over an input or
       // contentEditable table cell (Linux/Win fire it AFTER mouseup). Checked BEFORE the form-field
       // exception so right-drag-panning over a table never leaks the browser menu.
-      if (suppressContext) { suppressContext = false; ev.preventDefault(); return }
-      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return   // plain right-click on a form field → keep native menu
+      if (suppressContext) { suppressContext = false; ev.preventDefault(); rcLog.current('→ swallowed (suppressContext was set by a prior drag)'); return }
+      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) { rcLog.current('→ native menu (form field)'); return }   // plain right-click on a form field → keep native menu
       ev.preventDefault()
-      if (press) return   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
+      if (press) { rcLog.current('→ deferred to mouseup (press active)'); return }   // a real button/ctrl press → handled on mouseup (so drags don't open the menu)
       // A `contextmenu` event is ALWAYS a genuine secondary-click (incl. a Mac Ctrl+click or trackpad
       // two-finger tap that carries ctrlKey) → open the full menu. Never treat ctrlKey as multi-select here.
       openMenuAt(ev.clientX, ev.clientY, t, false, ev.shiftKey)
@@ -7664,6 +7677,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           ? { id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }
           : { id: 'one', kind: 'video', src: videoFullscreen.src, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
           startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} onExit={() => setVideoFullscreen(null)} />
+      )}
+      {RC_DEBUG && (
+        <div style={{ position: 'fixed', left: 8, bottom: 8, zIndex: 99999, maxWidth: 460, background: 'rgba(0,0,0,0.9)', color: '#7CFC00', font: '12px ui-monospace, monospace', padding: '8px 10px', borderRadius: 6, border: '1px solid #2f6a48', whiteSpace: 'pre-wrap', pointerEvents: 'none' }}>
+          <b style={{ color: '#fff' }}>right-click debug</b>{'\n'}{rcDbg}
+        </div>
       )}
     </div>
   )
