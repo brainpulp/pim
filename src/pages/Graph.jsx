@@ -7546,7 +7546,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
           if (!img || img.type !== 'video') return null
-          video = { youtubeId: img.youtubeId, videoKind: img.videoKind, src: img.src, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, keepPlaying: img.keepPlaying }
+          video = { youtubeId: img.youtubeId, videoKind: img.videoKind, src: img.src, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, keepPlaying: img.keepPlaying, fullscreenOnSlide: img.fullscreenOnSlide }
           onPatch = patch => updateImage(videoEdit.id, patch)
           onPatchPoster = url => updateImage(videoEdit.id, { poster: url })
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
@@ -7554,7 +7554,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const node = storeNodes.find(n => n.id === videoEdit.id)
           const m = node?.media; if (!m || m.kind !== 'video') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, videoKind: m.videoKind, src: m.src, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, keepPlaying: m.keepPlaying }
+          video = { youtubeId: m.youtubeId, videoKind: m.videoKind, src: m.src, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, keepPlaying: m.keepPlaying, fullscreenOnSlide: m.fullscreenOnSlide }
           onPatchPoster = url => updateNodeMedia(videoEdit.id, { poster: url })
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
@@ -10756,12 +10756,15 @@ function FrameNode({ node, viewProps, zoomK = 1, isSelected, inSlides, isPresent
           constant on-screen size (like a photo's selection outline), clamped; the selected frame matches
           the photo's thickness with a distinct finer dash so the two read as the same family. */}
       {!isPresenting && !hideOutline && (() => {
-        const ui = Math.min(6, Math.max(0.16, 1 / (zoomK || 1)))
+        // Border held at a constant on-screen size (like a photo's selection outline). Uses the same
+        // bright blue as a photo so it stays clearly visible over busy content; a distinct finer dash
+        // when selected, a longer dash otherwise, so a frame still reads as a frame (not a photo).
+        const ui = Math.min(6, Math.max(0.2, 1 / (zoomK || 1)))
         return <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
           fill={fill} fillOpacity={fillOpacity}
-          stroke={isSelected ? '#5b6af0' : '#4a7abf'}
-          strokeWidth={1.5 * ui}
-          strokeDasharray={isSelected ? `${2 * ui},${4 * ui}` : `${9 * ui},${6 * ui}`}
+          stroke={isSelected ? '#7c8cff' : '#5b6af0'}
+          strokeWidth={2 * ui}
+          strokeDasharray={isSelected ? `${2.5 * ui},${3.5 * ui}` : `${10 * ui},${7 * ui}`}
         />
       })()}
 
