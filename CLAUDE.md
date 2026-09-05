@@ -154,8 +154,150 @@ Repo: https://github.com/brainpulp/pim
 
 **CRITICAL: The user tests on the live GitHub Pages URL, NOT localhost. Always run `npm run deploy` after every set of changes.**
 
+## Last session (2026-07-19) — Merging Graph + Board into ONE canvas
+
+**Vision:** one general canvas for everything, UX'd from proximal pills/menus (NOT sidebar inspectors /
+distal tools). The **Board** (`src/pages/PackBoard.jsx`) is the unified canvas; the Graph is being folded
+into it and will eventually be retired. Board is now the **default/primary tab, labelled "canvas"** in
+`App.jsx` (nav order `[board→'canvas', graph, table, lab]`, default view `'board'`).
+
+What the Board now has (superset-in-progress of the Graph):
+- **Clusters** — circle packs / property trees / due-date buckets, proximal `ClusterConfigBar` pills.
+- **Free nodes** — standalone nodes placed on the canvas, per view. `activeView.boardNodes = {[id]:{x,y}}`.
+  Store: `setViewBoardNode` / `removeViewBoardNode`. `+ Node` creates one at viewport center. A node is
+  EITHER free OR clustered (clusters exclude free ids).
+- **Edges between free nodes** — connector handle on each free node → drag to another = `addEdge`, drag to
+  empty = new connected node. Uses the shared view-independent `edges`. Double-click an edge to remove.
+  `freeEdges` = edges whose both endpoints are visible free nodes.
+- **Photos** — the SAME `view.images[]` the graph uses (CENTER coords `{x,y,width,height}`). `+ Photo`
+  → file picker → `addImage` at viewport center. `BoardImage` component: drag-move, corner-resize
+  (aspect-locked), × delete, selection frame. Rendered as a background layer (before clusters). Zoom
+  filter ignores `[data-image]` (added alongside `[data-bubble],[data-syshead]`).
+- **Full node edit in `NodePropsEditor`** (shared modal) — properties + NEW `cosmetics` prop (fill colour
+  swatches + shape picker → `setNodeViewProp`) + `projectLink` picker + `actions` (hide/remove/open-link).
+- **Cross-project links** — `node.linkTo = {projectId, projectName}` (view-independent; `setNodeLink`).
+  Free nodes show a ↗ badge (one-click navigate); any node can navigate via the editor's "↗ Open" action.
+  `App.jsx` keeps a `sessionStorage` **back-stack** (`pim_back_stack`) → floating "← Back to <project>"
+  chip bottom-left; chains A→B→C work. `navigateToProject` / `goBack`; `projectList` loaded via
+  `listProjects` and passed to the board for the picker.
+
+Still to fold in before deleting the Graph tab: outline sidebar, presentation/slides, 3D nodes, force
+layout, emoji/motion cosmetics. Until then the Graph tab stays as a secondary view (no feature loss).
+
+Board component map (`PackBoard.jsx`): `FreeNode` (wraps `LeafNode`, adds ↗ badge + connector),
+`BoardImage`, `LeafNode` (now takes `onBadge`/`onConnect`), `NestedPackCluster`, `TreeCluster`,
+`ClusterConfigBar`. Helper `freeNodeRadius(dec)` (module-level) mirrors FreeNode sizing for edge
+hit-testing.
+
+## Last session (2026-06-21) — Sharing + edge blur + text menus
+
+### Project sharing (share-link based, public view + sign-in edit)
+- **Backend** (Supabase `ikztpvxfgmhmrcwolwgx`, migration `pim_sharing`):
+  - `pim_share_links` (token, project_id, role `viewer|editor`, expires_at, revoked) — owner-only RLS.
+  - `pim_project_members` (project_id, user_id, role) — populated when a signed-in user redeems a link.
+  - `pim_is_member(project_id, role?)` SECURITY DEFINER helper (avoids RLS recursion). `pim_projects` RLS
+    re-granted: owner **or** member can SELECT; owner **or** editor-member can UPDATE; owner-only insert/delete.
+  - `pim_get_shared_project(token)` SECURITY DEFINER — anon-callable, returns project JSON + role for a valid
+    (non-revoked, non-expired) token. This is the public view path (no RLS hit).
+  - `pim_redeem_share_link(token)` SECURITY DEFINER (authenticated only) — inserts a membership row so the
+    project then opens through normal RLS.
+  - Grants tightened: `pim_is_member` / `pim_redeem_share_link` revoked from anon; `pim_get_shared_project`
+    stays anon-callable **by design** (advisor WARN there is expected).
+- **Frontend**:
+  - `db.js`: `createShareLink / listShareLinks / revokeShareLink / getSharedProject / redeemShareLink`.
+  - `components/ShareDialog.jsx` — owner UI (nav **Share** button). Generate view/edit links, copy, revoke.
+    Link format: `${origin}${BASE_URL}#/share/<token>` (hash route → no Pages server config needed).
+  - `pages/SharedView.jsx` — public landing for `#/share/<token>`. Viewer link (or not signed in) → read-only
+    Graph via the public RPC; editor link + signed in → redeems and hands off to the normal editing flow.
+  - `App.jsx` — `parseShareToken()` + `hashchange` listener; share token is intercepted **before** the auth
+    gate so view-only links work with no login.
+  - **Graph read-only mode**: `Graph` gains `readOnly` + `sharedData` props. `sharedData` loads straight into
+    the store (skips `loadProject`/RLS). readOnly: autosave off, keyboard/contextmenu/canvas handlers gated,
+    sidebar hidden, and the content `<g>` gets `pointerEvents:'none'` (D3 pan/zoom still works via the svg).
+- **Gotcha**: read-only is enforced by `pointerEvents:'none'` on the main content group — pan/zoom stays live
+  because d3-zoom is bound to the `<svg>`, and events pass through the disabled group to it.
+
+### Photo edge blur (`ImageNode`)
+- Images gain `edgeBlur` (separate from full `blur`). Implemented as a blurred white-rect **alpha mask** inset
+  by the blur radius → feathers only the photo's outer edges, interior stays sharp. Combines with full `blur`.
+
+### Text-based context menus (was icon panels)
+- `NodeToolbar` top level and `ImageToolbar` are now vertical **text** menus (matching the canvas right-click
+  menu). Sub-panels (color/shape/emoji/motion/align…) unchanged. Photo menu adds the Edge-blur stepper.
+- Icons can return later — the request was text-first.
+
 ## UI color rule — NEVER REGRESS
-**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
+**Only use proven legibility contrast for all type, always.** No dark-grey-on-dark, ever — if text sits on a dark surface it must be clearly readable at a glance. This has regressed repeatedly; treat it as a hard rule, not a nicety.
+
+**Never use dark grey text on a dark background.** The canvas background is `#0c0c1a`. Minimum readable text color on it is `#7080a0`. Concretely: `#333`, `#334`, `#444`, `#445`, `#556`, `#667`, `#778` (and similar near-black greys) are BANNED as a text/label `color` anywhere in the app — they're fine only for borders/dividers. Do not use `#334`, `#445`, `#556` or any similar near-black color for text or labels anywhere in the app. Use `#7080a0` or brighter for secondary labels, `#8090b8` for tertiary hints, `#c5d0ff` for primary labels.
+
+## Interaction contract — canvas (NEVER REGRESS)
+
+This is the single source of truth for how pointer gestures behave on the graph canvas. Interaction
+bugs (right-click, drag, menus) have regressed repeatedly — **before touching any gesture handler, read
+this and keep it true.** Handlers live in `Graph.jsx`: `handleNodeMouseDown`, `handleImageMouseDown`,
+`handleMediaNodeMouseDown`, `handleCanvasMouseDown`, and `openMenuAt` (the right-click router).
+
+### Invariants (hold for EVERY element type)
+1. **A drag never opens a menu or panel.** Menus/panels open only on a clean click or right-click where
+   the pointer did not move past the threshold. The undocked style panel is guarded by `nodeGestureRef`
+   (set at node mousedown, cleared at mouseup); a clean click reopens it, a drag never springs it.
+2. **The right-click menu always corresponds to what is under the cursor.** `openMenuAt` resolves the
+   target in a fixed priority order (below) — DOM target first, then coordinate hit-testing. It must
+   never open a menu for something the user isn't pointing at.
+3. **A right-DRAG (pan) never opens a menu.** Tracked press + `suppressContext` swallow the trailing
+   `contextmenu`. Movement threshold = 5px.
+4. **`stopPropagation` on every element's own `onMouseDown`** so the canvas marquee/pan doesn't also fire.
+5. **Media (YouTube iframe / `<video>`) must not swallow `mouseup` during a drag.** Any drag that could
+   cross a media element adds `body.pim-drag-nomedia` (or `pim-dragging`), which disables media
+   pointer-events via CSS, and removes it on mouseup.
+
+### `openMenuAt` right-click priority order (do not reorder without updating this list)
+1. **Overlay guard** — click inside a toolbar/menu/input/textarea/button → no canvas menu.
+2. **Free image by DOM target** — topmost DOM element is `[data-imgid]` → **photo menu**. Bulletproof:
+   independent of paint order / z-index / coordinate math. Image over ANY node/table always wins.
+3. **Free image over a table/card, by coordinate** — catches background images painted *behind* a table
+   (their DOM target is the table, so rule 2 misses them).
+4. **Table surface** — `[data-table-surface]` → the table's own menu (unless Shift forces background).
+5. **Card node** — `[data-cardnode]` (slideshow/table/kanban/list/strategy/media) → that node's menu.
+6. **Shift+right-click** → force background/insert menu (escape hatch in dense canvases).
+7. **Active multi-selection (>1)** → bulk menu (any right-click, no need to land on a node).
+8. **Regular node by coordinate** → node menu (frames are skipped here).
+9. **Free image by coordinate** (fallback).
+10. **Empty canvas** → background/insert menu.
+
+### Per-gesture, per-element
+| Element | Left-click | Left-drag | Double-click | Right-click | Corner handle |
+|---|---|---|---|---|---|
+| Regular node | select | move (anchors) | edit label | node menu | scale (br) |
+| Frame | select | move + carry contained | edit title | node/bulk menu | resize (4 corners) |
+| Container | select | move + carry contents | edit title | node menu | resize |
+| Free image | select | move | (crop drill) | **photo menu** | resize (aspect) |
+| Media node | select | move | — | node menu | resize |
+| Slideshow (ytss) | select | move | play (enter) | node menu | **scale (br → `ytssScale`)** |
+| Table card | select | move (header) | edit cell | table menu | scale + col/row resize |
+| Empty canvas | deselect | marquee select | create node | background menu | — |
+| Edge | select | (marquee starts) | remove edge | — | — |
+
+### Platform: secondary-click vs multi-select (NEVER REGRESS — this broke right-click repeatedly)
+- **On a Mac, Ctrl+click IS the secondary (right) click.** It fires a `contextmenu` event carrying
+  `ctrlKey:true`. It MUST open the context menu. Multi-select on Mac uses **Cmd** (`metaKey`).
+- **On Windows/Linux, Ctrl is the multi-select modifier** and the physical right button opens menus.
+- Rules that enforce this (`IS_MAC` in `Graph.jsx`): a `contextmenu` event ALWAYS opens the menu
+  (never treat `ctrlKey` as multi-select there); `onDown` tracks `Ctrl+left` as a menu press only on
+  Mac; `handleNodeMouseDown`/`handleImageMouseDown` treat `Ctrl+left` as multi-select only on non-Mac,
+  and as a no-op secondary-click on Mac. **Never pass `ctrlKey` as an "isCtrl / skip menus" flag again.**
+- **Double-click per element type is fixed** (see table): a **Text box** edits/selects text — it must NOT
+  fire the photo Caption prompt (exclude `isText` from the caption `onDoubleClick`). A **photo** opens its
+  caption; a **frame/node** edits its title/label.
+
+### Multi-select
+- **Cmd-click (Mac) / Ctrl-click (Win/Linux)** toggles a node in/out of the selection (no drag).
+- **Drag on empty canvas** = rubber-band marquee (D3 pan suppressed for its duration, filter restored on
+  mouseup via `zoomFilterRef`).
+- With >1 selected, dragging any member moves the whole group; right-click opens the **bulk menu**, whose
+  header reflects the selection ("N frames selected" when all are frames). Frame-only selections hide
+  Shape/Motion (not meaningful) and expose Align & distribute + Tools (USPTO).
 
 ## Past gotchas / never regress
 - `"Invalid schema: pim"` → never use `.schema('pim')` in db.js

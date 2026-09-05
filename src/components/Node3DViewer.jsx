@@ -97,7 +97,7 @@ class ErrorBoundary extends Component {
     if (this.state.err) return (
       <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', width:'100%', height:'100%', color:'#f87171', fontSize:'0.72rem', textAlign:'center', padding:12, gap:6 }}>
         <span>Failed to load model</span>
-        <span style={{ color:'#445' }}>{String(this.state.err.message).slice(0, 80)}</span>
+        <span style={{ color:'#c98a8a' }}>{String(this.state.err.message).slice(0, 80)}</span>
       </div>
     )
     return this.props.children
@@ -177,13 +177,13 @@ export default function Node3DViewer({
           <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
           <line x1="12" y1="22.08" x2="12" y2="12"/>
         </svg>
-        <span style={{ fontSize:'0.72rem', color:'#556' }}>No model loaded</span>
+        <span style={{ fontSize:'0.72rem', color:'#8090b8' }}>No model loaded</span>
         {!readOnly && <>
           <button onClick={() => fileInputRef.current?.click()}
             style={{ padding:'5px 14px', background:'#12182e', border:'1px solid #2d3a6a', borderRadius:6, fontSize:'0.72rem', color:'#88b4e8', cursor:'pointer' }}>
             Import 3D file
           </button>
-          <span style={{ fontSize:'0.62rem', color:'#334' }}>GLB · OBJ</span>
+          <span style={{ fontSize:'0.62rem', color:'#7080a0' }}>GLB · OBJ</span>
           <input ref={fileInputRef} type="file" accept=".glb,.obj" style={{ display:'none' }} onChange={handleFile} />
         </>}
       </div>
@@ -191,7 +191,7 @@ export default function Node3DViewer({
   }
 
   if (!blobUrl) {
-    return <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#334', fontSize:'0.75rem' }}>Loading…</div>
+    return <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#8090b8', fontSize:'0.75rem' }}>Loading…</div>
   }
 
   return (

@@ -4,7 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Force the browser to revalidate index.html each load so a new deploy's hashed JS is picked up
+         immediately (GitHub Pages caches HTML ~10min, which kept serving stale builds). -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>pim</title>
+    <!-- Web fonts for the Text box element (so everyone sees the same fonts, not just system ones). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Roboto:wght@400;700&family=Poppins:wght@400;600&family=Montserrat:wght@400;700&family=Playfair+Display:wght@400;700&family=Merriweather&family=Lora&family=JetBrains+Mono&family=Bebas+Neue&family=Pacifico&family=Caveat:wght@400;700&display=swap" />
   </head>
   <body>
     <div id="root"></div>

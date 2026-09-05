@@ -24,3 +24,64 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   0%   { filter: hue-rotate(0deg); }
   100% { filter: hue-rotate(360deg); }
 }
+
+/* Table node — reveal a row's delete button on hover */
+.tc-row:hover .tc-rowdel { opacity: 1 !important; }
+
+/* Rich table-cell content: compact bullet / numbered lists (browser defaults indent ~40px and add big
+   margins, which broke the layout inside a small cell), and an inline checkbox. */
+[data-tcell] ul, [data-tcell] ol { margin: 1px 0; padding-left: 17px; }
+[data-tcell] li { line-height: 1.4; }
+[data-tcell] input.tc-chk { width: 13px; height: 13px; margin: 0 5px 0 0; vertical-align: -2px; accent-color: #5b6af0; cursor: pointer; }
+
+/* ─── Shared design system (Figma/Linear-style clean skin) ─────────────────── */
+/* Ghost button: transparent, subtle hover, quiet by default. */
+.pim-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  background: transparent; border: none; color: #8a92b4;
+  border-radius: 8px; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 6px 9px; line-height: 1; transition: background .12s ease, color .12s ease;
+}
+.pim-btn:hover { background: rgba(120,130,200,0.14); color: #c7cdec; }
+.pim-btn.pim-on { background: #232a45; color: #aeb8ff; }
+.pim-btn.pim-accent { color: #7c8cff; font-weight: 600; }
+/* Segmented control */
+.pim-seg { display: inline-flex; gap: 2px; padding: 3px; background: #14181f; border: 1px solid #21212e; border-radius: 10px; }
+.pim-seg > button { border: none; background: transparent; color: #7d84a4; border-radius: 7px; padding: 5px 11px; cursor: pointer; font-size: 0.78rem; font-weight: 500; font-family: -apple-system, sans-serif; transition: background .12s, color .12s; }
+.pim-seg > button:hover { color: #c7cdec; }
+.pim-seg > button.pim-on { background: #282c4a; color: #eef1ff; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+
+/* Writer outline row — hover-revealed controls (eye/target/delete) left of the chevron */
+.wr-hov { display: none; }
+.wr-row:hover .wr-hov { display: inline-flex; }
+
+/* Writer toolbar ghost buttons */
+.pim-wtb { transition: background .12s ease, color .12s ease; }
+.pim-wtb:hover { background: rgba(120,130,200,0.14); }
+
+/* Top-nav (Figma/Linear style) hover polish */
+.pim-nav-tab { transition: background .13s ease, color .13s ease; }
+.pim-nav-tab:hover { color: #c7cdec; }
+.pim-nav-btn { transition: background .13s ease, color .13s ease, border-color .13s ease; }
+.pim-nav-btn:hover { background: #191924; color: #c7cdec; }
+
+/* Node border-treatment spin (continuous rotation of the shape body) */
+@keyframes pim-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Frame-stage shape change: SVG can't tween between element types, so we "morph" with a scale-pop
+   around the node centre while the shape swaps — reads as a soft transition instead of a hard snap. */
+@keyframes pim-shape-morph { 0% { transform: scale(1); } 45% { transform: scale(0.5); } 100% { transform: scale(1); } }
+
+/* Table resize lines highlight under the cursor. Move-borders no longer highlight
+   individually — hovering any of them lights the whole-table selection ring instead. */
+.tc-linediv:hover { background: rgba(91,106,240,0.6); }
+.tc-rowgrip:hover, .tc-rowdel:hover { opacity: 1 !important; }
+
+/* While dragging (a canvas element), no media element may capture the pointer — a cross-origin
+   YouTube iframe otherwise swallows the mouseup and "glues" the drag. Kills capture globally. */
+body.pim-dragging iframe,   body.pim-drag-nomedia iframe,
+body.pim-dragging video,    body.pim-drag-nomedia video,
+body.pim-dragging audio,    body.pim-drag-nomedia audio,
+body.pim-dragging embed,    body.pim-drag-nomedia embed,
+body.pim-dragging object,   body.pim-drag-nomedia object { pointer-events: none !important; }

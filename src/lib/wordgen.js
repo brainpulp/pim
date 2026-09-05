@@ -1,0 +1,155 @@
+// Word-generation tool.
+//
+// A "master" node's criteria (its non-generated children + its own label) are combined into a prompt
+// that generates child WORDS. Triggering a word generates child VARIATIONS, optionally with an injected
+// modifier. Generated nodes are tagged in the store as meta.wg = 'word' | 'variation' so they're excluded
+// from the criteria on the next run.
+//
+// Backend: if the user has pasted an Anthropic API key (stored locally), we call the API directly from
+// the browser (single-user app; the key never leaves their machine). With no key we fall back to a stub
+// generator so the whole mechanic is usable/demonstrable offline. Swapping the direct call for a Supabase
+// Edge Function later is a drop-in change inside `callClaude`.
+
+import { supabase } from './supabase'
+
+const KEY_LS = 'pim_wordgen_key'
+const MODEL_LS = 'pim_wordgen_model'
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
+
+export const getWordgenKey = () => { try { return localStorage.getItem(KEY_LS) || '' } catch { return '' } }
+export const setWordgenKey = (k) => { try { k ? localStorage.setItem(KEY_LS, k) : localStorage.removeItem(KEY_LS) } catch { /* ignore */ } }
+export const getWordgenModel = () => { try { return localStorage.getItem(MODEL_LS) || DEFAULT_MODEL } catch { return DEFAULT_MODEL } }
+export const setWordgenModel = (m) => { try { m ? localStorage.setItem(MODEL_LS, m) : localStorage.removeItem(MODEL_LS) } catch { /* ignore */ } }
+export const hasWordgenKey = () => !!getWordgenKey()
+
+// ── Prompt building ─────────────────────────────────────────────────────────
+function buildPrompt({ mode, theme, brief, criteria, seeds, seed, modifier, count }) {
+  const lines = []
+  lines.push('You are a branding/naming assistant. Names may be invented (non-dictionary) words — that is encouraged.')
+  if (mode === 'variations') {
+    lines.push(`Generate ${count} creative variations of the name: "${seed}".`)
+  } else {
+    lines.push(`Generate ${count} original brand names/words.`)
+  }
+  if (theme) lines.push(`Theme / project: ${theme}.`)
+  if (brief) lines.push(`What the naming is for (brief): ${brief}`)
+  if (criteria && criteria.length) lines.push(`They must satisfy ALL of these criteria:\n- ${criteria.join('\n- ')}`)
+  if (seeds && seeds.length) lines.push(`Take stylistic inspiration from these example words (which may themselves be invented) without copying them:\n- ${seeds.join('\n- ')}`)
+  if (modifier) lines.push(`Additional instruction: ${modifier}.`)
+  lines.push('Return ONLY a compact JSON array of strings, no prose, no numbering, no code fences.')
+  return lines.join('\n')
+}
+
+// ── Real backend (direct browser call to Anthropic) ──────────────────────────
+async function callClaude(prompt, maxTokens = 1024) {
+  const key = getWordgenKey()
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: getWordgenModel(),
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try { const j = await res.json(); msg = j?.error?.message || msg } catch { /* ignore */ }
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  const text = (data?.content || []).map(b => b?.text || '').join('').trim()
+  return text
+}
+
+// Pull a JSON array of strings out of a model response (tolerant of stray prose / fences).
+function parseWords(text) {
+  if (!text) return []
+  let t = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+  const start = t.indexOf('['), end = t.lastIndexOf(']')
+  if (start !== -1 && end !== -1 && end > start) t = t.slice(start, end + 1)
+  try {
+    const arr = JSON.parse(t)
+    if (Array.isArray(arr)) return arr.map(x => String(x).trim()).filter(Boolean)
+  } catch { /* fall through to line parsing */ }
+  return t.split('\n').map(l => l.replace(/^[\s\-*\d.)]+/, '').trim()).filter(Boolean).slice(0, 50)
+}
+
+// ── Stub generator (no key) ──────────────────────────────────────────────────
+// Deterministic-ish, plausible-looking made-up words derived from the inputs, so the tool is fully
+// usable to shape the tree before wiring a key. Varied by index so repeats differ.
+const SYL = ['ka', 'lo', 'ven', 'tri', 'sol', 'mar', 'quo', 'bel', 'nyx', 'zeph', 'ora', 'lum', 'fen', 'ryl', 'thes', 'vio', 'cad', 'mun', 'per', 'sil']
+function stubWords({ mode, seed, theme, criteria, seeds, count, salt = 0 }) {
+  const base = (mode === 'variations' ? seed : (seeds?.[0] || criteria?.[0] || theme || 'word')) || 'word'
+  const clean = base.toLowerCase().replace(/[^a-z]/g, '').slice(0, 4) || 'wor'
+  const out = []
+  for (let i = 0; i < count; i++) {
+    const a = SYL[(i * 7 + salt + clean.length) % SYL.length]
+    const b = SYL[(i * 13 + salt + 3) % SYL.length]
+    let w
+    if (mode === 'variations') w = clean.charAt(0).toUpperCase() + clean.slice(1) + a + (i % 2 ? b : '')
+    else w = (a.charAt(0).toUpperCase() + a.slice(1) + b + (i % 3 === 0 ? clean.slice(0, 2) : ''))
+    out.push(w.charAt(0).toUpperCase() + w.slice(1))
+  }
+  return out
+}
+
+// ── USPTO trademark check (via the brand-tools Supabase Edge Function) ────────
+// Returns a map { name -> { hits:number|null, note:string } } of LIVE trademark hit counts.
+// Must go through the Edge Function: USPTO can't be called from the browser (CORS).
+export async function checkUSPTO(names) {
+  const list = [...new Set((names || []).map(n => String(n || '').trim()).filter(Boolean))]
+  if (!list.length) return {}
+  const { data, error } = await supabase.functions.invoke('brand-tools', { body: { action: 'uspto', names: list } })
+  if (error) throw new Error(error.message || 'USPTO check failed')
+  if (data?.error) throw new Error(data.error)
+  const map = {}
+  for (const r of (data?.results || [])) map[r.name] = { hits: r.hits, note: r.note }
+  return map
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+// opts: { mode:'words'|'variations', theme, brief, criteria:string[], seeds:string[], seed, modifier, count }
+// returns { words: string[], stub: boolean }
+export async function generateWords(opts) {
+  const count = Math.max(1, Math.min(30, opts.count || 8))
+  if (!hasWordgenKey()) {
+    return { words: stubWords({ ...opts, count, salt: (opts.seed || '').length + (opts.modifier || '').length + (opts.seeds || []).length }), stub: true }
+  }
+  const prompt = buildPrompt({ ...opts, count })
+  const text = await callClaude(prompt)
+  const words = parseWords(text).slice(0, count)
+  return { words, stub: false }
+}
+
+// Screen candidate names for trademark / existing-brand collision risk. Requires a key (real judgement).
+// Returns [{ name, risk:'low'|'medium'|'high', note }] aligned to the input order where possible.
+export async function assessRisk(names, { theme, brief } = {}) {
+  if (!hasWordgenKey() || !names?.length) return []
+  const prompt = [
+    'You are a trademark / brand-collision screener. For each candidate brand name below, estimate the risk that it collides with an existing well-known trademark or brand, or is a common word likely already registered in this space.',
+    theme ? `Context / theme: ${theme}.` : '',
+    brief ? `Brief: ${brief}` : '',
+    'Candidate names:',
+    names.map((n, i) => `${i + 1}. ${n}`).join('\n'),
+    'Return ONLY a compact JSON array, one object per name IN THE SAME ORDER: {"name": string, "risk": "low"|"medium"|"high", "note": string (max ~12 words, why)}. No prose, no code fences.',
+  ].filter(Boolean).join('\n')
+  const text = await callClaude(prompt, 2000)
+  let t = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+  const s = t.indexOf('['), e = t.lastIndexOf(']')
+  if (s !== -1 && e !== -1 && e > s) t = t.slice(s, e + 1)
+  try {
+    const arr = JSON.parse(t)
+    if (Array.isArray(arr)) return arr.map(o => ({
+      name: String(o?.name ?? '').trim(),
+      risk: ['low', 'medium', 'high'].includes(o?.risk) ? o.risk : 'medium',
+      note: String(o?.note ?? '').trim(),
+    }))
+  } catch { /* ignore */ }
+  return []
+}
