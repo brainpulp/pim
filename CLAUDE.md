@@ -291,6 +291,21 @@ this and keep it true.** Handlers live in `Graph.jsx`: `handleNodeMouseDown`, `h
   fire the photo Caption prompt (exclude `isText` from the caption `onDoubleClick`). A **photo** opens its
   caption; a **frame/node** edits its title/label.
 
+### Right-click menus: backdrops + the contextmenu-timing trap (NEVER REGRESS — cost many rounds)
+- **A menu's full-screen backdrop must close on `onMouseDown` only — NEVER on `onContextMenu`.** On
+  Windows/Linux the `contextmenu` event fires AFTER `mouseup`, so the click that OPENS a menu (on mouseup)
+  mounts the backdrop, then that same click's trailing `contextmenu` lands on the backdrop and instantly
+  closes it. On Mac `contextmenu` fires on mousedown (before the backdrop exists), so the bug is invisible
+  there. The node menu's backdrop was `onContextMenu={preventDefault}` (correct); the photo menu's was
+  `{preventDefault; setPhotoMenu(null)}` (closed itself) — that one line broke image right-click on Windows
+  for many sessions. All menu backdrops: `onContextMenu={e => e.preventDefault()}`, nothing else. Right-click
+  elsewhere still reroutes correctly via the window-level handler.
+- **Diagnosing a bug you cannot reproduce:** don't ship speculative fix after speculative fix. Add a
+  temporary on-screen diagnostic (see the `?rcdebug=1` badge / `rcLog`) that reports the REAL state on the
+  user's machine — including the *render outcome*, not just the handler's decision. Here the handler
+  correctly "opened" the menu but it was `null` by render time; only the render-state readout revealed that.
+  Test the rendered result, and consider platform/timing (event ordering) differences explicitly.
+
 ### Multi-select
 - **Cmd-click (Mac) / Ctrl-click (Win/Linux)** toggles a node in/out of the selection (no drag).
 - **Drag on empty canvas** = rubber-band marquee (D3 pan suppressed for its duration, filter restored on
