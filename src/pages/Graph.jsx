@@ -2646,6 +2646,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return
         }
       }
+      // ── RULE 1b: DOM-target routing above can miss when something ELSE is the topmost element over the
+      // image — a floating panel, a stale overlay, or an image behind a node. So ALSO resolve a free image
+      // by COORDINATE here (topmost: front-z, then latest in array) and open the photo menu. This is the
+      // belt-and-suspenders that makes "right-click on a photo" work no matter what is painted over it.
+      if (!forceBg && !isCtrl) {
+        const st = useGraphStore.getState()
+        const imgs = st.views.find(v => v.id === st.activeViewId)?.images || []
+        let hit = null
+        for (const im of imgs) {
+          if (im.visible === false) continue
+          const w = im.width || 0, h = im.height || 0
+          if (Math.abs(sx - (im.x || 0)) <= w / 2 && Math.abs(sy - (im.y || 0)) <= h / 2) {
+            if (!hit || (im.z === 'front' ? 1 : 0) >= (hit.z === 'front' ? 1 : 0)) hit = im
+          }
+        }
+        if (hit) {
+          setContextMenu(null); setNodeMenu(null); setBulkMenu(null)
+          setSelectedImageIds(prev => prev.has(hit.id) ? prev : new Set([hit.id]))
+          setPhotoMenu({ px, py, imageId: hit.id })
+          return
+        }
+      }
       // A free image placed OVER a table/card node is the user's overlay — right-clicking it must open the
       // PHOTO menu, not the table/card menu underneath. A background image (rendered below the table in
       // paint order) has the table as its DOM target, so the table-surface / cardnode routing below would
@@ -2739,7 +2761,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       else if (ev.button === 0 && ev.ctrlKey && !ev.metaKey && IS_MAC) press = { x: ev.clientX, y: ev.clientY, t: ev.target, moved: false, menu: true, shift: ev.shiftKey }
       else press = null
     }
-    const onMove = ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) >= 5) press.moved = true }
+    // 10px, not 5 — a small wobble on a right-click (common on trackpads / a shaky mouse) must NOT be read
+    // as a pan-drag and swallow the menu. A real right-drag pan moves far more than this.
+    const onMove = ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) >= 10) press.moved = true }
     const onUp = ev => {
       if (press && press.moved) suppressContext = true   // dragged → the contextmenu that fires right after must NOT open the menu
       else if (press && press.menu) openMenuAt(press.x, press.y, press.t, false, press.shift)   // clean secondary-click → open the menu
