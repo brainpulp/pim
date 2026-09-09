@@ -366,6 +366,37 @@ function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
   )
 }
 
+// ── Text step: a full-frame text card (headline / caption / quote). Timed exactly like an image step. ──
+// Text size is in `cqh` (container-height %) so it looks identical inline on the node and fullscreen.
+function TextSlide({ clip, autoplay = false, onReady, onEnded, style }) {
+  const timer = useRef(null)
+  const remaining = useRef((clip.duration || 5) * 1000)
+  const startedAt = useRef(0)
+  useEffect(() => {
+    const arm = (ms) => { clearTimeout(timer.current); startedAt.current = Date.now(); timer.current = setTimeout(() => onEnded?.(), ms) }
+    if (autoplay && !clip.loop) arm((clip.duration || 5) * 1000)
+    onReady?.({
+      play: () => { if (!clip.loop) arm(remaining.current) },
+      pause: () => { clearTimeout(timer.current); remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt.current)) },
+      seekBy: () => {}, seekTo: () => {}, mute: () => {}, unMute: () => {}, setRate: () => {},
+      duration: () => clip.duration || 5, time: () => 0,
+    })
+    return () => clearTimeout(timer.current)
+  }, [clip.text, clip.duration, clip.loop, autoplay]) // eslint-disable-line
+  const align = clip.align || 'center'
+  const justify = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: clip.bg || '#0c0c1a', overflow: 'hidden',
+      containerType: 'size', display: 'flex', alignItems: 'center', justifyContent: justify, ...style }}>
+      <div style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: clip.bold === false ? 400 : 600,
+        fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {clip.text || 'Text'}
+      </div>
+    </div>
+  )
+}
+
 // ── Google Drive embed: a dumb <iframe> preview. No JS player API, so no seek/trim/markers and no
 // "ended" event — the show advances by click / delay only. Autoplays via the preview URL param. ──
 function GDrivePlayer({ clip, autoplay = false, interactive = true, onReady, style }) {
@@ -384,6 +415,7 @@ function GDrivePlayer({ clip, autoplay = false, interactive = true, onReady, sty
 // ── Polymorphic slide player: dispatches to the right engine by kind, one uniform handle ──────
 export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, coverOnPause = false, onReady, onEnded, style }) {
   const kind = clipKind(clip)
+  if (kind === 'text') return <TextSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
   if (kind === 'image') return <ImageSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
   if (kind === 'gdrive') return <GDrivePlayer clip={clip} autoplay={autoplay} interactive={interactive} onReady={onReady} style={style} />
   if (kind === 'video' || kind === 'audio') return <MediaFilePlayer clip={clip} kind={kind} autoplay={autoplay} muted={muted} interactive={interactive} onReady={onReady} onEnded={onEnded} style={style} />
@@ -661,6 +693,11 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
     onChange([...clips, { id: uid(), kind: 'youtube', youtubeId: id, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }])
     setUrlInput(''); setSel(clips.length)
   }
+  const addText = () => {
+    onChange([...clips, { id: uid(), kind: 'text', text: 'New text', title: 'Text', trigger: 'click', duration: 5,
+      bg: '#0c0c1a', color: '#e8ecff', fontSize: 9, align: 'center' }])
+    setSel(clips.length)
+  }
   const del = (i) => { onChange(clips.filter((_, j) => j !== i)); setSel(s => Math.max(0, Math.min(s, clips.length - 2))) }
   // Duplicate a clip (right after it) so you can show a different segment of the SAME video in one slideshow.
   const dup = (i) => { const copy = { ...clips[i], id: uid() }; onChange([...clips.slice(0, i + 1), copy, ...clips.slice(i + 1)]); setSel(i + 1) }
@@ -775,6 +812,8 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                     outline: i === sel ? '1.5px solid #5b6af0' : '1px solid #23234a' }}>
                   {thumbSrc
                     ? <img src={thumbSrc} alt="" width={108} height={40} style={{ objectFit: 'cover', display: 'block', background: '#000' }} />
+                    : ck === 'text'
+                    ? <div style={{ width: 108, height: 40, background: c.bg || '#0c0c1a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.color || '#e8ecff', fontSize: 10, fontWeight: 600, padding: '0 5px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{(c.text || 'Text').split('\n')[0].slice(0, 22) || 'Text'}</div>
                     : <div style={{ width: 108, height: 40, background: '#0e0e1c', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d84a4', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 }}>{ck === 'audio' ? 'Audio' : 'Video'}</div>}
                   <div style={{ padding: '2px 5px' }}>
                     <div style={{ color: '#c5d0ff', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i + 1}. {c.title || (ck === 'youtube' ? c.youtubeId : ck)}</div>
@@ -796,6 +835,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               </div>
               {onUpload && <button onClick={onUpload} style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>⤒ Upload file…</button>}
               {onPickDrive && <button onClick={onPickDrive} title="Search your Google Drive for a video" style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>🔍 Google Drive…</button>}
+              <button onClick={addText} title="Add a text step" style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>T Add text…</button>
             </div>
           </div>
 
@@ -812,7 +852,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                 {cur.trigger === 'delay' && <input style={{ ...inp, width: 46 }} defaultValue={String((cur.delayMs || 1500) / 1000)} key={'d' + cur.id}
                   onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }} title="seconds" />}
               </div>
-              {k === 'image' && (
+              {(k === 'image' || k === 'text') && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span>Show for</span>
                   <input style={{ ...inp, width: 48 }} defaultValue={String(cur.duration || 5)} key={'dur' + cur.id}
                     onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
@@ -877,7 +917,37 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
           </div>
           <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
         </>}
-        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No slides yet. Paste a YouTube link or upload media above.</div>}
+        {/* Text step editor: the text itself + look (colour, background, size, alignment). */}
+        {cur && k === 'text' && (
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginTop: 4, flexWrap: 'wrap' }}>
+            <textarea value={cur.text || ''} onChange={e => patch(sel, { text: e.target.value })}
+              onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()} placeholder="Type the text…" rows={3}
+              style={{ flex: 1, minWidth: 300, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#e8ecff', borderRadius: 6, fontSize: 14, padding: '8px 10px', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11.5, color: '#8fa0d8', minWidth: 210 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Text
+                  <input type="color" value={cur.color || '#e8ecff'} onChange={e => patch(sel, { color: e.target.value })} style={{ width: 26, height: 20, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} /></label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Background
+                  <input type="color" value={cur.bg || '#0c0c1a'} onChange={e => patch(sel, { bg: e.target.value })} style={{ width: 26, height: 20, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} /></label>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Size</span>
+                <button onClick={() => patch(sel, { fontSize: Math.max(3, (cur.fontSize || 9) - 1) })} style={trimBtn}>−</button>
+                <span style={{ minWidth: 28, textAlign: 'center', color: '#c5d0ff' }}>{cur.fontSize || 9}</span>
+                <button onClick={() => patch(sel, { fontSize: Math.min(40, (cur.fontSize || 9) + 1) })} style={trimBtn}>+</button>
+                <span style={{ marginLeft: 8 }}>Align</span>
+                {['left', 'center', 'right'].map(a => (
+                  <button key={a} onClick={() => patch(sel, { align: a })}
+                    style={{ ...trimBtn, width: 28, background: (cur.align || 'center') === a ? '#2a3358' : 'transparent', color: (cur.align || 'center') === a ? '#eef1ff' : '#aeb8ff' }}>
+                    {a === 'left' ? '⯇' : a === 'right' ? '⯈' : '≡'}</button>
+                ))}
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}>
+                <input type="checkbox" checked={cur.bold !== false} onChange={e => patch(sel, { bold: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Bold</label>
+            </div>
+          </div>
+        )}
+        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No steps yet. Paste a YouTube link, upload media, or add text above.</div>}
       </div>
     </div>
   )
