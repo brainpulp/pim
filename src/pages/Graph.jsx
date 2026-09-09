@@ -6257,11 +6257,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   // Phone-remote command handlers (kept in a ref so PresenterRemote subscribes once but always calls the
   // latest closures). Present/Next/Prev/etc. mirror the on-stage keyboard controls.
+  // Next/Prev dispatch a SYNTHETIC arrow keydown so the phone drives the exact same tested path as the
+  // physical keys — inline slideshow, fullscreen slideshow player, or plain slide — and, crucially, this
+  // works even when a video/YouTube iframe has stolen keyboard focus (real key events never reach the page
+  // then, but a programmatic dispatch fires the window listeners directly). This is why the remote is the
+  // reliable on-stage control.
+  const remoteKey = (key) => { canvasFocused.current = true; window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) }
   remoteActionsRef.current = {
-    next: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent(); else advanceBuild(1) },
-    prev: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) advanceBuild(-1) },
-    nextSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) jumpSlide(1) },
-    prevSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) jumpSlide(-1) },
+    next: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent(); else remoteKey('ArrowRight') },
+    prev: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) remoteKey('ArrowLeft') },
+    nextSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) { if (ytssFullscreenIdRef.current) setYtssFullscreenId(null); jumpSlide(1) } },
+    prevSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) { if (ytssFullscreenIdRef.current) setYtssFullscreenId(null); jumpSlide(-1) } },
     present: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent() },
     exit: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) exitPresentation() },
     black: () => { if (presentingSlideIdxRef.current !== null) setBlackScreen(b => !b) },

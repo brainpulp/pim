@@ -1201,6 +1201,19 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     }
   }, []) // eslint-disable-line
 
+  // Keep keyboard focus on the parent wrapper (not a video/YouTube iframe). A cross-origin iframe that
+  // grabs focus swallows arrow keys — they never reach our window listener. Refocus the wrapper on mount
+  // and on every clip change so the physical arrows keep driving the show. (The phone remote dispatches
+  // synthetic keys and works regardless of focus.)
+  useEffect(() => {
+    const el = wrapRef.current
+    const refocus = () => { try { if (el && document.activeElement?.tagName === 'IFRAME') el.focus({ preventScroll: true }) } catch { /* ignore */ } }
+    el?.focus?.({ preventScroll: true })
+    const t1 = setTimeout(refocus, 300)   // after a clip's iframe autofocuses on load, take focus back
+    const t2 = setTimeout(refocus, 1200)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [idx])
+
   const fsPlaying = useRef(true)
   const goto = (i) => { setEnded(false); fsPlaying.current = true; setIdx(i) }   // remount → autoplay the new slide
   const advance = () => {
@@ -1250,7 +1263,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   }, [clips.length]) // eslint-disable-line
 
   return (
-    <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div ref={wrapRef} tabIndex={0} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', outline: 'none' }}>
       <div style={{ position: 'relative', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
         {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
         {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
