@@ -5926,8 +5926,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       Math.abs((n.x || 0) - (frame.x || 0)) <= fhw && Math.abs((n.y || 0) - (frame.y || 0)) <= fhh)
     return y?.id || null
   }
+  // Real device fullscreen for presenting (Fullscreen API). Enter when the show starts, leave on exit/Esc.
+  const enterDeviceFullscreen = () => {
+    const el = document.documentElement
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen
+    if (req && !document.fullscreenElement && !document.webkitFullscreenElement) {
+      try { const p = req.call(el); if (p && p.catch) p.catch(() => {}) } catch { /* denied — presentation still works windowed */ }
+    }
+  }
+  const exitDeviceFullscreen = () => {
+    const ex = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen
+    if (ex && (document.fullscreenElement || document.webkitFullscreenElement)) {
+      try { const p = ex.call(document); if (p && p.catch) p.catch(() => {}) } catch { /* ignore */ }
+    }
+  }
+
   const presentSlide = (idx, direction) => {
     if (idx < 0 || idx >= slideSimNodes.length) return
+    const entering = presentingSlideIdxRef.current === null   // first slide of the show → go true-fullscreen
+    if (entering) enterDeviceFullscreen()
     restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
     setPresentingSlideIdx(idx)
     simRef.current?.stop()
@@ -5993,7 +6010,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }
   const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
 
-  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
+  const exitPresentationRef = useRef(null); exitPresentationRef.current = exitPresentation
+  useEffect(() => {
+    const onFs = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement && presentingSlideIdxRef.current !== null) exitPresentationRef.current?.() }
+    document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs)
+    return () => { document.removeEventListener('fullscreenchange', onFs); document.removeEventListener('webkitfullscreenchange', onFs) }
+  }, [])
 
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
