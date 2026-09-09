@@ -1198,6 +1198,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     return () => window.removeEventListener('keydown', onKey, true)
   }, [showSlideGrid])
 
+  // Which slide is "selected" in the thumbnail list — F5 / Present start from it (a canvas frame selection
+  // still wins). null = nothing chosen yet → start from the beginning.
+  const selectedSlideIdxRef = useRef(null)
+
   // Phone remote control: a stable per-browser code; the phone opens `#/remote/<code>` and drives the
   // deck over a Supabase Realtime channel. `remoteOn` keeps the presenter subscribed for the session.
   const remoteCodeRef = useRef(null)
@@ -6259,10 +6263,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Start presenting from the selected slide (a selected frame that's a slide), else the first slide.
   const startPresent = () => {
     if (!slideSimNodes.length) return
-    let idx = 0
+    // Start from: (1) a slide selected on the canvas, else (2) the slide highlighted in the thumbnail list,
+    // else (3) the beginning.
+    let idx = null
     const selId = selected?.type === 'node' ? selected.id : null
     if (selId) { const i = slideSimNodes.findIndex(s => s.id === selId); if (i >= 0) idx = i }
-    presentSlide(idx, 'fwd')
+    if (idx == null) { const s = selectedSlideIdxRef.current; if (s != null && s >= 0 && s < slideSimNodes.length) idx = s }
+    presentSlide(idx ?? 0, 'fwd')
   }
 
   const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
@@ -8010,6 +8017,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onPresent={(idx) => presentSlide(idx, 'fwd')}
           onOpenGrid={() => setShowSlideGrid(true)}
           onOpenRemote={() => { setRemoteOn(true); setShowRemote(true) }}
+          onSelectSlideIdx={(i) => { selectedSlideIdxRef.current = i }}
           remoteOn={remoteOn}
           removeSlide={removeSlide}
           addSlide={addSlide}
@@ -8625,7 +8633,7 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -8636,6 +8644,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
   const [currentIdx, setCurrentIdx] = useState(0)   // which slide "Update slide" targets (last clicked / presented)
+  useEffect(() => { onSelectSlideIdx?.(currentIdx) }, [currentIdx]) // eslint-disable-line -- report the highlighted slide so F5/Present start from it
   const [selectedIds, setSelectedIds] = useState(() => new Set())   // multi-select for grouping
   const [groupMenu, setGroupMenu] = useState(null)   // { groupId, name, x, y } — right-click a group header
   const [renamingGroupId, setRenamingGroupId] = useState(null)
@@ -8724,11 +8733,11 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
     <div ref={containerRef} data-slide-sidebar="1" onMouseDown={e => e.stopPropagation()}
       style={{ width: 190, flexShrink: 0, borderLeft: '1px solid #1e1e2e', background: '#0d0d1a',
         overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px 8px 16px' }}>
-      {/* Prominent Present button, pinned at the very top. Keyboard: F5 starts from the first slide. */}
+      {/* Prominent Present button, pinned at the very top. Starts from the highlighted slide (F5 does too). */}
       <button
-        onClick={() => { if (slideSimNodes.length) (onPresent ? onPresent(0) : (setPresentingSlideIdx(0), zoomToFrame(slideSimNodes[0]))) }}
+        onClick={() => { if (!slideSimNodes.length) return; const i = Math.max(0, Math.min(currentIdx, slideSimNodes.length - 1)); onPresent ? onPresent(i) : (setPresentingSlideIdx(i), zoomToFrame(slideSimNodes[i])) }}
         disabled={!slideSimNodes.length}
-        title="Present from the first slide (F5)"
+        title="Present from the highlighted slide (F5)"
         style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, width:'100%', marginBottom:8,
           background: slideSimNodes.length ? 'linear-gradient(180deg,#5b6af0,#4652d6)' : '#20233a',
           border:'none', color: slideSimNodes.length ? '#fff' : '#5a6088', borderRadius:9, padding:'10px 12px',
