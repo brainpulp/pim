@@ -609,6 +609,30 @@ const useGraphStore = create((set, get) => ({
     }),
   })),
 
+  // ── Interim slide (a bounce-to view between slides) ──────────────────────────────────────────
+  // `interimSlideId` = a frame designated as the interim view (typically a zoomed-out overview).
+  // `interimAfter[frameId]` = true means: after the slide `frameId`, the presentation flies to the
+  // interim view briefly, then continues to the next slide. Toggle per gap.
+  setInterimSlide: (frameId) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
+        ...ss, interimSlideId: ss.interimSlideId === frameId ? null : frameId,   // toggle: click again to clear
+      }),
+    }),
+  })),
+  toggleInterimAfter: (frameId) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => {
+        if (ss.id !== v.activeSlideshowId) return ss
+        const interimAfter = { ...(ss.interimAfter || {}) }
+        if (interimAfter[frameId]) delete interimAfter[frameId]; else interimAfter[frameId] = true
+        return { ...ss, interimAfter }
+      }),
+    }),
+  })),
+
   setSlideBgColor: (ssId, slideId, color) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v,

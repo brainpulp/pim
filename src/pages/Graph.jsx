@@ -1364,6 +1364,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ungroupSlides       = useGraphStore(s => s.ungroupSlides)
   const renameSlideGroup    = useGraphStore(s => s.renameSlideGroup)
   const toggleSlideGroupCollapsed = useGraphStore(s => s.toggleSlideGroupCollapsed)
+  const setInterimSlide     = useGraphStore(s => s.setInterimSlide)
+  const toggleInterimAfter  = useGraphStore(s => s.toggleInterimAfter)
   const addSlideshow        = useGraphStore(s => s.addSlideshow)
   const deleteSlideshow     = useGraphStore(s => s.deleteSlideshow)
   const renameSlideshow     = useGraphStore(s => s.renameSlideshow)
@@ -6054,13 +6056,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         : { src: fsVid.src, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1 }), 200)
     }
   }
+  // Cross forward to the next slide, optionally bouncing through the designated interim view first
+  // (when the gap after the current slide has it enabled). current → interim (brief) → next slide.
+  const crossToNextSlide = () => {
+    const cur = presentingSlideIdxRef.current ?? 0
+    const nextIdx = cur + 1
+    if (nextIdx >= slideSimNodes.length) { presentSlide(nextIdx, 'fwd'); return }
+    const st = useGraphStore.getState()
+    const v = st.views.find(x => x.id === st.activeViewId)
+    const ss = (v?.slideshows || []).find(x => x.id === v?.activeSlideshowId) || (v?.slideshows || [])[0]
+    const gapId = slideSimNodes[cur]?.id
+    const interimId = ss?.interimSlideId
+    if (interimId && ss?.interimAfter?.[gapId]) {
+      const fn = simNodesRef.current.find(n => n.id === interimId)
+      if (fn && fn.id !== gapId && fn.id !== slideSimNodes[nextIdx]?.id) {
+        restoreOverlayInstant()
+        zoomToFrame(fn)                                        // fly out to the interim overview
+        setTimeout(() => presentSlide(nextIdx, 'fwd'), 850)    // …then land on the next slide
+        return
+      }
+    }
+    presentSlide(nextIdx, 'fwd')
+  }
   const advanceBuild = (dir) => {
     const cur = presentingSlideIdxRef.current ?? 0
     const frame = slideSimNodes[cur]; if (!frame) return
     const stages = slideStages(cur)
-    if (!stages.length) { presentSlide(cur + dir, dir > 0 ? 'fwd' : 'back'); return }
+    if (!stages.length) { if (dir > 0) crossToNextSlide(); else presentSlide(cur - 1, 'back'); return }
     const next = presentStageIdxRef.current + dir
-    if (next >= stages.length) { presentSlide(cur + 1, 'fwd'); return }
+    if (next >= stages.length) { crossToNextSlide(); return }
     if (next < 0) { presentSlide(cur - 1, 'back'); return }
     setPresentStage(next)
     applyStage(frame.id, next)
@@ -7186,6 +7210,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onDrill={() => { setDrillRoot(hn.id); close() }}
               onMakeSlide={vp.shape === 'frame' ? () => { if (slideIds.includes(hn.id)) { removeSlide(hn.id) } else { addSlide(hn.id); setShowSlideSidebar(true) } close() } : null}
               isSlide={slideIds.includes(hn.id)}
+              onSetInterim={vp.shape === 'frame' ? () => { setInterimSlide(hn.id); setShowSlideSidebar(true); close() } : null}
+              isInterim={activeSlideshow?.interimSlideId === hn.id}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
               onToggleKanban={() => { toggleKanbanNode(hn.id); close() }}
@@ -7773,6 +7799,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           ungroupSlides={ungroupSlides}
           renameSlideGroup={renameSlideGroup}
           toggleSlideGroupCollapsed={toggleSlideGroupCollapsed}
+          setInterimSlide={setInterimSlide}
+          toggleInterimAfter={toggleInterimAfter}
+          interimSlideId={activeSlideshow?.interimSlideId || null}
+          interimAfter={activeSlideshow?.interimAfter || {}}
           addSlideshow={addSlideshow}
           deleteSlideshow={deleteSlideshow}
           renameSlideshow={renameSlideshow}
@@ -8079,7 +8109,7 @@ function ThreeDWrapper({ children, onFocus }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -8237,6 +8267,20 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
           title="Resize the current slide to match the current view"
           style={{ flex:1, fontSize:'0.72rem', padding:'5px 6px', borderRadius:5, border:'1px solid #2a3358', background:'transparent', color:'#c5d0ff', cursor:'pointer', whiteSpace:'nowrap', opacity: slideSimNodes[activeIdx] ? 1 : 0.5 }}>⟳ Update slide</button>
       </div>
+
+      {/* Interim slide status: the designated bounce-to frame (often not a deck slide). ⤾ toggles per gap. */}
+      {interimSlideId && (() => {
+        const inNode = slideSimNodes.find(s => s.id === interimSlideId) || frameSimNodes.find(s => s.id === interimSlideId)
+        const inLabel = inNode?.label || storeNodeById[interimSlideId]?.label || 'Frame'
+        return (
+          <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8, padding:'4px 8px', borderRadius:6, background:'#221a0e', border:'1px solid #4a3a1a' }}>
+            <span style={{ color:'#f6ad55', fontSize:'0.62rem', letterSpacing:'0.04em' }}>⤾ INTERIM</span>
+            <span title={inLabel} style={{ flex:1, fontSize:'0.72rem', color:'#e8c98a', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{inLabel}</span>
+            <button onClick={() => setInterimSlide?.(interimSlideId)} title="Clear interim slide"
+              style={{ background:'transparent', border:'none', color:'#c79a55', cursor:'pointer', fontSize:13, padding:'0 2px', lineHeight:1 }}>×</button>
+          </div>
+        )
+      })()}
 
       {slideSimNodes.map((fn, i) => {
         const fvp = getVP(fn.id)
@@ -8396,13 +8440,27 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
                 <span style={{ flex:1, fontSize:'0.72rem', color:'#88b4e8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                   {i + 1}. {fn.label || 'Frame'}
                 </span>
+                {fn.id === interimSlideId && (
+                  <span title="This is the interim slide (bounce-to view)" style={{ fontSize:'0.6rem', color:'#f6ad55', border:'1px solid #7a5a2a', borderRadius:4, padding:'0 4px', marginRight:2, flexShrink:0 }}>⤾ interim</span>
+                )}
                 <button data-remove="true" title="Remove from slideshow"
                   onMouseDown={e => e.stopPropagation()}
                   onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
                   style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:13, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
               </div>
             </div>
-          </div>
+          </div>,
+          /* Per-gap interim toggle: bounce to the interim view after this slide. Only meaningful once an
+             interim slide is designated, and never after the last slide or on the interim slide itself. */
+          !collapsed && interimSlideId && fn.id !== interimSlideId && i < slideSimNodes.length - 1 && (
+            <div key={`gap-${fn.id}`} style={{ display:'flex', justifyContent:'center', margin:'-3px 0 5px' }}>
+              <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); toggleInterimAfter?.(fn.id) }}
+                title={interimAfter[fn.id] ? 'Bounce to the interim slide after this one (on) — click to turn off' : 'Bounce to the interim slide after this one (off)'}
+                style={{ display:'flex', alignItems:'center', gap:3, fontSize:'0.6rem', lineHeight:1, cursor:'pointer',
+                  background: interimAfter[fn.id] ? '#2a2140' : 'transparent', color: interimAfter[fn.id] ? '#f6ad55' : '#5a6488',
+                  border:`1px solid ${interimAfter[fn.id] ? '#7a5a2a' : '#232a45'}`, borderRadius:10, padding:'1px 7px' }}>⤾</button>
+            </div>
+          )
         ]
       })}
       {dragIdx !== null && dropIdx === slideSimNodes.length && (
@@ -8458,6 +8516,10 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
                 onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
                 style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Ungroup</div>
             )}
+            <div onClick={() => { setInterimSlide?.(slideMenu.frameId); setSlideMenu(null) }}
+              onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              style={{ padding:'8px 12px', cursor:'pointer', color: slideMenu.frameId === interimSlideId ? '#f6ad55' : '#c5d0ff', fontSize:'0.8rem' }}>
+              {slideMenu.frameId === interimSlideId ? '⤾ Clear interim slide' : '⤾ Set as interim slide'}</div>
             <div onClick={() => { const idx = slideSimNodes.findIndex(s => s.id === slideMenu.frameId); if (idx >= 0) { onPresent ? onPresent(idx) : (setPresentingSlideIdx(idx), zoomToFrame(slideSimNodes[idx])) } setSlideMenu(null) }}
               onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
               style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Present from here</div>
@@ -12745,7 +12807,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, onAutoStyle, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
-  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false }) {
+  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false, onSetInterim, isInterim = false }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
@@ -12914,6 +12976,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {onMakeSlide && textRow(isSlide ? 'In slideshow ✓' : 'Make a slide', onMakeSlide, { icon: '▦', right: isSlide ? '✓' : '›', rightColor: isSlide ? '#f6ad55' : '#8090b8', opens: null })}
+        {onSetInterim && textRow(isInterim ? 'Interim slide ✓' : 'Set as interim slide', onSetInterim, { icon: '⤾', right: isInterim ? '✓' : '›', rightColor: isInterim ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && textRow('Show as…', () => setPanel('showas'), { icon: '▧', right: (isList || isKanban || isStrategy) ? '•' : '›', rightColor: (isList || isKanban || isStrategy) ? '#f6ad55' : '#8090b8', opens: 'showas' })}
         {hasChildrenForList && onAutoStyle && textRow('Auto-style children…', onAutoStyle, { icon: '🪄', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
