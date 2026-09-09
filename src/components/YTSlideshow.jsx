@@ -461,8 +461,17 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
 // Markers editor: each marker is a range [s,e] with two independent toggles — Cut (skip it) and Stop
 // (pause there until →). Punch exact m:ss.s in/out, drag the handles, ⇤/⇥ snap to the playhead, ▷ preview.
 const newMarkerId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'm' + Math.random().toString(36).slice(2))
+// A downward-pointing triangle grip that sits above the track and points at the marker position.
+const TriGrip = ({ left, color, onMouseDown, title, dim }) => (
+  <div onMouseDown={onMouseDown} title={title}
+    style={{ position: 'absolute', top: -1, left: `calc(${left}% - 6px)`, width: 0, height: 0,
+      borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: `9px solid ${color}`,
+      cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 4, opacity: dim ? 0.85 : 1,
+      filter: dim ? 'none' : 'drop-shadow(0 0 2px rgba(0,0,0,0.5))' }} />
+)
 function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange }) {
   const trackRef = useRef(null)
+  const [sel, setSel] = useState(null)   // index of the marker whose numeric fields are shown
   const M = Math.max(max || 1, 1)
   const stateRef = useRef({ markers, M }); stateRef.current = { markers, M }
   const pct = t => Math.max(0, Math.min(1, t / M)) * 100
@@ -474,16 +483,32 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
     const at = snap(getTime?.() ?? M / 2)   // a LINE (zero width) — a stop point. Drag its right edge to widen → a cutout.
     commit([...(markers || []), { id: newMarkerId(), s: at, e: at, stop: true }])
   }
+  // which: 's' = move start edge, 'e' = move end edge, 'move' = slide the whole cut (keeps its width).
   const dragHandle = (i, which) => (ev0) => {
-    ev0.preventDefault(); ev0.stopPropagation()
+    ev0.preventDefault(); ev0.stopPropagation(); setSel(i)
+    const r0 = trackRef.current.getBoundingClientRect()
+    const startX = ev0.clientX
+    const orig = stateRef.current.markers[i]
+    const width = Math.abs((orig.e ?? orig.s) - orig.s)
+    let moved = false
     const move = ev => {
-      const r = trackRef.current.getBoundingClientRect()
+      if (Math.abs(ev.clientX - startX) > 3) moved = true
+      const r = trackRef.current?.getBoundingClientRect() || r0
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
       const t = snap(frac * stateRef.current.M)
-      // which='s' moves the start (carrying the whole line), which='e' stretches the end (creates a cutout)
-      onChange(stateRef.current.markers.map((m, j) => j !== i ? m : (which === 's' ? { ...m, s: Math.min(t, m.e) } : { ...m, e: Math.max(t, m.s) })))
+      onChange(stateRef.current.markers.map((m, j) => {
+        if (j !== i) return m
+        if (which === 's') return { ...m, s: Math.min(t, m.e) }
+        if (which === 'e') return { ...m, e: Math.max(t, m.s) }
+        // 'move' — slide the whole cut, keeping its width, clamped to [0, M]
+        let s = Math.max(0, Math.min(stateRef.current.M - width, snap(t - width / 2)))
+        return { ...m, s, e: snap(s + width) }
+      }))
     }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); commit(stateRef.current.markers) }
+    const up = () => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      if (moved) commit(stateRef.current.markers)   // a plain click just selects (handled by setSel above)
+    }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
   const TimeField = ({ value, onCommit, title }) => (
@@ -491,50 +516,64 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
       onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
       onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.currentTarget.value = fmtTime(value, 1); e.currentTarget.blur() } }}
       onBlur={e => { const v = parseTime(e.target.value); if (v == null) { e.target.value = fmtTime(value, 1); return } onCommit(snap(v)) }}
-      style={{ width: 58, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '3px 5px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
+      style={{ width: 54, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '2px 4px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
   )
   const iconBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
   const phPct = playhead != null && playhead >= 0 && playhead <= M ? pct(playhead) : null
+  const selM = sel != null ? markers[sel] : null
+  const H = 26   // full marker height — the middle of a cut is this tall, same as the edges
   return (
-    <div style={{ margin: '2px 8px' }}>
-      <div style={{ fontSize: 10.5, color: '#7c86ad', marginBottom: 4 }}>A <b style={{ color: '#ffcf8a' }}>line</b> = a stop; drag its right edge to widen it into a <b style={{ color: '#ffb0c0' }}>cutout</b>. Toggle ⏸ to make a cutout also pause.</div>
-      <div ref={trackRef} style={{ position: 'relative', height: 26 }}>
-        <div style={{ position: 'absolute', top: 11, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
-        {phPct != null && <div style={{ position: 'absolute', top: 1, left: `calc(${phPct}% - 1px)`, width: 2, height: 22, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 3 }} />}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      {/* Interactive track — drag triangle grips to move edges, drag a cut's body to slide it. */}
+      <div ref={trackRef} onMouseDown={() => setSel(null)}
+        style={{ position: 'relative', height: H + 10, flex: 1, minWidth: 220 }}>
+        <div style={{ position: 'absolute', top: 9 + H / 2 - 2, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a3050' }} />
+        {phPct != null && <div style={{ position: 'absolute', top: 9, left: `calc(${phPct}% - 1px)`, width: 2, height: H, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 3 }} />}
         {markers.map((m, i) => {
           const a = pct(Math.min(m.s, m.e)), bb = pct(Math.max(m.s, m.e)); const wide = isCut(m)
+          const on = i === sel
+          const stopCol = m.stop ? '#ffb454' : '#8a94c0'
           return (
             <div key={m.id || i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-              {wide && <div title="Cutout — skipped on playback" style={{ position: 'absolute', top: 10, left: `${a}%`, width: `${Math.max(0, bb - a)}%`, height: 6, borderRadius: 2, background: 'rgba(248,113,113,0.4)', border: '1px solid #f87171' }} />}
-              <div title={m.stop ? 'Stop point' : 'Marker'} style={{ position: 'absolute', top: 1, left: `calc(${a}% - 1px)`, width: 2, height: 24, borderRadius: 1, background: m.stop ? '#ffb454' : '#8a94c0', boxShadow: m.stop ? '0 0 4px rgba(255,180,84,0.8)' : 'none' }} />
-              <div onMouseDown={dragHandle(i, 's')} title="Drag to move the marker" style={{ position: 'absolute', top: 5, left: `calc(${a}% - 6px)`, width: 5, height: 16, borderRadius: '3px 0 0 3px', background: m.stop ? '#ffb454' : '#8a94c0', cursor: 'ew-resize', pointerEvents: 'auto' }} />
-              <div onMouseDown={dragHandle(i, 'e')} title="Drag right to widen into a cutout" style={{ position: 'absolute', top: 5, left: `calc(${bb}% + 1px)`, width: 5, height: 16, borderRadius: '0 3px 3px 0', background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              {wide
+                // Cut: a full-height band. Its body is the MOVE grip (same height as the edges).
+                ? <div onMouseDown={dragHandle(i, 'move')} title="Drag to slide this cutout"
+                    style={{ position: 'absolute', top: 9, left: `${a}%`, width: `${Math.max(0.4, bb - a)}%`, height: H, borderRadius: 3,
+                      background: m.stop ? 'rgba(255,180,84,0.28)' : 'rgba(248,113,113,0.34)',
+                      border: `1px solid ${m.stop ? '#ffb454' : '#f87171'}`, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : 'none',
+                      cursor: 'grab', pointerEvents: 'auto' }} />
+                // Stop line: a thin vertical bar.
+                : <div onMouseDown={dragHandle(i, 'move')} title="Drag to move this stop"
+                    style={{ position: 'absolute', top: 9, left: `calc(${a}% - 2px)`, width: 4, height: H, borderRadius: 2,
+                      background: stopCol, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : '0 0 4px rgba(255,180,84,0.7)',
+                      cursor: 'grab', pointerEvents: 'auto' }} />}
+              {/* Triangle grips pointing down at the track */}
+              <TriGrip left={a} color={wide ? (m.stop ? '#ffb454' : '#f87171') : stopCol} onMouseDown={dragHandle(i, 's')} title="Drag the start" dim={!on} />
+              {wide && <TriGrip left={bb} color="#f87171" onMouseDown={dragHandle(i, 'e')} title="Drag the end" dim={!on} />}
             </div>
           )
         })}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-        {markers.map((m, i) => {
-          const cs = Math.min(m.s, m.e), ce = Math.max(m.s, m.e); const wide = isCut(m)
-          return (
-            <div key={m.id || i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap', padding: '4px 0', borderTop: i ? '1px solid #1b2036' : 'none' }}>
-              <span style={{ minWidth: 66, color: wide ? '#ffb0c0' : '#ffcf8a', fontWeight: 600 }}>{wide ? `✂ cut ${fmtTime(ce - cs, 1)}` : '⏸ stop'}</span>
-              <span style={{ color: '#7c86ad' }}>at</span>
-              <TimeField value={cs} title="Marker time (m:ss.s)" onCommit={v => setM(i, { s: Math.min(v, ce) })} />
-              {getTime && <button style={iconBtn} title="Set to the current playhead" onClick={() => setM(i, { s: Math.min(snap(getTime()), ce) })}>⇤</button>}
-              <span style={{ color: '#7c86ad' }}>–</span>
-              <TimeField value={ce} title="Cutout end (m:ss.s) — set later than the start to make a cutout" onCommit={v => setM(i, { e: Math.max(v, cs) })} />
-              {getTime && <button style={iconBtn} title="Set the cutout end to the current playhead" onClick={() => setM(i, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
-              {onScrub && <button style={iconBtn} title="Preview: jump to just before this marker" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
-              <span style={{ flex: 1, minWidth: 4 }} />
-              <button title="Pause here until → is pressed" onClick={() => setM(i, { stop: !m.stop })}
-                style={{ background: m.stop ? '#3a2c10' : 'transparent', border: `1px solid ${m.stop ? '#8a6a2f' : '#2d3a6a'}`, color: m.stop ? '#ffcf8a' : '#7d84a4', borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 11, fontWeight: m.stop ? 700 : 500, whiteSpace: 'nowrap' }}>⏸ Stop</button>
-              <button onClick={() => commit(markers.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>✕</button>
-            </div>
-          )
-        })}
-        <button onClick={addMarker} style={{ ...trimBtn, alignSelf: 'flex-start', color: '#aeb8ff', borderColor: '#3a4a8a' }}>＋ Marker at playhead</button>
-      </div>
+      {/* Compact inline editor for the selected marker (or the add button) — keeps the footer short. */}
+      {selM ? (() => {
+        const cs = Math.min(selM.s, selM.e), ce = Math.max(selM.s, selM.e); const wide = isCut(selM)
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8' }}>
+            <span style={{ color: wide ? '#ffb0c0' : '#ffcf8a', fontWeight: 600, whiteSpace: 'nowrap' }}>{wide ? `✂ ${fmtTime(ce - cs, 1)}` : '⏸ stop'}</span>
+            <TimeField value={cs} title="Start (m:ss.s)" onCommit={v => setM(sel, { s: Math.min(v, ce) })} />
+            {getTime && <button style={iconBtn} title="Set start to the playhead" onClick={() => setM(sel, { s: Math.min(snap(getTime()), ce) })}>⇤</button>}
+            <span style={{ color: '#7c86ad' }}>–</span>
+            <TimeField value={ce} title="End (m:ss.s) — later than start = a cutout" onCommit={v => setM(sel, { e: Math.max(v, cs) })} />
+            {getTime && <button style={iconBtn} title="Set end to the playhead" onClick={() => setM(sel, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
+            {onScrub && <button style={iconBtn} title="Preview from just before this marker" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
+            <button title="Pause here until → is pressed" onClick={() => setM(sel, { stop: !selM.stop })}
+              style={{ background: selM.stop ? '#3a2c10' : 'transparent', border: `1px solid ${selM.stop ? '#8a6a2f' : '#2d3a6a'}`, color: selM.stop ? '#ffcf8a' : '#7d84a4', borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 11, fontWeight: selM.stop ? 700 : 500, whiteSpace: 'nowrap' }}>⏸</button>
+            <button onClick={() => { commit(markers.filter((_, j) => j !== sel)); setSel(null) }} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a', padding: '2px 7px' }}>✕</button>
+          </div>
+        )
+      })() : (
+        <button onClick={addMarker} style={{ ...trimBtn, color: '#aeb8ff', borderColor: '#3a4a8a', whiteSpace: 'nowrap' }}>＋ Marker</button>
+      )}
     </div>
   )
 }
@@ -641,7 +680,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   const k = cur ? clipKind(cur) : null, timed = cur ? isTimeMedia(cur) : false
   // FOOTER layout: a full-width bar docked to the bottom so the timeline gets the whole screen width.
   return (
-    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '52vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '46vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
       onMouseDown={e => e.stopPropagation()}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', borderBottom: '1px solid #23234a' }}>
@@ -655,7 +694,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={24} />
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 14px 12px', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 14px 10px', overflowY: 'auto' }}>
         {/* Top row: horizontal clips strip + the selected clip's quick controls */}
         <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
           <div ref={rowsRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, paddingBottom: 4, minHeight: 52 }}>
@@ -748,10 +787,14 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
           <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
           {(k === 'youtube' || k === 'video') && (() => {
             const mk = resolveMarkers(cur)
-            return <>
-              <div style={{ fontWeight: 600, color: '#aeb8ff', fontSize: 11, marginTop: 4 }}>◆ Markers{mk.length ? ` (${mk.length})` : ''} <span style={{ color: '#6a7290', fontWeight: 400 }}>— stop points & cutouts</span></div>
-              <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} playhead={curT} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
-            </>
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontWeight: 600, color: '#aeb8ff', fontSize: 11, minWidth: 52, whiteSpace: 'nowrap' }} title="A line stops playback until →; drag its edge to widen it into a skipped cutout.">◆ Markers</span>
+                <div style={{ flex: 1 }}>
+                  <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} playhead={curT} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
+                </div>
+              </div>
+            )
           })()}
         </>}
         {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No slides yet. Paste a YouTube link or upload media above.</div>}
