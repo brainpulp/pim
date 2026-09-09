@@ -134,7 +134,9 @@ function elementToSlide(o, label) {
   if (o.videoKind === 'youtube' && o.youtubeId) return { kind: 'youtube', youtubeId: o.youtubeId, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, cuts: o.cuts, trigger: 'click' }
   if (t === 'audio') return { kind: 'audio', src: o.src, title, start: o.start || 0, end: o.end || 0, cuts: o.cuts, trigger: 'click' }
   if (t === 'video' || o.videoKind === 'file') return { kind: 'video', src: o.src, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, loop: !!o.loop, cuts: o.cuts, trigger: 'click' }
-  if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5 }
+  // Free image → image slide: keep its look (blur, edge/contour blur, colour tint, opacity) so it
+  // presents the same in the slideshow as it did on the canvas.
+  if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5, blur: o.blur || 0, edgeBlur: o.edgeBlur || 0, tint: o.tint || null, opacity: o.opacity == null ? 1 : o.opacity }
   return null
 }
 
@@ -7875,6 +7877,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }}
             fullscreen={!!yn.ytss.fullscreen}
             onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
+            transition={yn.ytss.transition || 'fade'}
+            fadeMs={yn.ytss.fadeMs ?? 1000}
+            onSetTransition={v => setYtssProp(ytssInspectorId, { transition: v })}
+            onSetFadeMs={ms => setYtssProp(ytssInspectorId, { fadeMs: ms })}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onUpload={() => uploadSlideToYtss(ytssInspectorId)}
             onPickDrive={() => openDrivePicker({ kind: 'ytss', nodeId: ytssInspectorId })}
@@ -7912,7 +7918,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!clips.length) return null
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
-          <YTFullscreenPlayer clips={clips} startIndex={start}
+          <YTFullscreenPlayer clips={clips} startIndex={start} transition={yn?.ytss?.transition || 'fade'} fadeMs={yn?.ytss?.fadeMs ?? 1000}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)

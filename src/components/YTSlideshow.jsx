@@ -349,7 +349,21 @@ function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
     })
     return () => clearTimeout(timer.current)
   }, [clip.src, clip.duration, clip.loop, autoplay]) // eslint-disable-line
-  return <div style={{ width: '100%', height: '100%', background: `#000 center/contain no-repeat url("${clip.src}")`, ...style }} />
+  // Keep the image's canvas look: full blur, contour (edge) blur, colour tint, opacity.
+  const b = clip.blur || 0, eb = clip.edgeBlur || 0, op = clip.opacity == null ? 1 : clip.opacity
+  const tint = clip.tint && clip.tint.amount > 0 ? clip.tint : null
+  const feather = eb > 0 ? {
+    WebkitMaskImage: `linear-gradient(to right, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent), linear-gradient(to bottom, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent)`,
+    maskImage: `linear-gradient(to right, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent), linear-gradient(to bottom, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent)`,
+    WebkitMaskComposite: 'source-in', maskComposite: 'intersect',
+  } : null
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`,
+        filter: b ? `blur(${b}px)` : 'none', opacity: op, ...(feather || {}) }} />
+      {tint && <div style={{ position: 'absolute', inset: 0, background: tint.color, opacity: tint.amount, mixBlendMode: 'color', pointerEvents: 'none' }} />}
+    </div>
+  )
 }
 
 // ── Google Drive embed: a dumb <iframe> preview. No JS player API, so no seek/trim/markers and no
@@ -647,7 +661,7 @@ function Collapsible({ label, defaultOpen = false, children }) {
 }
 
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
-export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions, onUpload, onPickDrive, onReplaceClipFile }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, transition = 'fade', fadeMs = 1000, onSetTransition, onSetFadeMs, sound, onToggleSound, captions, onToggleCaptions, onUpload, onPickDrive, onReplaceClipFile }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -744,6 +758,21 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#c5d0ff', fontSize: 12, cursor: 'pointer', marginLeft: 6 }}>
           <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Play in fullscreen
         </label>
+        {/* Transition between clips: fade (with a global duration) or a hard cut. */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c5d0ff', fontSize: 12, marginLeft: 6 }}>
+          Transition
+          <select value={transition} onChange={e => onSetTransition?.(e.target.value)} style={{ background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 5, fontSize: 12, padding: '2px 5px', outline: 'none' }}>
+            <option value="fade">Fade</option>
+            <option value="cut">Cut</option>
+          </select>
+        </label>
+        {transition !== 'cut' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8fa0d8', fontSize: 12 }}>
+            <input type="number" min="0" step="0.1" value={((fadeMs ?? 1000) / 1000)}
+              onChange={e => { const s = parseFloat(e.target.value); if (!isNaN(s)) onSetFadeMs?.(Math.max(0, Math.round(s * 1000))) }}
+              style={{ width: 46, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 5, fontSize: 12, padding: '2px 5px', outline: 'none', textAlign: 'center' }} /> s
+          </label>
+        )}
         <span style={{ flex: 1 }} />
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={24} />
       </div>
@@ -1055,7 +1084,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, captions = false, onExit, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, captions = false, transition = 'fade', fadeMs = 1000, onExit, onReplayDone }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
@@ -1121,7 +1150,9 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />}
+        {cur && <div key={'fade' + idx} style={{ width: '100%', height: '100%', animation: transition === 'cut' ? 'none' : `ytssFadeIn ${fadeMs ?? 1000}ms ease` }}>
+          <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
+        </div>}
       </div>
       {ended && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
@@ -1196,7 +1227,9 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
+            ? <div key={'fade' + cur.id} style={{ width: '100%', height: '100%', animation: ytss.transition === 'cut' ? 'none' : `ytssFadeIn ${ytss.fadeMs ?? 1000}ms ease` }}>
+                <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
+              </div>
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>
