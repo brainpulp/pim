@@ -8165,7 +8165,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               const id = ytssFullscreenId
               setYtssFullscreenId(null)
               setYtssIdxMap(m => ({ ...m, [id]: 0 }))   // returning replays from the beginning
-              // Back to the node on the canvas: focus + zoom it (not "entered", so the next arrow resumes nav).
+              // While PRESENTING, finishing the fullscreen slideshow must flow straight into the deck's next
+              // step (staying in fullscreen) — never dump back to the canvas node. advanceBuild(1) mirrors a
+              // normal → press: remaining stages, then the next slide.
+              if (presentingSlideIdxRef.current !== null) { advanceBuild(1); return }
+              // Not presenting: back to the node on the canvas: focus + zoom it (not "entered", so the next arrow resumes nav).
               navFocusRef.current = id; navOutRef.current = 0; useGraphStore.getState().setNavFocusNodeId(id)
               zoomNavRef.current?.(id, navDepthRef.current)
             }} />
