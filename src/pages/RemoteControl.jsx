@@ -12,23 +12,40 @@ export default function RemoteControl({ code }) {
 
   useEffect(() => {
     if (!code) return
-    const chan = supabase.channel(`pim-remote-${code}`, { config: { broadcast: { self: false } } })
-    chanRef.current = chan
-    chan.on('broadcast', { event: 'state' }, ({ payload }) => { seenRef.current = true; setStatus('live'); setState(payload) })
-    chan.subscribe(s => {
-      if (s === 'SUBSCRIBED') {
-        chan.send({ type: 'broadcast', event: 'hello', payload: {} })   // ask the presenter for current state
-        setStatus(prev => (seenRef.current ? 'live' : 'connecting'))
-      }
-    })
-    // If the presenter never answers, show "waiting" but stay usable (commands still fire).
-    const t = setTimeout(() => setStatus(prev => (seenRef.current ? 'live' : 'offline')), 3500)
-    return () => { clearTimeout(t); supabase.removeChannel(chan); chanRef.current = null }
+    let closed = false
+    let retry = null
+    const hello = () => { try { chanRef.current?.send({ type: 'broadcast', event: 'hello', payload: {} }) } catch { /* ignore */ } }
+    const setup = () => {
+      if (closed) return
+      const chan = supabase.channel(`pim-remote-${code}`, { config: { broadcast: { self: false } } })
+      chanRef.current = chan
+      chan.on('broadcast', { event: 'state' }, ({ payload }) => { seenRef.current = true; setStatus('live'); setState(payload) })
+      chan.subscribe(s => {
+        if (s === 'SUBSCRIBED') { hello(); setStatus(prev => (seenRef.current ? 'live' : 'connecting')) }
+        else if ((s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') && !closed) {
+          setStatus('offline')
+          try { supabase.removeChannel(chan) } catch { /* ignore */ }
+          if (chanRef.current === chan) chanRef.current = null
+          clearTimeout(retry); retry = setTimeout(setup, 1500)   // rebuild the channel
+        }
+      })
+    }
+    setup()
+    // Phone woke from lock / tab refocused → re-say hello (and rebuild if the channel is gone).
+    const onVis = () => { if (document.visibilityState === 'visible') { if (!chanRef.current) setup(); else hello() } }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onVis)
+    // Keep-alive: periodically ping so a silently-dropped channel is noticed and state stays fresh.
+    const ka = setInterval(hello, 8000)
+    return () => { closed = true; clearTimeout(retry); clearInterval(ka); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis); try { supabase.removeChannel(chanRef.current) } catch { /* ignore */ } chanRef.current = null }
   }, [code])
 
   const send = (action) => {
     if (navigator.vibrate) { try { navigator.vibrate(12) } catch { /* ignore */ } }
-    chanRef.current?.send({ type: 'broadcast', event: 'cmd', payload: { action } })
+    // Single send only — a command like Next must never fire twice (that would skip two). If the channel is
+    // gone, rebuild it (the visibility/keep-alive paths also do this) and drop this press rather than double it.
+    if (!chanRef.current) return
+    try { chanRef.current.send({ type: 'broadcast', event: 'cmd', payload: { action } }) } catch { /* ignore */ }
   }
 
   const presenting = !!state?.presenting

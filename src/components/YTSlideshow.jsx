@@ -1211,9 +1211,11 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     const el = wrapRef.current
     const isMedia = (n) => n && (n.tagName === 'IFRAME' || n.tagName === 'VIDEO' || n.tagName === 'AUDIO')
     const refocus = () => { try { if (el && isMedia(document.activeElement)) el.focus({ preventScroll: true }) } catch { /* ignore */ } }
+    const onFocusIn = (e) => { if (isMedia(e.target)) refocus() }
     el?.focus?.({ preventScroll: true })
-    const iv = setInterval(refocus, 300)
-    return () => clearInterval(iv)
+    window.addEventListener('focusin', onFocusIn, true)
+    const iv = setInterval(refocus, 250)
+    return () => { window.removeEventListener('focusin', onFocusIn, true); clearInterval(iv) }
   }, [])
 
   const fsPlaying = useRef(true)

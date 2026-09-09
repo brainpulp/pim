@@ -1257,12 +1257,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // the page). This makes the physical keys work over any video slide. (The phone remote is immune anyway.)
   useEffect(() => {
     if (presentingSlideIdx === null) return
-    const grab = () => {
-      const ae = document.activeElement
-      if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'VIDEO' || ae.tagName === 'AUDIO')) { try { ae.blur() } catch { /* ignore */ } }
-    }
-    const iv = setInterval(grab, 300)
-    return () => clearInterval(iv)
+    const isMedia = (n) => n && (n.tagName === 'IFRAME' || n.tagName === 'VIDEO' || n.tagName === 'AUDIO')
+    const grab = () => { const ae = document.activeElement; if (isMedia(ae)) { try { ae.blur() } catch { /* ignore */ } } }
+    // Instant blur the moment focus enters a media element (more reliable than the poll alone), plus a poll
+    // as a safety net in case a focusin is missed.
+    const onFocusIn = (e) => { if (isMedia(e.target)) { try { e.target.blur() } catch { /* ignore */ } } }
+    window.addEventListener('focusin', onFocusIn, true)
+    const iv = setInterval(grab, 250)
+    return () => { window.removeEventListener('focusin', onFocusIn, true); clearInterval(iv) }
   }, [presentingSlideIdx])
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
   // Declared here — before any early return — so the hooks order never changes (React #310).
