@@ -1213,7 +1213,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     } catch { remoteCodeRef.current = Math.random().toString(36).slice(2, 10) }
   }
   const remoteCode = remoteCodeRef.current
-  const [remoteOn, setRemoteOn] = useState(false)    // presenter is listening for the phone
+  // Remote stays enabled across reloads (persisted) so the paired phone reconnects automatically — no need
+  // to re-open the panel or re-scan. The pairing code itself is already stable (stored above).
+  const [remoteOn, setRemoteOn] = useState(() => { try { return localStorage.getItem('pim_remote_on') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('pim_remote_on', remoteOn ? '1' : '0') } catch { /* ignore */ } }, [remoteOn])
   const [showRemote, setShowRemote] = useState(false) // QR-pairing modal
   const remoteActionsRef = useRef({})
   const [blackScreen, setBlackScreen] = useState(false)
