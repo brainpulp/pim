@@ -2529,6 +2529,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
+  const ytssFullscreenIdRef = useRef(null); useEffect(() => { ytssFullscreenIdRef.current = ytssFullscreenId }, [ytssFullscreenId])
   const ytssInspectorIdRef = useRef(null); useEffect(() => { ytssInspectorIdRef.current = ytssInspectorId }, [ytssInspectorId])
   const ytssEndedRef = useRef(null); useEffect(() => { ytssEndedRef.current = ytssEndedId }, [ytssEndedId])
   // Leaving a slideshow (nav away, deselect, Esc, end-ladder) resets it to clip 0, so returning replays
@@ -3100,6 +3101,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   useEffect(() => {
     const onKey = e => {
       if (readOnly) return   // shared read-only view: no keyboard mutations
+      // A fullscreen slideshow overlay owns ALL keys (its own window/capture handler drives it). Without
+      // this, arrows here would ALSO fire (advancing the deck) and fight the player. Let Esc through so it
+      // can still bubble if the player didn't handle it, but block the nav/build keys.
+      if (ytssFullscreenIdRef.current && e.key !== 'Escape') return
       if (!canvasFocused.current) return
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
 
