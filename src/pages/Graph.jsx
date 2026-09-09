@@ -835,172 +835,143 @@ function FrameStagesPanel({ stages, activeIdx, previewing, onCapture, onDelete, 
 // it's always usable at any zoom). Markers = stages: click to edit, drag to reorder, double-click to
 // rename, × to delete; the badge sets each stage's advance trigger (click vs timed). Editing the frame's
 // contents auto-records into the current stage (parent wires that up), so there's no Capture button.
+// Stages ("builds") editor — a bottom full-width footer matching the video / slideshow inspectors: a
+// strip of stage markers on top (click = select/edit that keyframe, drag = reorder, double-click =
+// rename, × = delete, + = add), and the SELECTED stage's settings laid out inline below (begins-trigger,
+// transition speed, show/hide, camera). Editing the frame's contents auto-records into the selected stage.
 function FrameTimeline({ rect, frameName, stages, currentIdx, playing, recordPulse,
   onGoto, onAdd, onDelete, onRename, onReorder, onSetAdvance, onSetSpeed, onPlay, onStop, onNext, onExit, onRefit,
   onSetCam, onFrameSelectionCam, onGotoCam, onClearCam, onSetFade }) {
   const [editingIdx, setEditingIdx] = useState(null)
-  const [advOpen, setAdvOpen] = useState(null)
-  const [camOpen, setCamOpen] = useState(null)
-  const [drag, setDrag] = useState(null)   // { from, x } while dragging a marker
   const [pulse, setPulse] = useState(false)
   const stripRef = useRef(null)
   useEffect(() => { if (!recordPulse) return; setPulse(true); const t = setTimeout(() => setPulse(false), 700); return () => clearTimeout(t) }, [recordPulse])
 
-  const H = 46
-  const padL = 14, padR = 128   // left inset for the first marker; right room for the controls
-  const pitch = 38               // fixed spacing — markers grow LEFT→RIGHT like typing a word
   const n = stages.length
-  const markerX = (i) => padL + i * pitch
+  const sel = Math.max(0, Math.min(currentIdx, n - 1))
+  const s = stages[sel] || {}
+  const timed = s.advance && typeof s.advance === 'object' && s.advance.after > 0
+  const dot = '#5b6af0', dotOn = '#8ea2ff'
 
-  const startDrag = (e, i) => {
+  // Whole-marker drag: click selects, drag past threshold reorders (nearest marker by midpoint).
+  const markerDown = (e, i) => {
+    if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
-    const startX = e.clientX
-    const onMove = (ev) => setDrag({ from: i, x: ev.clientX - rect.left })
-    const onUp = (ev) => {
+    const startX = e.clientX; let dragging = false
+    const onMove = ev => {
+      if (!dragging && Math.abs(ev.clientX - startX) < 5) return
+      dragging = true
+    }
+    const onUp = ev => {
       window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp)
-      const dropX = ev.clientX - rect.left
-      const to = Math.max(0, Math.min(n - 1, Math.round((dropX - padL) / pitch)))
-      const moved = Math.abs(ev.clientX - startX) > 6
-      setDrag(null)
-      if (moved && to !== i) onReorder(i, to)
-      else onGoto(i)   // treat as a click
+      if (!dragging) { onGoto(i); return }
+      // Target index = how many markers sit left of the cursor (adjust for the dragged one being removed).
+      const items = stripRef.current?.querySelectorAll('[data-stage-idx]') || []
+      let cnt = 0; items.forEach(el => { const r = el.getBoundingClientRect(); if (ev.clientX > r.left + r.width / 2) cnt++ })
+      const to = Math.max(0, Math.min(n - 1, cnt > i ? cnt - 1 : cnt))
+      if (to !== i) onReorder(i, to)
     }
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
   }
 
-  const dot = '#5b6af0', dotOn = '#8ea2ff'
+  const seg = (label, active, onClick, extra = {}) => (
+    <button onClick={onClick} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+      color: active ? '#dbe4ff' : '#9fb0e8', background: active ? '#1e2547' : '#12122a', border: `1px solid ${active ? '#5b6af0' : '#2d3a6a'}`, ...extra }}>{label}</button>
+  )
+  const section = { display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }
+  const secLabel = { fontSize: 10.5, color: '#8090b8', letterSpacing: '0.04em' }
+
   return (
-    <div ref={stripRef} title={frameName ? `Stages · ${frameName}` : 'Stages'} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
-      style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width, height: H, zIndex: 60,
-        background: '#12122aee', border: '1px solid #2d3a6a', borderRadius: 10, backdropFilter: 'blur(6px)',
-        boxShadow: '0 8px 26px rgba(0,0,0,0.55)', fontFamily: '-apple-system, sans-serif', color: '#c5d0ff',
-        overflow: 'visible', userSelect: 'none' }}>
-      {/* Track line — from the first marker to the last (left-aligned run) */}
-      {n > 1 && <div style={{ position: 'absolute', left: markerX(0), width: markerX(n - 1) - markerX(0), top: H / 2 - 1, height: 2, background: '#2f3a68', borderRadius: 2 }} />}
-
-      {/* Markers */}
-      {stages.map((s, i) => {
-        const cx = drag && drag.from === i ? drag.x : markerX(i)
-        const on = i === currentIdx
-        const timed = s.advance && typeof s.advance === 'object' && s.advance.after > 0
-        return (
-          <div key={s.id} style={{ position: 'absolute', left: cx, top: 0, height: H, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, zIndex: drag && drag.from === i ? 3 : 1 }}>
-            {editingIdx === i ? (
-              <input autoFocus defaultValue={s.name}
-                onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { onRename(i, e.currentTarget.value); setEditingIdx(null) } else if (e.key === 'Escape') setEditingIdx(null) }}
-                onBlur={e => { onRename(i, e.currentTarget.value); setEditingIdx(null) }}
-                style={{ width: 78, fontSize: 11, textAlign: 'center', background: '#0c0c1a', color: '#dbe4ff', border: '1px solid #3a4a8a', borderRadius: 5, padding: '2px 4px' }} />
-            ) : (<>
-              <div onMouseDown={e => startDrag(e, i)} onDoubleClick={e => { e.stopPropagation(); setEditingIdx(i) }}
-                title={`${s.name} — click to edit · double-click to rename · drag to reorder`}
-                style={{ cursor: 'grab', width: on ? 20 : 15, height: on ? 20 : 15, borderRadius: '50%', background: on ? dotOn : '#12122a', border: `2px solid ${on ? dotOn : dot}`, boxShadow: on ? `0 0 0 3px ${dot}44` : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all .12s' }}>
-                {on && pulse ? <span style={{ fontSize: 10, color: '#0c0c1a' }}>●</span> : <span style={{ fontSize: 9, color: on ? '#0c0c1a' : '#9aa8d8', fontWeight: 700 }}>{i + 1}</span>}
-              </div>
-              {/* Advance-trigger badge below the dot (skip stage 1 — the start pose) */}
-              {i > 0 && (
-                <button onClick={e => { e.stopPropagation(); setAdvOpen(advOpen === i ? null : i) }}
-                  title="How this stage begins — click to change"
-                  style={{ background: timed ? '#2a2036' : '#171c3f', border: `1px solid ${advOpen === i ? '#8ea2ff' : (timed ? '#6b4a1a' : '#2d3a6a')}`, borderRadius: 8, padding: '1px 7px', fontSize: 9.5, lineHeight: 1.5, color: timed ? '#f6ad55' : '#9fb0e8', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                  {timed ? `⏱ ${s.advance.after}s` : '▸ click'}
-                </button>
-              )}
-              {/* Camera badge (every stage) — set a focus shot for this build step */}
-              <button onClick={e => { e.stopPropagation(); setCamOpen(camOpen === i ? null : i) }}
-                title={s.cam ? 'Camera set for this stage — click to edit' : 'Set a camera focus for this stage'}
-                style={{ background: s.cam ? '#171c3f' : 'transparent', border: `1px solid ${camOpen === i ? '#8ea2ff' : (s.cam ? '#5b6af0' : '#2d3a6a')}`, borderRadius: 8, padding: '1px 6px', fontSize: 9.5, lineHeight: 1.5, color: s.cam ? '#8ea2ff' : '#7c86ad', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                📷{s.cam ? '' : '+'}
-              </button>
-              {/* Delete — small × above the dot */}
-              {n > 1 && (
-                <button onClick={e => { e.stopPropagation(); onDelete(i) }} title="Delete stage"
-                  style={{ position: 'absolute', top: 1, right: -7, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 10, color: '#f87171', padding: 0, opacity: 0.7 }}>×</button>
-              )}
-            </>)}
-            {/* Advance popover — with a click-away backdrop so it always dismisses */}
-            {advOpen === i && (<>
-              <div onMouseDown={e => { e.stopPropagation(); setAdvOpen(null) }} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
-              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H + 2, left: '50%', transform: 'translateX(-50%)', zIndex: 71, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 8, width: 214, boxShadow: '0 12px 30px rgba(0,0,0,.65)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>Stage {i + 1} begins</span>
-                  <button onClick={() => setAdvOpen(null)} title="Close" style={{ background: 'transparent', border: 'none', color: '#8ea2ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>✕</button>
-                </div>
-                <button onClick={() => { onSetAdvance(i, 'click'); setAdvOpen(null) }}
-                  style={{ textAlign: 'left', fontSize: 12, color: !timed ? '#dbe4ff' : '#9fb0e8', background: !timed ? '#1e2547' : '#12122a', border: `1px solid ${!timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '8px 10px', cursor: 'pointer' }}>▸ On click / key</button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: timed ? '#1e2547' : '#12122a', border: `1px solid ${timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '6px 8px' }}>
-                  <span style={{ fontSize: 12, color: timed ? '#f6ad55' : '#9fb0e8', flex: 1 }}>⏱ After {timed ? s.advance.after : 1}s</span>
-                  <button onClick={() => onSetAdvance(i, { after: Math.max(0.5, (timed ? s.advance.after : 1) - 0.5) })} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 15 }}>−</button>
-                  <button onClick={() => onSetAdvance(i, { after: (timed ? s.advance.after : 1) + 0.5 })} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 15 }}>+</button>
-                </div>
-                {/* Transition speed — how fast the move/morph INTO this stage plays */}
-                <div style={{ borderTop: '1px solid #20233f', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>Transition speed</span>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {[['Instant', 0], ['Fast', 180], ['Normal', 340], ['Slow', 700], ['Slower', 1200]].map(([label, ms]) => {
-                      const cur = s.dur != null ? s.dur : 340
-                      const on = cur === ms
-                      return (
-                        <button key={label} onClick={() => onSetSpeed(i, ms === 340 ? undefined : ms)}
-                          style={{ fontSize: 10.5, padding: '3px 7px', borderRadius: 6, cursor: 'pointer', color: on ? '#dbe4ff' : '#9fb0e8', background: on ? '#1e2547' : '#12122a', border: `1px solid ${on ? '#5b6af0' : '#2d3a6a'}` }}>{label}</button>
-                      )
-                    })}
-                  </div>
-                </div>
-                {/* Show/hide style — cut (instant) vs fade */}
-                <div style={{ borderTop: '1px solid #20233f', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>Show / hide</span>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {[['Cut', false], ['Fade', true]].map(([label, val]) => {
-                      const on = !!s.fade === val
-                      return (
-                        <button key={label} onClick={() => onSetFade?.(i, val)}
-                          style={{ fontSize: 10.5, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', color: on ? '#dbe4ff' : '#9fb0e8', background: on ? '#1e2547' : '#12122a', border: `1px solid ${on ? '#5b6af0' : '#2d3a6a'}` }}>{label}</button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-            </>)}
-            {/* Camera popover */}
-            {camOpen === i && (<>
-              <div onMouseDown={e => { e.stopPropagation(); setCamOpen(null) }} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
-              <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', bottom: H + 2, left: '50%', transform: 'translateX(-50%)', zIndex: 71, background: '#0c0c1a', border: '1px solid #3a4a8a', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', gap: 7, width: 218, boxShadow: '0 12px 30px rgba(0,0,0,.65)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 11, color: '#9fb0e8' }}>📷 Stage {i + 1} camera</span>
-                  <button onClick={() => setCamOpen(null)} title="Close" style={{ background: 'transparent', border: 'none', color: '#8ea2ff', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}>✕</button>
-                </div>
-                <div style={{ fontSize: 10.5, color: '#7c86ad', lineHeight: 1.4 }}>
-                  {s.cam ? 'A custom shot is set — the view moves here on this step.' : (i > 0 ? 'Inherits the previous camera. Set one to move the shot here.' : 'No camera — fits the whole frame. Set one for the opening shot.')}
-                </div>
-                <button onClick={() => onSetCam(i)} style={camBtn}>📷 Set to current view</button>
-                <button onClick={() => onFrameSelectionCam(i)} style={camBtn}>▢ Frame selected elements</button>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => onGotoCam(i)} style={{ ...camBtn, flex: 1 }}>⤢ Go to</button>
-                  {s.cam && <button onClick={() => { onClearCam(i); setCamOpen(null) }} style={{ ...camBtn, flex: 1, color: '#f0a0a0', borderColor: '#5a2a3a' }}>Clear</button>}
-                </div>
-              </div>
-            </>)}
-          </div>
-        )
-      })}
-
-      {/* + add stage, just past the last marker */}
-      <button onClick={e => { e.stopPropagation(); onAdd() }} title="Add a stage (clones the current pose)"
-        style={{ position: 'absolute', left: markerX(n - 1) + 30, top: H / 2 - 13, width: 26, height: 26, borderRadius: '50%', border: '1.5px dashed #3a4a8a', background: '#12122a', color: '#8ea2ff', cursor: 'pointer', fontSize: 15, lineHeight: '22px' }}>+</button>
-
-      {/* Right controls */}
-      <div style={{ position: 'absolute', right: 10, top: 0, height: H, display: 'flex', alignItems: 'center', gap: 6 }}>
-        {!playing ? (
-          <button onClick={e => { e.stopPropagation(); onPlay() }} title="Play the builds" style={ctrlBtn}>▶</button>
-        ) : (<>
-          <button onClick={e => { e.stopPropagation(); onNext() }} title="Next (→ / space)" style={ctrlBtn}>⏭</button>
-          <button onClick={e => { e.stopPropagation(); onStop() }} title="Stop playing" style={ctrlBtn}>⏹</button>
-        </>)}
+    <div ref={stripRef} onMouseDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
+      style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '46vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 60, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif', color: '#c5d0ff', userSelect: 'none' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', borderBottom: '1px solid #23234a' }}>
+        <div style={{ color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>🎬 Stages{frameName ? ` · ${frameName}` : ''}</div>
+        <span style={{ color: '#6a7290', fontSize: 11 }}>edit the frame to record into the selected stage · ← → steps</span>
+        <span style={{ flex: 1 }} />
+        {!playing
+          ? <button onClick={e => { e.stopPropagation(); onPlay() }} title="Play the builds" style={ctrlBtn}>▶</button>
+          : <><button onClick={e => { e.stopPropagation(); onNext() }} title="Next (→ / space)" style={ctrlBtn}>⏭</button>
+             <button onClick={e => { e.stopPropagation(); onStop() }} title="Stop playing" style={ctrlBtn}>⏹</button></>}
         <button onClick={e => { e.stopPropagation(); onRefit() }} title="Re-fit the frame" style={ctrlBtn}>⛶</button>
         <button onClick={e => { e.stopPropagation(); onExit() }} title="Done (Esc)" style={{ ...ctrlBtn, color: '#f0a0a0' }}>✕</button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '9px 14px 12px', overflowY: 'auto' }}>
+        {/* Marker strip */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+          {stages.map((st, i) => {
+            const on = i === sel
+            const t2 = st.advance && typeof st.advance === 'object' && st.advance.after > 0
+            return editingIdx === i ? (
+              <input key={st.id} autoFocus defaultValue={st.name}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { onRename(i, e.currentTarget.value); setEditingIdx(null) } else if (e.key === 'Escape') setEditingIdx(null) }}
+                onBlur={e => { onRename(i, e.currentTarget.value); setEditingIdx(null) }}
+                style={{ width: 96, fontSize: 12, background: '#0c0c1a', color: '#dbe4ff', border: '1px solid #3a4a8a', borderRadius: 6, padding: '5px 7px', flexShrink: 0 }} />
+            ) : (
+              <div key={st.id} data-stage-idx={i} onMouseDown={e => markerDown(e, i)}
+                onDoubleClick={e => { e.stopPropagation(); setEditingIdx(i) }}
+                title={`${st.name || 'Stage ' + (i + 1)} — click to edit · double-click to rename · drag to reorder`}
+                style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, cursor: 'grab',
+                  padding: '5px 10px 5px 7px', borderRadius: 20, background: on ? '#1e2547' : '#12122a', border: `1px solid ${on ? '#5b6af0' : '#2d3a6a'}` }}>
+                <span style={{ width: 18, height: 18, borderRadius: '50%', background: on ? dotOn : '#12122a', border: `2px solid ${on ? dotOn : dot}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: on ? '#0c0c1a' : '#9aa8d8', flexShrink: 0 }}>
+                  {on && pulse ? '●' : i + 1}
+                </span>
+                <span style={{ fontSize: 11.5, color: on ? '#dbe4ff' : '#9fb0e8', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.name || `Stage ${i + 1}`}</span>
+                {i > 0 && <span style={{ fontSize: 9, color: t2 ? '#f6ad55' : '#7c86ad' }}>{t2 ? `⏱${st.advance.after}s` : '▸'}</span>}
+                {st.cam && <span style={{ fontSize: 9, color: '#8ea2ff' }}>📷</span>}
+                {n > 1 && <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDelete(i) }} title="Delete stage"
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, color: '#f87171', padding: 0, marginLeft: 2, flexShrink: 0 }}>×</button>}
+              </div>
+            )
+          })}
+          <button onClick={e => { e.stopPropagation(); onAdd() }} title="Add a stage (clones the current pose)"
+            style={{ flexShrink: 0, width: 30, height: 30, borderRadius: '50%', border: '1.5px dashed #3a4a8a', background: '#12122a', color: '#8ea2ff', cursor: 'pointer', fontSize: 16 }}>+</button>
+        </div>
+
+        {/* Selected-stage settings — laid out horizontally across the width. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 26px', alignItems: 'flex-start', borderTop: '1px solid #20233f', paddingTop: 10 }}>
+          {sel > 0 && (
+            <div style={section}>
+              <span style={secLabel}>STAGE {sel + 1} BEGINS</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {seg('▸ On click / key', !timed, () => onSetAdvance(sel, 'click'))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: timed ? '#1e2547' : '#12122a', border: `1px solid ${timed ? '#5b6af0' : '#2d3a6a'}`, borderRadius: 7, padding: '3px 6px' }}>
+                  <span style={{ fontSize: 11, color: timed ? '#f6ad55' : '#9fb0e8' }}>⏱ {timed ? s.advance.after : 1}s</span>
+                  <button onClick={() => onSetAdvance(sel, { after: Math.max(0.5, (timed ? s.advance.after : 1) - 0.5) })} style={stepBtn}>−</button>
+                  <button onClick={() => onSetAdvance(sel, { after: (timed ? s.advance.after : 1) + 0.5 })} style={stepBtn}>+</button>
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={section}>
+            <span style={secLabel}>TRANSITION SPEED</span>
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {[['Instant', 0], ['Fast', 180], ['Normal', 340], ['Slow', 700], ['Slower', 1200]].map(([label, ms]) =>
+                seg(label, (s.dur != null ? s.dur : 340) === ms, () => onSetSpeed(sel, ms === 340 ? undefined : ms)))}
+            </div>
+          </div>
+          <div style={section}>
+            <span style={secLabel}>SHOW / HIDE</span>
+            <div style={{ display: 'flex', gap: 5 }}>
+              {[['Cut', false], ['Fade', true]].map(([label, val]) => seg(label, !!s.fade === val, () => onSetFade?.(sel, val)))}
+            </div>
+          </div>
+          <div style={section}>
+            <span style={secLabel}>📷 CAMERA {s.cam ? '· set' : (sel > 0 ? '· inherits' : '· fits frame')}</span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {seg('Set to current view', false, () => onSetCam(sel))}
+              {seg('Frame selection', false, () => onFrameSelectionCam(sel))}
+              {seg('⤢ Go to', false, () => onGotoCam(sel))}
+              {s.cam && seg('Clear', false, () => onClearCam(sel), { color: '#f0a0a0', borderColor: '#5a2a3a' })}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
 }
+const stepBtn = { width: 24, height: 24, borderRadius: 6, border: '1px solid #2d3a6a', background: '#171c3f', color: '#c5d0ff', cursor: 'pointer', fontSize: 14, lineHeight: 1 }
 const ctrlBtn = { width: 28, height: 28, borderRadius: 7, border: '1px solid #2d3a6a', background: '#1a1f4a', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }
 const camBtn = { textAlign: 'left', fontSize: 11.5, color: '#c5d0ff', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 7, padding: '6px 9px', cursor: 'pointer' }
 
@@ -3731,7 +3702,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
         startPositions.forEach(({ node, ox, oy, wasAnchored }) => {
           const newX = ox + ddx, newY = oy + ddy
-          if (node.id === nodeId || wasAnchored) {
+          // Nodes carried inside a dragged frame that AREN'T formally contained would otherwise be released
+          // and snap back to the force layout. Anchor them at the new spot so the frame really carries them.
+          const carriedByFrame = _dragShape === 'frame' && node.id !== nodeId && (viewNodePropsRef.current[node.id] || {}).containedIn !== nodeId
+          if (node.id === nodeId || wasAnchored || carriedByFrame) {
             node.fx = newX; node.fy = newY
             setAnchor(node.id, newX, newY)
           } else {
