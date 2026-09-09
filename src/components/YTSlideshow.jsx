@@ -394,44 +394,27 @@ export function SlidePlayer({ clip, autoplay = false, muted = false, captions = 
 // onChange(start, end, which) — `which` is 'start' | 'end', so the caller can scrub the preview to
 // whichever edge is being moved.
 const trimBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '1px 7px', cursor: 'pointer', fontSize: 10.5, whiteSpace: 'nowrap' }
-// Dual-handle trim slider. A SEPARATE zoom slider narrows the visible window for fine control on a long
-// video — but the window is MANUAL: it only re-centers on the selection at the moment you change the zoom
-// level. It never follows the selection on its own afterwards (that auto-follow made the view jump around
-// while trimming). Live preview via onScrub (drag) / onLoop (release).
+// Dual-handle trim slider over the WHOLE video (no zoom window — that made the timeline jump around and
+// was more trouble than it was worth). Big, grippy handles with a wide invisible hit area so they're easy
+// to grab. Live preview via onScrub (drag) / onLoop (release).
 function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
   const trackRef = useRef(null)
-  const [zoom, setZoom] = useState(1)   // 1 = whole video; higher = narrower window
-  const [dragging, setDragging] = useState(false)
+  const [dragging, setDragging] = useState(null)   // 'start' | 'end' | null (which handle is held)
   const M = Math.max(max || 1, 1)
   const s = Math.max(0, Math.min(start || 0, M)), e = Math.min(M, (end && end > s) ? end : M)
   const stateRef = useRef({ s, e, M })
   stateRef.current = { s, e, M }
-  // The visible window [w0,w1]. Recomputed ONLY when the zoom level (or video length) changes — centered on
-  // wherever the selection is at that instant — then left alone. No auto-follow while you trim.
-  const [win, setWin] = useState({ w0: 0, w1: M })
-  const winRef = useRef(win); winRef.current = win
-  useEffect(() => {
-    const { s: cs, e: ce, M: m } = stateRef.current
-    if (zoom <= 1) { setWin({ w0: 0, w1: m }); return }
-    const width = m / zoom
-    const mid = (cs + ce) / 2
-    const w0 = Math.max(0, Math.min(mid - width / 2, m - width))
-    setWin({ w0, w1: w0 + width })
-  }, [zoom, M])   // eslint-disable-line — intentionally NOT depending on s/e: the window must not follow the selection
-  const { w0, w1 } = win
-  const span = Math.max(1, w1 - w0)
 
-  // Snap to 0.1s. All bounds come from the LIVE stateRef (never a stale prop) so start/end can't fight
-  // each other or the preview mid-drag — that was the source of the erratic jumps.
+  // Snap to 0.1s. Bounds come from the LIVE stateRef (never a stale prop) so start/end can't fight each
+  // other or the preview mid-drag. The track always spans the whole video [0, M].
   const timeAtClientX = (clientX) => {
     const r = trackRef.current.getBoundingClientRect()
     const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
-    const { w0: a, w1: b } = winRef.current
-    return Math.round((a + frac * (b - a)) * 10) / 10
+    return Math.round(frac * stateRef.current.M * 10) / 10
   }
   const drag = (which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation()
-    setDragging(true)
+    setDragging(which)
     const move = (ev) => {
       const t = timeAtClientX(ev.clientX)
       const { s: cs, e: ce, M: m } = stateRef.current
@@ -440,7 +423,7 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
     }
     const up = () => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
-      setDragging(false)
+      setDragging(null)
       const { s: cs, e: ce } = stateRef.current
       onLoop?.(cs, ce)
     }
@@ -454,34 +437,34 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
     onScrub?.(timeAtClientX(ev0.clientX), 'seek')
   }
 
-  const pct = (t) => Math.max(0, Math.min(1, (t - w0) / span)) * 100
+  const pct = (t) => Math.max(0, Math.min(1, t / M)) * 100
   const sPct = pct(s), ePct = pct(e)
-  const zoomed = zoom > 1
-  // Live playback head — where the preview currently is. Only shown when it's inside the visible window.
-  const phInWin = playhead != null && playhead >= w0 - 0.001 && playhead <= w1 + 0.001
-  const phPct = phInWin ? pct(playhead) : null
+  const phPct = (playhead != null && playhead >= -0.001 && playhead <= M + 0.001) ? pct(playhead) : null
+  const HIT = 22   // half-width of the invisible grab area around each handle (px) — easy to catch
   return (
-    <div style={{ margin: '2px 8px' }}>
-      <div ref={trackRef} onMouseDown={seekAt} style={{ position: 'relative', height: 24, cursor: 'pointer' }}>
-        <div style={{ position: 'absolute', top: 10, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
-        {zoomed && w0 > 0 && <div style={{ position: 'absolute', top: 7, left: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
-        {zoomed && w1 < M && <div style={{ position: 'absolute', top: 7, right: 0, width: 3, height: 10, borderRadius: 2, background: '#3a4a8a' }} />}
-        <div style={{ position: 'absolute', top: 10, left: `${sPct}%`, width: `${Math.max(0, ePct - sPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
+    <div style={{ margin: '4px 8px 2px' }}>
+      <div ref={trackRef} onMouseDown={seekAt} style={{ position: 'relative', height: 34, cursor: 'pointer' }}>
+        <div style={{ position: 'absolute', top: 15, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
+        <div style={{ position: 'absolute', top: 15, left: `${sPct}%`, width: `${Math.max(0, ePct - sPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
         {phPct != null && (
-          <div style={{ position: 'absolute', top: 3, left: `calc(${phPct}% - 1px)`, width: 2, height: 18, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />
+          <div style={{ position: 'absolute', top: 6, left: `calc(${phPct}% - 1px)`, width: 2, height: 22, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />
         )}
         {[['start', sPct], ['end', ePct]].map(([w, p]) => (
-          <div key={w} onMouseDown={drag(w)} style={{ position: 'absolute', top: 2, left: `calc(${p}% - 7px)`, width: 14, height: 20, borderRadius: 4, background: '#c5d0ff', border: '1px solid #5b6af0', cursor: 'ew-resize' }} />
+          // Wide, tall, invisible hit area (easy to grab) wrapping a bigger visible knob with a grip.
+          <div key={w} onMouseDown={drag(w)} title={w === 'start' ? 'Drag to set the start' : 'Drag to set the end'}
+            style={{ position: 'absolute', top: 0, left: `calc(${p}% - ${HIT}px)`, width: HIT * 2, height: 34,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'ew-resize', zIndex: 3 }}>
+            <div style={{ width: 16, height: 26, borderRadius: 5, background: dragging === w ? '#eef1ff' : '#c5d0ff',
+              border: '1.5px solid #5b6af0', boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2.5 }}>
+              <span style={{ width: 1.5, height: 12, background: '#5b6af0', borderRadius: 1, opacity: 0.75 }} />
+              <span style={{ width: 1.5, height: 12, background: '#5b6af0', borderRadius: 1, opacity: 0.75 }} />
+            </div>
+          </div>
         ))}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, color: '#8fa0d8', marginTop: 3 }}>
         <span>{fmtTime(s)}–{fmtTime(e)}</span>
-        {zoomed && <span style={{ color: '#7080a0' }}>· view {fmtTime(w0)}–{fmtTime(w1)}</span>}
-        <span style={{ flex: 1 }} />
-        <span style={{ color: '#7c86ad' }} title="Zoom the timeline for finer control">🔍</span>
-        <input type="range" min={1} max={40} step={1} value={zoom} onMouseDown={e => e.stopPropagation()}
-          onChange={e => setZoom(Number(e.target.value))} style={{ width: 84, accentColor: '#5b6af0' }} title="Zoom the timeline for finer control" />
-        {zoomed && <button onMouseDown={e => e.stopPropagation()} onClick={() => setZoom(1)} style={trimBtn} title="Zoom out to the whole video">full</button>}
       </div>
     </div>
   )
