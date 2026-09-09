@@ -1218,8 +1218,8 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
     <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
       onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.(); onHeaderDown?.(e) } }}
       onDoubleClick={e => { e.stopPropagation(); onEnter?.() }}>
-      {/* Title above — double-click to rename */}
-      {editingTitle ? (
+      {/* Title above — double-click to rename. Hidden entirely while PRESENTING (no chrome/advisories). */}
+      {presenting ? null : editingTitle ? (
         <foreignObject x={-W / 2} y={-H / 2 - 32} width={W} height={28} style={{ overflow: 'visible' }}>
           <input autoFocus defaultValue={node.label || ''} placeholder="Slideshow name"
             onMouseDown={e => e.stopPropagation()}

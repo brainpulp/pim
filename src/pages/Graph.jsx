@@ -2630,6 +2630,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (presentingSlideIdx !== null) return
     const a = ytssActiveRef.current
     if (a && selected?.id !== a) { ytssHandlesRef.current[a]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null) }
+    // The slideshow inspector must close when you click away to another element (it used to linger).
+    const ins = ytssInspectorIdRef.current
+    if (ins && selected?.id !== ins) { ytssHandlesRef.current[ins]?.pause?.(); setYtssInspectorId(null) }
   }, [selected, presentingSlideIdx])
   const applyGenerated = useCallback((nodeId, mode, text, { append = false } = {}) => {
     const st = useGraphStore.getState()
@@ -6689,7 +6692,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                     const advance = () => {
                       const ni = cur + 1
                       if (ni < clips.length) { setYtssIdxMap(m => ({ ...m, [n.id]: ni })); ytssPlayingRef.current = true }
-                      else { ytssPlayingRef.current = false; if (presentingSlideIdxRef.current !== null) advanceBuild(1); else setYtssEndedId(n.id) }   // end of show → next slide when presenting, else show replay
+                      // End of the slideshow. When presenting, DON'T jump to the next slide — freeze on the
+                      // last frame (staying in fullscreen); the next → advances the deck (key handler). Off
+                      // presentation, show the replay chrome.
+                      else { ytssPlayingRef.current = false; ytssHandlesRef.current[n.id]?.pause?.(); if (presentingSlideIdxRef.current === null) setYtssEndedId(n.id) }
                     }
                     if (clip.trigger === 'auto') advance()
                     else if (clip.trigger === 'delay') setTimeout(advance, clip.delayMs || 1500)
