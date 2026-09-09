@@ -7249,7 +7249,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (!timg || timg.type !== 'text') return null
           const left = T.x + (timg.x || 0) * T.k
           const top = T.y + ((timg.y || 0) - (timg.height || 0) / 2) * T.k - 8
-          return <TextFormatToolbar left={left} top={top} box={timg} onBoxStyle={patch => updateImage(tid, patch)} />
+          return <TextFormatToolbar left={left} top={top} box={timg} boxId={tid} onBoxStyle={patch => updateImage(tid, patch)} />
         })()}
 
         {photoMenu && !cropImageId && (<>
@@ -10606,7 +10606,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
 
 // contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
 // when it changes externally (never while focused, so the caret isn't disturbed); saves on input.
-function RichTextBox({ html, editable, selected, bgColor, borderColor, textShadow, halo, fontScale = 1, valign = 'top', zoomK = 1, boxW, boxH, onChange, onResize, onAutoHeight }) {
+function RichTextBox({ html, editable, selected, bgColor, borderColor, textShadow, halo, fontScale = 1, valign = 'top', zoomK = 1, boxW, boxH, textId, onChange, onResize, onAutoHeight }) {
   const ref = useRef(null)
   useEffect(() => {
     const el = ref.current; if (!el) return
@@ -10634,7 +10634,7 @@ function RichTextBox({ html, editable, selected, bgColor, borderColor, textShado
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', boxSizing: 'border-box', background: bgColor || 'transparent',
       border: borderColor ? `1.5px solid ${borderColor}` : 'none', outline: editable ? '1px solid #5b6af0' : 'none', borderRadius: 4, overflow: 'visible' }}>
-      <div ref={ref} data-richtext="true" contentEditable={editable} suppressContentEditableWarning
+      <div ref={ref} data-richtext="true" data-textid={textId} contentEditable={editable} suppressContentEditableWarning
         onInput={() => { onChange?.(ref.current?.innerHTML || ''); measure() }}
         onMouseDown={e => { if (editable) e.stopPropagation() }}
         onKeyDown={e => e.stopPropagation()}
@@ -10693,7 +10693,7 @@ const TEXT_FONTS = [
   { label: 'Permanent Marker', exec: '"Permanent Marker", cursive' },
   { label: 'Shadows Into Light', exec: '"Shadows Into Light", cursive' },
 ]
-function TextFormatToolbar({ left, top, box, onBoxStyle }) {
+function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
   const savedRange = useRef(null)
   useEffect(() => {
     const onSel = () => {
@@ -10705,27 +10705,51 @@ function TextFormatToolbar({ left, top, box, onBoxStyle }) {
     document.addEventListener('selectionchange', onSel)
     return () => document.removeEventListener('selectionchange', onSel)
   }, [])
-  const exec = (cmd, val) => {
+  // The rich-text box these commands target: this toolbar's own box (by id), else the box holding the
+  // saved selection, else the single active (contentEditable) text box on the canvas. When the box isn't
+  // in edit mode yet (contentEditable=false), briefly enable it so a style change still applies — the
+  // resulting `input` event persists the HTML, and the next render restores the real editing state.
+  const getEditable = () => {
+    let el = (boxId && document.querySelector(`[data-richtext][data-textid="${boxId}"]`)) || null
+    if (!el) {
+      const r = savedRange.current
+      const node = r && (r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer)
+      el = node?.closest?.('[data-richtext]') || document.querySelector('[data-richtext][contenteditable="true"]')
+    }
+    if (el && el.getAttribute('contenteditable') !== 'true') el.setAttribute('contenteditable', 'true')
+    return el
+  }
+  // Restore the saved selection, but if nothing is selected (collapsed caret, no range, or a range from a
+  // different box) fall back to selecting ALL of the box — so a style tweak with no selection styles the
+  // whole text. Returns the live range that will be operated on.
+  const ensureRange = (editable) => {
+    const s = window.getSelection()
     const r = savedRange.current
-    const node = r && (r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer)
-    const editable = node?.closest?.('[data-richtext]')
-    if (editable) editable.focus()
-    if (r) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(r) }
+    const usable = r && !r.collapsed && editable.contains(r.startContainer) && editable.contains(r.endContainer)
+    if (usable) { s.removeAllRanges(); s.addRange(r); return r }
+    const all = document.createRange(); all.selectNodeContents(editable)
+    s.removeAllRanges(); s.addRange(all)
+    savedRange.current = all.cloneRange()
+    return all
+  }
+  const exec = (cmd, val) => {
+    const editable = getEditable(); if (!editable) return
+    editable.focus()
+    ensureRange(editable)
     try { document.execCommand('styleWithCSS', false, true) } catch { /* */ }
     document.execCommand(cmd, false, val)
-    if (editable) editable.dispatchEvent(new Event('input', { bubbles: true }))
+    editable.dispatchEvent(new Event('input', { bubbles: true }))
     const s2 = window.getSelection(); if (s2 && s2.rangeCount) savedRange.current = s2.getRangeAt(0).cloneRange()
   }
   // Font size in px. Stored as `em` relative to the 15px base so it scales with the box's corner handle.
   const applyFontSize = (px) => {
-    const r = savedRange.current; if (!r || r.collapsed) return
-    const node = r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer
-    const editable = node?.closest?.('[data-richtext]'); if (!editable) return
+    const editable = getEditable(); if (!editable) return
     editable.focus()
-    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r)
+    const r = ensureRange(editable)
     const span = document.createElement('span'); span.style.fontSize = (px / 15).toFixed(3) + 'em'
     try { span.appendChild(r.extractContents()); r.insertNode(span) } catch { return }
-    const nr = document.createRange(); nr.selectNodeContents(span); s.removeAllRanges(); s.addRange(nr)
+    const nr = document.createRange(); nr.selectNodeContents(span)
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(nr)
     savedRange.current = nr.cloneRange()
     editable.dispatchEvent(new Event('input', { bubbles: true }))
   }
@@ -10956,7 +10980,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
           <RichTextBox html={img.html} editable={textEditing} selected={isSelected} bgColor={bgColor}
             borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo} fontScale={img.fontScale}
-            valign={img.valign} zoomK={zoomK} boxW={width} boxH={height}
+            valign={img.valign} zoomK={zoomK} boxW={width} boxH={height} textId={id}
             onChange={html => onTextChange?.(html)} onResize={(mode, e) => onMouseDown(e, id, mode)}
             onAutoHeight={h => onTextAutoHeight?.(h)} />
         </foreignObject>
@@ -11352,7 +11376,10 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
             onChange={e => setDraft(e.target.value)}
             onBlur={commitEdit}
             onKeyDown={e => {
-              if (e.key === 'Enter') commitEdit()
+              // Must stop Enter/Escape from bubbling to the window-level canvas keyboard handler,
+              // which would otherwise create a new (sister) node. See CLAUDE.md gotcha.
+              e.stopPropagation()
+              if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
               if (e.key === 'Escape') { e.preventDefault(); setEditing(false) }
             }}
             style={{
