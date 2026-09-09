@@ -7251,6 +7251,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               isSlide={slideIds.includes(hn.id)}
               onSetInterim={vp.shape === 'frame' ? () => { setInterimSlide(hn.id); setShowSlideSidebar(true); close() } : null}
               isInterim={activeSlideshow?.interimSlideId === hn.id}
+              onEditStages={vp.shape === 'frame' ? () => { close(); enterTimeline(hn.id) } : null}
+              stageCount={vp.stages?.length || 0}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
               onToggleKanban={() => { toggleKanbanNode(hn.id); close() }}
@@ -12848,7 +12850,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, onAutoStyle, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
-  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false, onSetInterim, isInterim = false }) {
+  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false, onSetInterim, isInterim = false, onEditStages, stageCount = 0 }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
@@ -13018,6 +13020,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
         {onMakeSlide && textRow(isSlide ? 'In slideshow ✓' : 'Make a slide', onMakeSlide, { icon: '▦', right: isSlide ? '✓' : '›', rightColor: isSlide ? '#f6ad55' : '#8090b8', opens: null })}
         {onSetInterim && textRow(isInterim ? 'Interim slide ✓' : 'Set as interim slide', onSetInterim, { icon: '⤾', right: isInterim ? '✓' : '›', rightColor: isInterim ? '#f6ad55' : '#8090b8', opens: null })}
+        {onEditStages && textRow('Stages (builds)', onEditStages, { icon: '🎬', right: stageCount ? String(stageCount) : '›', rightColor: stageCount ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && textRow('Show as…', () => setPanel('showas'), { icon: '▧', right: (isList || isKanban || isStrategy) ? '•' : '›', rightColor: (isList || isKanban || isStrategy) ? '#f6ad55' : '#8090b8', opens: 'showas' })}
         {hasChildrenForList && onAutoStyle && textRow('Auto-style children…', onAutoStyle, { icon: '🪄', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
