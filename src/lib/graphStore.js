@@ -68,6 +68,7 @@ const patchViewNode = (views, activeViewId, nodeId, patch) =>
   })
 
 const _undoHistory = []
+const _redoHistory = []
 const MAX_UNDO = 50
 
 // Cosmetic props that make up a node's "look". New nodes inherit the last-changed values of these
@@ -105,16 +106,30 @@ const useGraphStore = create((set, get) => ({
   views: [{ id: 'view-default', name: 'Default', nodeProps: {}, drillRoot: null, bgColor: '#0c0c1a', images: [], customEmojis: [], slides: [], slideshows: [{ id: 'ss-default', name: 'Default', slides: [] }], activeSlideshowId: 'ss-default' }],
   activeViewId: 'view-default',
 
-  // Undo history (module-level array, not reactive state)
+  // Undo/redo history (module-level arrays, not reactive state)
   pushUndo: () => {
     const s = get()
     _undoHistory.push(JSON.parse(JSON.stringify({ nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId })))
     if (_undoHistory.length > MAX_UNDO) _undoHistory.shift()
+    _redoHistory.length = 0   // a fresh action invalidates the redo stack
   },
   undo: () => {
     if (!_undoHistory.length) return
+    const s = get()
+    // Save the CURRENT state to the redo stack first, so undo is always reversible (was one-way — an
+    // undo that dropped content, e.g. slideshow clips, could never be recovered).
+    _redoHistory.push(JSON.parse(JSON.stringify({ nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId })))
+    if (_redoHistory.length > MAX_UNDO) _redoHistory.shift()
     const prev = _undoHistory.pop()
     set({ nodes: prev.nodes, edges: prev.edges, views: prev.views, activeViewId: prev.activeViewId })
+  },
+  redo: () => {
+    if (!_redoHistory.length) return
+    const s = get()
+    _undoHistory.push(JSON.parse(JSON.stringify({ nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId })))
+    if (_undoHistory.length > MAX_UNDO) _undoHistory.shift()
+    const next = _redoHistory.pop()
+    set({ nodes: next.nodes, edges: next.edges, views: next.views, activeViewId: next.activeViewId })
   },
 
 
@@ -1383,9 +1398,15 @@ const useGraphStore = create((set, get) => ({
     }))
     return id
   },
-  setYtssClips: (nodeId, clips) => set(s => ({
-    nodes: s.nodes.map(n => n.id !== nodeId || !n.ytss ? n : { ...n, ytss: { ...n.ytss, clips } }),
-  })),
+  setYtssClips: (nodeId, clips) => {
+    // Structural changes (add / remove / reorder a step) get an undo checkpoint so a later undo doesn't
+    // silently jump back past them and drop clips. In-place edits (trim/title tweaks) don't checkpoint.
+    const prev = get().nodes.find(n => n.id === nodeId)
+    const prevIds = (prev?.ytss?.clips || []).map(c => c.id).join(',')
+    const nextIds = (clips || []).map(c => c.id).join(',')
+    if (prevIds !== nextIds) get().pushUndo()
+    set(s => ({ nodes: s.nodes.map(n => n.id !== nodeId || !n.ytss ? n : { ...n, ytss: { ...n.ytss, clips } }) }))
+  },
   setYtssProp: (nodeId, patch) => set(s => ({
     nodes: s.nodes.map(n => n.id !== nodeId || !n.ytss ? n : { ...n, ytss: { ...n.ytss, ...patch } }),
   })),

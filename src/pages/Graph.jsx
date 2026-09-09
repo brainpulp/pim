@@ -1358,6 +1358,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setImageUrl     = useGraphStore(s => s.setImageUrl)
   const pushUndo        = useGraphStore(s => s.pushUndo)
   const undo            = useGraphStore(s => s.undo)
+  const redo            = useGraphStore(s => s.redo)
 
   const addFrameToCenter = useCallback(() => {
     if (!svgRef.current) return
@@ -3178,10 +3179,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        undo()
+        if (e.shiftKey) redo(); else undo()   // Ctrl/Cmd+Shift+Z = redo
         return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {   // Ctrl+Y = redo (Windows)
+        e.preventDefault(); redo(); return
       }
 
       // Delete / Backspace — selected drawing (shape/line/emoji/text)
@@ -3362,7 +3366,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds, nodeMenu, photoMenu, contextMenu, selectedDrawingId, deleteDrawing, showNavHud, visibleNodeIds])
+  }, [selected, removeEdge, addNode, getSiblings, handleNodeTab, handleCreateSister, storeEdges, presentingSlideIdx, undo, redo, pushUndo, selectedImageIds, groupImages, ungroupImages, setDrilledImageId, confirmDeleteImages, cropImageId, selectedNodeIds, nodeMenu, photoMenu, contextMenu, selectedDrawingId, deleteDrawing, showNavHud, visibleNodeIds])
 
   const clientToSim = useCallback((clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect()
