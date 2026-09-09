@@ -3065,7 +3065,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // F5 → start presenting from the first slide (PowerPoint/Keynote convention). Only when slides exist
       // and we're not already presenting; otherwise F5 keeps its normal browser behavior (refresh).
       if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.shiftKey && presentingSlideIdxRef.current === null && slideSimNodes.length > 0) {
-        e.preventDefault(); presentSlide(0, 'fwd'); return
+        e.preventDefault(); startPresent(); return
       }
 
       // Escape closes the slideshow editor (its click-away backdrop was removed so canvas clicks don't).
@@ -6091,6 +6091,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     moveCamForStage(stages, next, true, stages[next]?.dur ?? 340)
   }
   const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
+  // Start presenting from the selected slide (a selected frame that's a slide), else the first slide.
+  const startPresent = () => {
+    if (!slideSimNodes.length) return
+    let idx = 0
+    const selId = selected?.type === 'node' ? selected.id : null
+    if (selId) { const i = slideSimNodes.findIndex(s => s.id === selId); if (i >= 0) idx = i }
+    presentSlide(idx, 'fwd')
+  }
 
   const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
@@ -6861,6 +6869,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   background: T_C.bg, border: `1px solid ${T_C.border}`, borderRadius: T_R.lg, padding: T_SP[2],
                   boxShadow: T_SH.md, minWidth: 168,
                 }}>
+                {slideSimNodes.length > 0 && item('▶', selected?.type === 'node' && slideIds.includes(selected.id) ? 'Present from this slide' : 'Present', () => { close(); startPresent() })}
+                {slideSimNodes.length > 0 && <div style={{ borderTop: `1px solid ${T_C.line}`, margin: `${T_SP[2]}px ${T_SP[4]}px` }} />}
                 {item('📋', 'Paste', () => { const { sx, sy } = contextMenu; close(); pasteAnyAt(sx, sy) })}
                 <div style={{ borderTop: `1px solid ${T_C.line}`, margin: `${T_SP[2]}px ${T_SP[4]}px` }} />
                 <MenuFlyout icon="＋" label="Insert">

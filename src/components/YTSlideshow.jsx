@@ -998,25 +998,16 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
   }, [hasVideo, getTime, getDuration])
   const max = dur > 0 ? Math.max(dur, video.end || 0) : Math.max(video.end || 0, curT || 0, 30)
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
-  const W = 340
-  const winW = typeof window !== 'undefined' ? window.innerWidth : 1200
-  const winH = typeof window !== 'undefined' ? window.innerHeight : 800
-  // Anchor the panel but never let it bleed off-screen: clamp the top so at least ~210px is visible, then
-  // cap its height to the remaining space — the body scrolls inside. (The old fixed 440px assumption made
-  // the now-taller panel spill off the bottom.)
-  const topRaw = anchor ? Math.max(8, Math.min(anchor.y, winH - 210)) : 0
-  const pos = anchor
-    ? { position: 'fixed', left: Math.max(8, Math.min(anchor.x, winW - W - 8)), top: topRaw, width: W, maxHeight: winH - topRaw - 8 }
-    : { position: 'fixed', top: 0, right: 0, height: '100%', width: 380 }
   const row = { display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5 }
+  // Bottom full-width footer, matching the slideshow editor.
   return (
-    <div style={{ ...pos, background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, fontFamily: '-apple-system, sans-serif', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '46vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
       onMouseDown={e => e.stopPropagation()}>
-      <div style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #23234a', flex: '0 0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '7px 14px', borderBottom: '1px solid #23234a', flex: '0 0 auto' }}>
         <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>{isFile ? 'Video' : 'YouTube video'}</div>
         <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
       </div>
-      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
+      <div style={{ padding: '8px 14px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: '10px 22px', overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
         {hasVideo && (
           <div style={{ fontSize: 11.5, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button title={previewPlaying ? 'Pause preview' : 'Play the trimmed clip on a loop'}
@@ -1050,8 +1041,10 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
         {/* Trim + markers on ONE timeline (blue = kept span; amber line = pause; wide = cut; ⏸ = cut that pauses) */}
         {hasVideo && <>
           {(() => { const mk = resolveMarkers(video); return (
-            <MarkersEditor markers={mk} max={max} start={video.start || 0} end={video.end || 0} onTrim={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })}
-              getTime={getTime} playhead={curT} onScrub={onScrubTime} onChange={markers => onPatch({ markers: markers.length ? markers : undefined, cuts: undefined })} />
+            <div style={{ flexBasis: '100%', width: '100%', minWidth: 0 }}>
+              <MarkersEditor markers={mk} max={max} start={video.start || 0} end={video.end || 0} onTrim={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })}
+                getTime={getTime} playhead={curT} onScrub={onScrubTime} onChange={markers => onPatch({ markers: markers.length ? markers : undefined, cuts: undefined })} />
+            </div>
           ) })()}
           <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
             <span>Start</span>
