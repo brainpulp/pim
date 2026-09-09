@@ -19,6 +19,8 @@ import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
 import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget } from '../components/YTSlideshow'
 import { playDrop } from '../lib/sound'
+import PresenterRemote from '../components/PresenterRemote'
+import QRCode from '../components/QRCode'
 
 // Platform: on a Mac, Ctrl+click IS the secondary (right) click — it fires a `contextmenu` event and
 // must open the context menu. Multi-select there uses Cmd (metaKey). On Windows/Linux, Ctrl is the
@@ -1195,6 +1197,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [showSlideGrid])
+
+  // Phone remote control: a stable per-browser code; the phone opens `#/remote/<code>` and drives the
+  // deck over a Supabase Realtime channel. `remoteOn` keeps the presenter subscribed for the session.
+  const remoteCodeRef = useRef(null)
+  if (!remoteCodeRef.current) {
+    try {
+      let c = localStorage.getItem('pim_remote_code')
+      if (!c) { c = Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 6); localStorage.setItem('pim_remote_code', c) }
+      remoteCodeRef.current = c
+    } catch { remoteCodeRef.current = Math.random().toString(36).slice(2, 10) }
+  }
+  const remoteCode = remoteCodeRef.current
+  const [remoteOn, setRemoteOn] = useState(false)    // presenter is listening for the phone
+  const [showRemote, setShowRemote] = useState(false) // QR-pairing modal
+  const remoteActionsRef = useRef({})
+  const [blackScreen, setBlackScreen] = useState(false)
   const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
   const setShowDraw = useGraphStore(s => s.setShowDraw)
   const showViews = useGraphStore(s => s.showViews)
@@ -6232,6 +6250,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
   exitPresentationRef.current = exitPresentation
 
+  // Phone-remote command handlers (kept in a ref so PresenterRemote subscribes once but always calls the
+  // latest closures). Present/Next/Prev/etc. mirror the on-stage keyboard controls.
+  remoteActionsRef.current = {
+    next: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent(); else advanceBuild(1) },
+    prev: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) advanceBuild(-1) },
+    nextSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) jumpSlide(1) },
+    prevSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) jumpSlide(-1) },
+    present: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent() },
+    exit: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) exitPresentation() },
+    black: () => { if (presentingSlideIdxRef.current !== null) setBlackScreen(b => !b) },
+  }
+  const curSlideNode = presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx] : null
+  const remoteState = {
+    presenting: presentingSlideIdx !== null,
+    idx: presentingSlideIdx ?? 0,
+    total: slideSimNodes.length,
+    stage: presentStageIdx,
+    stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
+    title: curSlideNode?.label || '',
+  }
+
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
   ;(activeView?.images || []).forEach(img => {
@@ -7945,6 +7984,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           setPresentingSlideIdx={setPresentingSlideIdx}
           onPresent={(idx) => presentSlide(idx, 'fwd')}
           onOpenGrid={() => setShowSlideGrid(true)}
+          onOpenRemote={() => { setRemoteOn(true); setShowRemote(true) }}
+          remoteOn={remoteOn}
           removeSlide={removeSlide}
           addSlide={addSlide}
           reorderSlides={reorderSlides}
@@ -7985,6 +8026,46 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onClose={() => setShowSlideGrid(false)}
         />
       )}
+
+      {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
+      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} />}
+
+      {/* Remote "black screen" — from the phone's Black button while presenting. Tap-to-clear or phone again. */}
+      {blackScreen && isPresenting && (
+        <div onClick={() => setBlackScreen(false)} style={{ position:'fixed', inset:0, zIndex:4500, background:'#000', cursor:'pointer' }} />
+      )}
+
+      {/* Remote pairing modal — QR + link to open on the phone. */}
+      {showRemote && (() => {
+        const url = `${window.location.origin}${import.meta.env.BASE_URL}#/remote/${remoteCode}`
+        return (
+          <div onMouseDown={() => setShowRemote(false)}
+            style={{ position:'fixed', inset:0, zIndex:6000, background:'rgba(6,6,14,0.72)', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+            <div onMouseDown={e => e.stopPropagation()}
+              style={{ background:'#111527', border:'1px solid #2a3358', borderRadius:16, padding:'22px 22px 18px', width:340, maxWidth:'92vw', boxShadow:'0 24px 60px rgba(0,0,0,0.6)', textAlign:'center' }}>
+              <div style={{ fontSize:'1.02rem', fontWeight:700, color:'#e6ebff', marginBottom:4 }}>📱 Phone remote</div>
+              <div style={{ fontSize:'0.78rem', color:'#8fa0d8', marginBottom:16, lineHeight:1.4 }}>Scan with your phone camera, then use it to walk the stage and drive the deck.</div>
+              <div style={{ display:'inline-block', padding:10, background:'#fff', borderRadius:12 }}>
+                <QRCode value={url} size={210} />
+              </div>
+              <div style={{ marginTop:14, display:'flex', gap:6, alignItems:'center' }}>
+                <input readOnly value={url} onFocus={e => e.target.select()}
+                  style={{ flex:1, fontSize:'0.72rem', background:'#0d1020', border:'1px solid #2a3358', borderRadius:8, color:'#c5d0ff', padding:'7px 9px', outline:'none' }} />
+                <button onClick={() => { try { navigator.clipboard?.writeText(url) } catch { /* ignore */ } }}
+                  style={{ background:'#232a45', border:'none', color:'#c5d0ff', borderRadius:8, padding:'7px 12px', cursor:'pointer', fontSize:'0.74rem', fontWeight:600 }}>Copy</button>
+              </div>
+              <div style={{ marginTop:14, display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background: remoteOn ? '#22e06a' : '#5a6088', boxShadow: remoteOn ? '0 0 8px #22e06a' : 'none' }} />
+                <span style={{ flex:1, textAlign:'left', fontSize:'0.72rem', color:'#8fa0d8' }}>{remoteOn ? 'Remote is live for this session' : 'Remote off'}</span>
+                <button onClick={() => setRemoteOn(v => !v)}
+                  style={{ background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:8, padding:'5px 11px', cursor:'pointer', fontSize:'0.72rem' }}>{remoteOn ? 'Turn off' : 'Turn on'}</button>
+                <button onClick={() => setShowRemote(false)}
+                  style={{ background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:8, padding:'5px 11px', cursor:'pointer', fontSize:'0.72rem' }}>Done</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Right rail — thin tab strip to toggle Draw / Slides (mutually exclusive panels sit to its left) */}
       {!isPresenting && (
@@ -8510,7 +8591,7 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -8626,9 +8707,14 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
           <button onClick={onClose} style={{ background:'transparent', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1 }}>‹</button>
           <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
         </div>
-        <button onClick={() => onOpenGrid?.()} disabled={!slideSimNodes.length} title="Full-screen slide sorter"
-          style={{ display:'flex', alignItems:'center', gap:4, background:'transparent', border:'1px solid #2a3358', color: slideSimNodes.length ? '#c5d0ff' : '#5a6088',
-            borderRadius:6, padding:'2px 7px', cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.66rem', fontWeight:600 }}>⊞ Grid</button>
+        <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+          <button onClick={() => onOpenRemote?.()} title="Control the presentation from your phone"
+            style={{ display:'flex', alignItems:'center', gap:4, background: remoteOn ? '#17301f' : 'transparent', border:`1px solid ${remoteOn ? '#2f7a4a' : '#2a3358'}`, color: remoteOn ? '#7ee6a6' : '#c5d0ff',
+              borderRadius:6, padding:'2px 7px', cursor:'pointer', fontSize:'0.66rem', fontWeight:600 }}>📱 Remote{remoteOn ? ' ●' : ''}</button>
+          <button onClick={() => onOpenGrid?.()} disabled={!slideSimNodes.length} title="Full-screen slide sorter"
+            style={{ display:'flex', alignItems:'center', gap:4, background:'transparent', border:'1px solid #2a3358', color: slideSimNodes.length ? '#c5d0ff' : '#5a6088',
+              borderRadius:6, padding:'2px 7px', cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.66rem', fontWeight:600 }}>⊞ Grid</button>
+        </div>
       </div>
 
       {/* Slideshow selector */}

@@ -13,9 +13,14 @@ import Strategy from './pages/Strategy'
 import CommandPalette from './components/CommandPalette'
 import SharedView from './pages/SharedView'
 import ShareDialog from './components/ShareDialog'
+import RemoteControl from './pages/RemoteControl'
 
 const parseShareToken = () => {
   const m = window.location.hash.match(/^#\/share\/([A-Za-z0-9]+)/)
+  return m ? m[1] : null
+}
+const parseRemoteCode = () => {
+  const m = window.location.hash.match(/^#\/remote\/([A-Za-z0-9]+)/)
   return m ? m[1] : null
 }
 
@@ -104,6 +109,7 @@ export default function App() {
   const [renamingProject, setRenamingProject] = useState(false)
   const [projectDraft, setProjectDraft] = useState('')
   const [shareToken, setShareToken] = useState(() => parseShareToken())
+  const [remoteCode, setRemoteCode] = useState(() => parseRemoteCode())
   const [authOverShare, setAuthOverShare] = useState(false)   // user chose "sign in to edit" from a share link
   const [showShare, setShowShare] = useState(false)
   const renameInputRef = useRef()
@@ -116,7 +122,7 @@ export default function App() {
   useEffect(() => { sessionStorage.setItem('pim_back_stack', JSON.stringify(backStack)) }, [backStack])
 
   useEffect(() => {
-    const onHash = () => setShareToken(parseShareToken())
+    const onHash = () => { setShareToken(parseShareToken()); setRemoteCode(parseRemoteCode()) }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -190,6 +196,9 @@ export default function App() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // A `#/remote/<code>` link is the phone remote — pure Realtime broadcast, no sign-in, no project load.
+  if (remoteCode) return <RemoteControl code={remoteCode} />
 
   // A `#/share/<token>` link is handled before the auth gate so view-only links
   // work with no sign-in. Wait for the session to resolve first (editor links redeem).
