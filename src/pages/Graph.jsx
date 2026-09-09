@@ -10,7 +10,7 @@ import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { pickDriveVideo, downloadDriveFile, driveEmbedUrl, hasDriveCreds, setDriveCreds } from '../lib/gdrive'
-import { luminance as lumaOf } from '../lib/theme'
+import { luminance as lumaOf, c as T_C, sp as T_SP, r as T_R, fs as T_FS, fw as T_FW, shadow as T_SH } from '../lib/theme'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -643,11 +643,11 @@ function ImageToolbar({ images, selectedImageIds, anchor,
   // Text menu row — matches the canvas right-click menu styling.
   const row = (label, onClick, opts = {}) => (
     <div onClick={onClick}
-      onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+      onMouseEnter={e => e.currentTarget.style.background = T_C.bg2}
       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-      style={{ padding: '6px 12px', fontSize: '0.82rem', color: opts.color || '#c5d0ff', cursor: 'pointer',
-        whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-      <span>{label}</span>{opts.right && <span style={{ color: '#8090b8' }}>{opts.right}</span>}
+      style={{ padding: `${T_SP[3]}px ${T_SP[5]}px`, fontSize: T_FS.sm, color: opts.color || T_C.tx, cursor: 'pointer',
+        whiteSpace: 'nowrap', borderRadius: T_R.sm, display: 'flex', justifyContent: 'space-between', gap: T_SP[6] }}>
+      <span>{label}</span>{opts.right && <span style={{ color: T_C.tx3 }}>{opts.right}</span>}
     </div>
   )
   const stepBtn = (label, onClick, color) => (
@@ -715,9 +715,9 @@ function ImageToolbar({ images, selectedImageIds, anchor,
       onClick={e => e.stopPropagation()}
       style={{
         position: 'absolute', left: anchor.px, top: anchor.py,
-        background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8,
-        padding: 4, display: 'flex', flexDirection: 'column', minWidth: 168,
-        zIndex: 25, boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
+        background: T_C.bg, border: `1px solid ${T_C.border}`, borderRadius: T_R.lg,
+        padding: T_SP[2], display: 'flex', flexDirection: 'column', minWidth: 168,
+        zIndex: 25, boxShadow: T_SH.md,
       }}
     >
       {sub === 'align' ? (<>
@@ -1031,18 +1031,18 @@ function MenuFlyout({ icon, label, children, minWidth = 168 }) {
   useEffect(() => () => clearTimeout(timer.current), [])
   return (
     <div ref={rowRef} style={{ position: 'relative' }} onMouseEnter={enter} onMouseLeave={leave}>
-      <div style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16, background: open ? '#23234a' : 'transparent' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          {icon && <span style={{ width: 16, textAlign: 'center', fontSize: '0.88rem', opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
+      <div style={{ padding: `${T_SP[3]}px ${T_SP[5]}px`, fontSize: T_FS.sm, color: T_C.tx, cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: T_R.sm, display: 'flex', justifyContent: 'space-between', gap: T_SP[6], background: open ? T_C.bg2 : 'transparent' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: T_SP[4] }}>
+          {icon && <span style={{ width: 16, textAlign: 'center', fontSize: T_FS.md, opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
           <span>{label}</span>
         </span>
-        <span style={{ color: '#8090b8' }}>›</span>
+        <span style={{ color: T_C.tx3 }}>›</span>
       </div>
       {open && (
         <div ref={flyRef} onMouseEnter={enter} onMouseLeave={leave}
           style={{ position: 'fixed', left: pos ? pos.left : -9999, top: pos ? pos.top : -9999,
             visibility: pos ? 'visible' : 'hidden', zIndex: 60,
-            background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth, maxHeight: '80vh', overflowY: 'auto', overflowX: 'hidden' }}>
+            background: T_C.bg, border: `1px solid ${T_C.border}`, borderRadius: T_R.lg, padding: T_SP[2], boxShadow: T_SH.md, minWidth, maxHeight: '80vh', overflowY: 'auto', overflowX: 'hidden' }}>
           {children}
         </div>
       )}
@@ -6659,9 +6659,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             style={{
               position: 'absolute', left: newNodeAt.px, top: newNodeAt.py,
               transform: 'translate(-50%, -50%)', zIndex: 30, width: 150,
-              background: '#16162a', border: '1px solid #5b6af0', borderRadius: 6,
-              color: '#fff', fontSize: '0.85rem', padding: '5px 8px', outline: 'none',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+              background: T_C.bg, border: `1px solid ${T_C.accent}`, borderRadius: T_R.md,
+              color: '#fff', fontSize: T_FS.base, padding: `${T_SP[3]}px ${T_SP[4]}px`, outline: 'none',
+              boxShadow: T_SH.md,
             }}
           />
         )}
@@ -6671,11 +6671,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const close = () => { setContextMenu(null); setCtxColors(false); setCtxPanel(null) }
           const item = (icon, label, onClick) => (
             <div onClick={onClick}
-              onMouseEnter={e => e.currentTarget.style.background = '#23234a'}
+              onMouseEnter={e => e.currentTarget.style.background = T_C.bg2}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              style={{ padding: '6px 12px', fontSize: '0.82rem', color: '#c5d0ff', cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: 4, display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                {icon && <span style={{ width: 16, textAlign: 'center', fontSize: '0.88rem', opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
+              style={{ padding: `${T_SP[3]}px ${T_SP[5]}px`, fontSize: T_FS.sm, color: T_C.tx, cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: T_R.sm, display: 'flex', justifyContent: 'space-between', gap: T_SP[6] }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: T_SP[4] }}>
+                {icon && <span style={{ width: 16, textAlign: 'center', fontSize: T_FS.md, opacity: 0.9, flexShrink: 0 }}>{icon}</span>}
                 <span>{label}</span>
               </span>
             </div>
@@ -6688,11 +6688,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 ref={el => clampMenuEl(el, contextMenu.px, contextMenu.py, false)}
                 style={{
                   position: 'absolute', left: contextMenu.px, top: contextMenu.py, zIndex: 35,
-                  background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4,
-                  boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 160,
+                  background: T_C.bg, border: `1px solid ${T_C.border}`, borderRadius: T_R.lg, padding: T_SP[2],
+                  boxShadow: T_SH.md, minWidth: 168,
                 }}>
                 {item('📋', 'Paste', () => { const { sx, sy } = contextMenu; close(); pasteAnyAt(sx, sy) })}
-                <div style={{ borderTop: '1px solid #23233e', margin: '3px 6px' }} />
+                <div style={{ borderTop: `1px solid ${T_C.line}`, margin: `${T_SP[2]}px ${T_SP[4]}px` }} />
                 <MenuFlyout icon="＋" label="Insert">
                   {item('▭', 'Frame', () => {
                     pushUndo()
