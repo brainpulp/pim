@@ -6852,8 +6852,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <>
               <div onMouseDown={close} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 34 }} />
               <div data-graphmenu onMouseDown={e => e.stopPropagation()} ref={el => clampMenuEl(el, bulkMenu.px, bulkMenu.py, false)}
-                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 4, boxShadow: '0 6px 20px rgba(0,0,0,0.7)', minWidth: 190, maxHeight: '70vh', overflowY: 'auto', overflowX: 'hidden' }}>
-                <div style={{ padding: '5px 12px 6px', fontSize: '0.7rem', color: '#8090b8', fontWeight: 600, borderBottom: '1px solid #23233e', marginBottom: 3 }}>{ids.length} {allFrames ? 'frame' : 'node'}{ids.length === 1 ? '' : 's'} selected</div>
+                style={{ position: 'absolute', left: bulkMenu.px, top: bulkMenu.py, zIndex: 35, background: T_C.bg, border: `1px solid ${T_C.border}`, borderRadius: T_R.lg, padding: T_SP[2], boxShadow: T_SH.md, minWidth: 190, maxHeight: '70vh', overflowY: 'auto', overflowX: 'hidden' }}>
+                <div style={{ padding: '5px 12px 6px', fontSize: T_FS.xs, color: T_C.tx2, fontWeight: T_FW.bold, borderBottom: `1px solid ${T_C.line}`, marginBottom: 3 }}>{ids.length} {allFrames ? 'frame' : 'node'}{ids.length === 1 ? '' : 's'} selected</div>
                 {(
                   <>
                     {row('🎨', 'Fill color', 'fill')}
@@ -8216,7 +8216,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
             style={{ position:'fixed', inset:0, zIndex:9998 }} />
           <div onMouseDown={e => e.stopPropagation()}
             style={{ position:'fixed', left: Math.min(slideMenu.x, window.innerWidth - 224), top: Math.min(slideMenu.y, window.innerHeight - 190),
-              zIndex:9999, background:'#12122a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 0', minWidth:206,
+              zIndex:9999, background:T_C.bg, border:`1px solid ${T_C.border}`, borderRadius:T_R.lg, padding:'6px 0', minWidth:206,
               boxShadow:'0 12px 34px rgba(0,0,0,0.55)' }}>
             <div style={{ padding:'2px 12px 8px', fontSize:'0.72rem', color:'#8090b8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{slideMenu.label}</div>
             <div style={{ padding:'2px 12px 8px', display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
@@ -11143,17 +11143,19 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
         </g>
       )}
 
-      {/* Corner resize handles — pivot on the opposite corner. All 4 when selected; when merely
-          hovered (not selected), just the bottom-right one so you can resize without selecting. */}
-      {(isSelected ? [[-1,-1,'tl','nwse-resize'],[1,-1,'tr','nesw-resize'],[-1,1,'bl','nesw-resize'],[1,1,'br','nwse-resize']]
-                   : (hover && !isPresenting ? [[1,1,'br','nwse-resize']] : [])).map(([sx, sy, corner, cur]) => (
-        <g key={corner} transform={`translate(${sx * halfW},${sy * halfH})`}
-          onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }}
-          style={{ cursor: cur }}>
-          <circle r={7} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} opacity={isSelected ? 1 : 0.85} />
-          <IconGlyph name="resize" size={12} color="#5b6af0" />
-        </g>
-      ))}
+      {/* Corner resize handles — same small white squares as free images (constant on-screen size).
+          All 4 when selected; when merely hovered (not selected), just the bottom-right one. */}
+      {(() => {
+        const hui = Math.min(6, Math.max(0.2, 1 / (zoomK || 1)))   // counter-scale the zoom (like images)
+        const hzS = 5 * hui
+        return (isSelected ? [[-1,-1,'tl','nwse-resize'],[1,-1,'tr','nesw-resize'],[-1,1,'bl','nesw-resize'],[1,1,'br','nwse-resize']]
+                           : (hover && !isPresenting ? [[1,1,'br','nwse-resize']] : [])).map(([sx, sy, corner, cur]) => (
+          <rect key={corner} x={sx * halfW - hzS} y={sy * halfH - hzS} width={hzS * 2} height={hzS * 2} rx={1.5 * hui}
+            fill="#fff" stroke="#5b6af0" strokeWidth={1.5 * hui} opacity={isSelected ? 1 : 0.85}
+            onMouseDown={e => { e.stopPropagation(); onResizeMouseDown(e, node.id, corner) }}
+            style={{ cursor: cur }} />
+        ))
+      })()}
     </g>
   )
 }
