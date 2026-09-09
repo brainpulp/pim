@@ -5,7 +5,7 @@
 //
 // Built on the YouTube IFrame Player API so play/pause/seek/duration/ended are all first-class — the
 // graph's arrow-key control just calls the same player handle exposed here via `onReady`.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { driveEmbedUrl, driveThumbUrl } from '../lib/gdrive'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -1097,7 +1097,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   const doFade = transition !== 'cut'
   const prevClipRef = useRef(cur)
   const [underlay, setUnderlay] = useState(null)
-  useEffect(() => {
+  useLayoutEffect(() => {   // set the underlay BEFORE paint so no black frame flashes between clips
     const before = prevClipRef.current
     prevClipRef.current = cur
     if (doFade && before && cur && before.id !== cur.id && clipKind(before) === 'image') {
@@ -1165,7 +1165,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ position: 'relative', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
         {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
-        {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease` : 'none' }}>
+        {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
           <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
         </div>}
       </div>
@@ -1203,7 +1203,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
   const doFade = (ytss?.transition || 'fade') !== 'cut'
   const prevClipRef = useRef(cur)
   const [underlay, setUnderlay] = useState(null)
-  useEffect(() => {
+  useLayoutEffect(() => {   // set the underlay BEFORE paint so no black frame flashes between clips
     const before = prevClipRef.current
     prevClipRef.current = cur
     if (doFade && before && cur && before.id !== cur.id && clipKind(before) === 'image') {
@@ -1261,7 +1261,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
           {cur
             ? <>
                 {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
-                <div key={'fade' + cur.id} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease` : 'none' }}>
+                <div key={'fade' + cur.id} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
                   <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
                 </div>
               </>
