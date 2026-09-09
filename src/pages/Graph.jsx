@@ -7946,6 +7946,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }}
             fullscreen={!!yn.ytss.fullscreen}
             onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
+            sound={yn.ytss.sound !== false}
+            onToggleSound={v => setYtssProp(ytssInspectorId, { sound: v })}
             transition={yn.ytss.transition || 'fade'}
             fadeMs={yn.ytss.fadeMs ?? 1000}
             onSetTransition={v => setYtssProp(ytssInspectorId, { transition: v })}
@@ -7987,7 +7989,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!clips.length) return null
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
-          <YTFullscreenPlayer clips={clips} startIndex={start} transition={yn?.ytss?.transition || 'fade'} fadeMs={yn?.ytss?.fadeMs ?? 1000} presenting={isPresenting}
+          <YTFullscreenPlayer clips={clips} startIndex={start} sound={yn?.ytss?.sound !== false} transition={yn?.ytss?.transition || 'fade'} fadeMs={yn?.ytss?.fadeMs ?? 1000} presenting={isPresenting}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)

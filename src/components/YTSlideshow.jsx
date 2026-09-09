@@ -728,7 +728,16 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   useEffect(() => () => clearEndLoop(), [])
   // Live playhead for the trim slider + markers timeline (polls the node preview's current time).
   const [curT, setCurT] = useState(0)
-  useEffect(() => { const t = setInterval(() => setCurT(preview?.time?.() || 0), 120); return () => clearInterval(t) }, [preview])
+  useEffect(() => {
+    const t = setInterval(() => {
+      setCurT(preview?.time?.() || 0)
+      // Keep the duration fresh: YouTube often reports it late, and the one-shot poll can miss it — a stale
+      // 0 duration is what made the timeline scale to the 30s floor and the playhead stop halfway.
+      const d = preview?.duration?.() || 0
+      if (d) setDur(prev => (Math.abs(d - prev) > 0.4 ? d : prev))
+    }, 120)
+    return () => clearInterval(t)
+  }, [preview])
 
   // Trim edits persist immediately (the scrub/loop preview is driven by the slider's onScrub/onLoop).
   const onTrimChange = (s, e) => { patch(sel, { start: s, end: e >= max ? 0 : e }) }
@@ -764,7 +773,9 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
   }
 
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
-  const max = Math.max(dur || 0, cur?.end || 0, 30)
+  // Once we know the real duration, the timeline scales to IT (so the playhead reaches the true end).
+  // Only before duration is known do we fall back to a 30s working width.
+  const max = dur > 0 ? Math.max(dur, cur?.end || 0) : Math.max(cur?.end || 0, curT || 0, 30)
   const k = cur ? clipKind(cur) : null, timed = cur ? isTimeMedia(cur) : false
   // FOOTER layout: a full-width bar docked to the bottom so the timeline gets the whole screen width.
   return (
@@ -777,6 +788,10 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         <span style={{ color: '#6a7290', fontSize: 11 }}>← → preview clips · space play/pause</span>
         <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#c5d0ff', fontSize: 12, cursor: 'pointer', marginLeft: 6 }}>
           <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Play in fullscreen
+        </label>
+        {/* Global audio master: off → the whole slideshow is muted (overrides each step's own Sound). */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#c5d0ff', fontSize: 12, cursor: 'pointer', marginLeft: 6 }} title="Master audio for the whole slideshow (off mutes every step)">
+          <input type="checkbox" checked={sound !== false} onChange={e => onToggleSound?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Sound
         </label>
         {/* Transition between clips: fade (with a global duration) or a hard cut. */}
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c5d0ff', fontSize: 12, marginLeft: 6 }}>
@@ -974,10 +989,14 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
   const [curT, setCurT] = useState(0)
   useEffect(() => {
     if (!hasVideo || !getTime) return
-    const t = setInterval(() => setCurT(getTime() || 0), 120)
+    const t = setInterval(() => {
+      setCurT(getTime() || 0)
+      const d = getDuration?.() || 0
+      if (d) setDur(prev => (Math.abs(d - prev) > 0.4 ? d : prev))
+    }, 120)
     return () => clearInterval(t)
-  }, [hasVideo, getTime])
-  const max = Math.max(dur || 0, video.end || 0, 30)
+  }, [hasVideo, getTime, getDuration])
+  const max = dur > 0 ? Math.max(dur, video.end || 0) : Math.max(video.end || 0, curT || 0, 30)
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const W = 340
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200
@@ -1137,7 +1156,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, sound = true, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onReplayDone }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
@@ -1219,7 +1238,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       <div style={{ position: 'relative', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
         {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
         {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
-          <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
+          <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true || sound === false} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
         </div>}
       </div>
       {ended && !presenting && (
@@ -1317,7 +1336,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
             ? <>
                 {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
                 <div key={'fade' + cur.id} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
-                  <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
+                  <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true || ytss?.sound === false} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
                 </div>
               </>
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
