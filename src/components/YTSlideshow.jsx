@@ -6,6 +6,7 @@
 // Built on the YouTube IFrame Player API so play/pause/seek/duration/ended are all first-class — the
 // graph's arrow-key control just calls the same player handle exposed here via `onReady`.
 import { useEffect, useRef, useState } from 'react'
+import { driveEmbedUrl, driveThumbUrl } from '../lib/gdrive'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 export const parseYoutubeId = (str) => {
@@ -209,8 +210,9 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
   )
 }
 
-// ── A slide's kind: youtube | video | audio | image (legacy clips with a youtubeId are 'youtube') ──
-export const clipKind = (c) => c?.kind || (c?.youtubeId ? 'youtube' : (c?.src ? 'video' : 'youtube'))
+// ── A slide's kind: youtube | video | audio | image | gdrive (legacy clips with a youtubeId are 'youtube') ──
+export const clipKind = (c) => c?.kind || (c?.driveId ? 'gdrive' : (c?.youtubeId ? 'youtube' : (c?.src ? 'video' : 'youtube')))
+// gdrive embeds are dumb iframes with no JS player API, so they're NOT time-controllable (no trim/markers).
 export const isTimeMedia = (c) => { const k = clipKind(c); return k === 'youtube' || k === 'video' || k === 'audio' }
 
 // Inverse trim ("snips"): `cuts` = [{s,e}] time ranges to SKIP. During playback, if the playhead lands
@@ -350,10 +352,26 @@ function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
   return <div style={{ width: '100%', height: '100%', background: `#000 center/contain no-repeat url("${clip.src}")`, ...style }} />
 }
 
+// ── Google Drive embed: a dumb <iframe> preview. No JS player API, so no seek/trim/markers and no
+// "ended" event — the show advances by click / delay only. Autoplays via the preview URL param. ──
+function GDrivePlayer({ clip, autoplay = false, interactive = true, onReady, style }) {
+  useEffect(() => {
+    onReady?.({
+      play: () => {}, pause: () => {}, seekBy: () => {}, seekTo: () => {},
+      mute: () => {}, unMute: () => {}, setRate: () => {},
+      duration: () => 0, time: () => 0, playing: () => true,
+    })
+  }, [clip.driveId]) // eslint-disable-line
+  return <iframe src={driveEmbedUrl(clip.driveId) + (autoplay ? '?autoplay=1' : '')}
+    style={{ width: '100%', height: '100%', border: 0, display: 'block', background: '#000', pointerEvents: interactive ? 'auto' : 'none', ...style }}
+    allow="autoplay; encrypted-media" allowFullScreen title={clip.title || 'Drive video'} />
+}
+
 // ── Polymorphic slide player: dispatches to the right engine by kind, one uniform handle ──────
 export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, coverOnPause = false, onReady, onEnded, style }) {
   const kind = clipKind(clip)
   if (kind === 'image') return <ImageSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
+  if (kind === 'gdrive') return <GDrivePlayer clip={clip} autoplay={autoplay} interactive={interactive} onReady={onReady} style={style} />
   if (kind === 'video' || kind === 'audio') return <MediaFilePlayer clip={clip} kind={kind} autoplay={autoplay} muted={muted} interactive={interactive} onReady={onReady} onEnded={onEnded} style={style} />
   return <YTPlayer clip={clip} autoplay={autoplay} muted={muted} captions={captions} loop={clip.loop} interactive={interactive} externalControl={false} coverOnPause={coverOnPause} onReady={onReady} onEnded={onEnded} style={style} />
 }
@@ -593,7 +611,7 @@ function Collapsible({ label, defaultOpen = false, children }) {
 }
 
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
-export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions, onUpload, onReplaceClipFile }) {
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, sound, onToggleSound, captions, onToggleCaptions, onUpload, onPickDrive, onReplaceClipFile }) {
   const [sel, setSel] = useState(0)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
@@ -700,7 +718,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
           <div ref={rowsRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, paddingBottom: 4, minHeight: 52 }}>
             {clips.map((c, i) => {
               const ck = clipKind(c)
-              const thumbSrc = ck === 'youtube' ? ytThumb(c.youtubeId) : (ck === 'image' ? c.src : null)
+              const thumbSrc = ck === 'youtube' ? ytThumb(c.youtubeId) : (ck === 'gdrive' ? driveThumbUrl(c.driveId) : (ck === 'image' ? c.src : null))
               return (
                 <div key={c.id} data-cliprow onMouseDown={rowDrag(i)} title={c.title || ck}
                   style={{ position: 'relative', flex: '0 0 auto', width: 108, borderRadius: 7, cursor: 'grab', overflow: 'hidden',
@@ -729,6 +747,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                 <button onClick={addUrl} style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>+</button>
               </div>
               {onUpload && <button onClick={onUpload} style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>⤒ Upload file…</button>}
+              {onPickDrive && <button onClick={onPickDrive} title="Search your Google Drive for a video" style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>🔍 Google Drive…</button>}
             </div>
           </div>
 

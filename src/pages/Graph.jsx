@@ -9,6 +9,7 @@ import { generateContent } from '../lib/ai'
 import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
+import { pickDriveVideo, downloadDriveFile, driveEmbedUrl, hasDriveCreds, setDriveCreds } from '../lib/gdrive'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -2514,6 +2515,74 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
     input.click()
   }, [addSlideToYtss, swapClipSrc, projectId])
+
+  // ── Google Drive video: search Drive (Picker), then Embed (link) or Download (into Supabase). ──
+  // A `dest` says where the picked video goes: { kind:'canvas', sx, sy } or { kind:'ytss', nodeId }.
+  const [drivePick, setDrivePick] = useState(null)   // { doc, dest } → Embed/Download chooser
+  const [driveSetup, setDriveSetup] = useState(null) // dest to resume once credentials are saved
+  const [driveBusy, setDriveBusy] = useState('')     // transient status (auth / downloading)
+  const DRIVE_MAX = 45 * 1024 * 1024                 // Supabase bucket is 50 MB; keep a margin
+
+  const openDrivePicker = useCallback(async (dest) => {
+    if (!hasDriveCreds()) { setDriveSetup(dest); return }
+    try {
+      setDriveBusy('Opening Google Drive…')
+      const doc = await pickDriveVideo()
+      setDriveBusy('')
+      if (doc) setDrivePick({ doc, dest })
+    } catch (e) {
+      setDriveBusy('')
+      if (e?.code === 'missing-creds') { setDriveSetup(dest); return }
+      alert('Google Drive: ' + (e?.message || e))
+    }
+  }, [])
+
+  const driveEmbedToDest = useCallback((dest, doc) => {
+    pushUndo()
+    if (dest.kind === 'ytss') {
+      addSlideToYtss(dest.nodeId, { kind: 'gdrive', driveId: doc.id, title: doc.name || '', trigger: 'click', delayMs: 1500 })
+    } else {
+      const W = 320
+      addVideo({ videoKind: 'gdrive', driveId: doc.id, title: doc.name || 'Drive video' }, dest.sx, dest.sy, W, Math.round(W * 9 / 16))
+    }
+  }, [addSlideToYtss, addVideo, pushUndo])
+
+  const driveDownloadToDest = useCallback(async (dest, doc) => {
+    if (doc.sizeBytes && doc.sizeBytes > DRIVE_MAX) {
+      alert(`That video is ${(doc.sizeBytes / 1024 / 1024).toFixed(0)} MB — over the 45 MB storage limit. Embed it instead, or pick a smaller file.`)
+      return
+    }
+    try {
+      setDriveBusy('Downloading from Drive…')
+      const blob = await downloadDriveFile(doc.id, doc.accessToken)
+      if (blob.size > DRIVE_MAX) { setDriveBusy(''); alert(`That video is ${(blob.size / 1024 / 1024).toFixed(0)} MB — over the 45 MB storage limit. Embed it instead.`); return }
+      const type = blob.type || 'video/mp4'
+      const file = new File([blob], doc.name || 'drive-video.mp4', { type })
+      const blobUrl = URL.createObjectURL(blob)
+      pushUndo()
+      let newVidId = null
+      if (dest.kind === 'ytss') {
+        addSlideToYtss(dest.nodeId, { kind: 'video', src: blobUrl, title: doc.name || '', trigger: 'click', delayMs: 1500 })
+      } else {
+        const W = 320
+        newVidId = addVideo({ videoKind: 'file', src: blobUrl, title: doc.name || 'Video' }, dest.sx, dest.sy, W, Math.round(W * 9 / 16))
+      }
+      setDriveBusy('Saving to storage…')
+      const url = await uploadMediaFile(file, projectId)
+      setDriveBusy('')
+      if (url) {
+        if (dest.kind === 'ytss') swapClipSrc(dest.nodeId, blobUrl, url)
+        else if (newVidId) updateImage(newVidId, { src: url })
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+      } else {
+        alert('Couldn’t save the video to storage (it may be too large). It’s embedded locally for now.')
+      }
+    } catch (e) {
+      setDriveBusy('')
+      alert('Drive download failed: ' + (e?.message || e))
+    }
+  }, [addSlideToYtss, addVideo, updateImage, swapClipSrc, projectId, pushUndo])
+
   useEffect(() => { ytssTargetRef.current = ytssActiveId || (selected?.type === 'node' && ytssNodeSet.has(selected.id) ? selected.id : null) }, [ytssActiveId, selected, ytssNodeSet])
   // Selecting something else exits the active slideshow (arrows go back to normal nav) — but not during
   // a presentation, where a slideshow is auto-entered without being "selected".
@@ -5134,6 +5203,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (k === 'audio') { addAudio({ src: clip.src, ...timed, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
     const W = 320
     if (k === 'youtube') { addVideo({ videoKind: 'youtube', youtubeId: clip.youtubeId, speed: clip.speed || 1, captions: !!clip.captions, ...timed }, sx, sy, W, Math.round(W * 9 / 16)); return }
+    if (k === 'gdrive') { addVideo({ videoKind: 'gdrive', driveId: clip.driveId, title: clip.title || 'Drive video' }, sx, sy, W, Math.round(W * 9 / 16)); return }
     addVideo({ videoKind: 'file', src: clip.src, speed: clip.speed || 1, ...timed, title: clip.title || 'Video' }, sx, sy, W, Math.round(W * 9 / 16))
   }, [addAudio, addImage, addVideo])
 
@@ -6635,6 +6705,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                   <MenuFlyout icon="🎬" label="Video">
                     {item('⤒', 'Upload a file', () => { const { sx, sy } = contextMenu; close(); addVideoFileAt(sx, sy) })}
                     {item('🔗', 'Paste a YouTube link', () => { const { sx, sy } = contextMenu; close(); addYoutubeAt(sx, sy) })}
+                    {item('🔍', 'Search Google Drive', () => { const { sx, sy } = contextMenu; close(); openDrivePicker({ kind: 'canvas', sx, sy }) })}
                   </MenuFlyout>
                   <MenuFlyout icon="🎵" label="Audio">
                     {item('⤒', 'Upload a file', () => { const { sx, sy } = contextMenu; close(); addAudioFileAt(sx, sy) })}
@@ -7203,6 +7274,84 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         })()}
 
         {/* Delete images confirm (multi-select) — anchored over the selection's center. */}
+        {/* Google Drive: Embed-vs-Download chooser after a video is picked. */}
+        {drivePick && (() => {
+          const { doc, dest } = drivePick
+          const sizeMB = doc.sizeBytes ? (doc.sizeBytes / 1024 / 1024).toFixed(0) : null
+          const tooBig = doc.sizeBytes && doc.sizeBytes > DRIVE_MAX
+          const overlay = { position: 'fixed', inset: 0, zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(6,6,16,0.55)' }
+          const box = { background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 12, padding: 20, width: 420, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }
+          const opt = (extra) => ({ display: 'block', width: '100%', textAlign: 'left', background: '#1c2148', border: '1px solid #3a4a8a', color: '#dbe4ff', borderRadius: 8, padding: '11px 13px', cursor: 'pointer', fontSize: 13, marginTop: 10, ...extra })
+          return (
+            <div style={overlay} onMouseDown={() => setDrivePick(null)}>
+              <div style={box} onMouseDown={e => e.stopPropagation()}>
+                <div style={{ color: '#c5d0ff', fontWeight: 700, fontSize: 15, marginBottom: 2 }}>Add this video</div>
+                <div style={{ color: '#8fa0d8', fontSize: 12.5, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name}{sizeMB ? ` · ${sizeMB} MB` : ''}</div>
+                <button style={opt()} onClick={() => { const d = drivePick; setDrivePick(null); driveEmbedToDest(d.dest, d.doc) }}>
+                  <div style={{ fontWeight: 700 }}>🔗 Embed (link)</div>
+                  <div style={{ color: '#8fa0d8', fontSize: 11.5, marginTop: 2 }}>Instant, no storage used. Plays in Google’s player; the file must stay shared. No trim/markers.</div>
+                </button>
+                <button style={opt(tooBig ? { opacity: 0.5, cursor: 'not-allowed' } : {})}
+                  onClick={() => { if (tooBig) return; const d = drivePick; setDrivePick(null); driveDownloadToDest(d.dest, d.doc) }}>
+                  <div style={{ fontWeight: 700 }}>⤓ Download into PIM {dest.kind === 'ytss' ? '(ad-free, full features)' : '(ad-free)'}</div>
+                  <div style={{ color: '#8fa0d8', fontSize: 11.5, marginTop: 2 }}>{tooBig ? `Too large to store (${sizeMB} MB > 45 MB) — embed instead.` : 'Copies it into your storage → behaves like an upload (trim, markers, fullscreen).'}</div>
+                </button>
+                <div style={{ textAlign: 'right', marginTop: 14 }}>
+                  <button onClick={() => setDrivePick(null)} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* Google Drive: one-time credential setup (free Google Cloud OAuth client + API key). */}
+        {driveSetup && (() => {
+          const overlay = { position: 'fixed', inset: 0, zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(6,6,16,0.55)' }
+          const box = { background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 12, padding: 20, width: 480, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }
+          const inp = { width: '100%', boxSizing: 'border-box', background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 6, padding: '7px 9px', fontSize: 12.5, outline: 'none', marginTop: 4 }
+          const save = () => {
+            const cid = (document.getElementById('pim-gd-cid')?.value || '').trim()
+            const key = (document.getElementById('pim-gd-key')?.value || '').trim()
+            if (!cid || !key) { alert('Please paste both the Client ID and the API key.'); return }
+            setDriveCreds(cid, key)
+            const dest = driveSetup; setDriveSetup(null)
+            openDrivePicker(dest)
+          }
+          const origin = (typeof window !== 'undefined' ? window.location.origin : '')
+          return (
+            <div style={overlay} onMouseDown={() => setDriveSetup(null)}>
+              <div style={box} onMouseDown={e => e.stopPropagation()}>
+                <div style={{ color: '#c5d0ff', fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Connect Google Drive</div>
+                <div style={{ color: '#8fa0d8', fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
+                  One-time setup with a <b style={{ color: '#c5d0ff' }}>free</b> Google Cloud project (your own Google account). Takes ~3 minutes:
+                  <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                    <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer" style={{ color: '#7c8cff' }}>console.cloud.google.com</a> → create a project.</li>
+                    <li><b style={{ color: '#c5d0ff' }}>APIs &amp; Services → Library</b>: enable <b style={{ color: '#c5d0ff' }}>Google Picker API</b> and <b style={{ color: '#c5d0ff' }}>Google Drive API</b>.</li>
+                    <li><b style={{ color: '#c5d0ff' }}>Credentials → Create credentials → API key</b> → paste it below.</li>
+                    <li><b style={{ color: '#c5d0ff' }}>Create credentials → OAuth client ID → Web application</b>. Under <b style={{ color: '#c5d0ff' }}>Authorized JavaScript origins</b> add:<br /><code style={{ color: '#a7f3d0', fontSize: 11.5, wordBreak: 'break-all' }}>{origin}</code> → paste the Client ID below.</li>
+                    <li>On the <b style={{ color: '#c5d0ff' }}>OAuth consent screen</b>, add your own email as a <b style={{ color: '#c5d0ff' }}>Test user</b> (needed while the app is unverified).</li>
+                  </ol>
+                </div>
+                <label style={{ color: '#c5d0ff', fontSize: 12, fontWeight: 600 }}>OAuth Client ID
+                  <input id="pim-gd-cid" placeholder="1234567890-abc….apps.googleusercontent.com" defaultValue={(() => { try { return localStorage.getItem('pim_gdrive_client_id') || '' } catch { return '' } })()} style={inp}
+                    onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()} /></label>
+                <label style={{ color: '#c5d0ff', fontSize: 12, fontWeight: 600, display: 'block', marginTop: 10 }}>API key
+                  <input id="pim-gd-key" placeholder="AIza…" defaultValue={(() => { try { return localStorage.getItem('pim_gdrive_api_key') || '' } catch { return '' } })()} style={inp}
+                    onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()} /></label>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+                  <button onClick={() => setDriveSetup(null)} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+                  <button onClick={save} style={{ background: '#3b4db0', border: '1px solid #5b6af0', color: '#fff', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Save &amp; search</button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* Google Drive: transient status (auth / downloading). */}
+        {driveBusy && (
+          <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 620, background: '#1c2148', border: '1px solid #3a4a8a', color: '#dbe4ff', borderRadius: 8, padding: '9px 16px', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontFamily: '-apple-system, sans-serif' }}>{driveBusy}</div>
+        )}
+
         {confirmDeleteImages && (() => {
           const sel = confirmDeleteImages.map(id => (activeView?.images || []).find(i => i.id === id)).filter(Boolean)
           const W = svgRef.current?.clientWidth || 800, Hh = svgRef.current?.clientHeight || 600
@@ -7584,6 +7733,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             onToggleFullscreen={v => setYtssProp(ytssInspectorId, { fullscreen: v })}
             onChange={clips => setYtssClips(ytssInspectorId, clips)}
             onUpload={() => uploadSlideToYtss(ytssInspectorId)}
+            onPickDrive={() => openDrivePicker({ kind: 'ytss', nodeId: ytssInspectorId })}
             onReplaceClipFile={(clipIdx) => {
               // Swap a YouTube clip for an uploaded video file: no ads, no YouTube chrome. Preserve the
               // clip's trim/speed/title; drop the youtubeId so it plays via the native file player.
@@ -10025,7 +10175,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
 
   // Uploaded file: apply playback rate, mute, and trim (start/end) directly on the element.
   useEffect(() => {
-    if (img.videoKind === 'youtube') return
+    if (img.videoKind === 'youtube' || img.videoKind === 'gdrive') return   // gdrive is a dumb iframe
     const v = ref.current; if (!v) return
     setEnded(false)
     v.playbackRate = speed
@@ -10129,7 +10279,7 @@ function VideoEmbed({ img, play, previewing, onReady }) {
   // File video: expose the same control handle so the selected-video scrubber (and the trim-edit
   // preview) can drive it. currentTime/duration stay fresh via the element's own events.
   useEffect(() => {
-    if (img.videoKind === 'youtube') return
+    if (img.videoKind === 'youtube' || img.videoKind === 'gdrive') return   // gdrive is a dumb iframe
     const v = ref.current; if (!v) return
     const sync = () => { curTimeRef.current = v.currentTime || 0; curDurRef.current = v.duration || 0; curPlayRef.current = !v.paused }
     v.addEventListener('timeupdate', sync)
@@ -10149,6 +10299,14 @@ function VideoEmbed({ img, play, previewing, onReady }) {
     return () => { v.removeEventListener('timeupdate', sync); v.removeEventListener('durationchange', sync); v.removeEventListener('loadedmetadata', sync); v.removeEventListener('play', sync); v.removeEventListener('pause', sync) }
   }, [img.videoKind, img.src, previewing]) // eslint-disable-line
 
+  if (img.videoKind === 'gdrive') {
+    // Google Drive embed — a dumb preview iframe (no JS player API). Scale it like the YouTube one.
+    const bw = Math.max(1, img.width || 320), bh = Math.max(1, img.height || 180)
+    const LW = 900, LH = Math.max(1, Math.round(LW * bh / bw)), s = bw / LW
+    return <iframe ref={ref} src={driveEmbedUrl(img.driveId) + (img.autoplay ? '?autoplay=1' : '')}
+      style={{ width: LW, height: LH, border: 0, display: 'block', transformOrigin: 'top left', transform: `scale(${s})` }}
+      allow="autoplay; encrypted-media" allowFullScreen title={img.title || 'Drive video'} />
+  }
   if (img.videoKind === 'youtube') {
     // While previewing, hold the src stable (drop start/end so a trim edit doesn't reload the iframe —
     // the scrubber seeks via the handle instead).
