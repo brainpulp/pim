@@ -3399,12 +3399,42 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       return
     }
 
-    // Cmd-click (Mac) / Ctrl-click (Win/Linux) toggles a node in/out of the multi-selection (no drag) —
-    // build a selection by clicking several nodes, then right-click for bulk changes. On a Mac, Ctrl+click
-    // is the secondary (right) click, NOT a multi-select — so it must fall through to open the menu.
+    // The multi-select modifier (Cmd on Mac, Ctrl on Win/Linux) now does BOTH, split by gesture:
+    //   • CLICK (no drag) → toggle this node in/out of the multi-selection (as before).
+    //   • DRAG           → duplicate the node (works for every node type, frames included) and drop the
+    //                      copy where released — the Ctrl/⌘-drag duplicate. (Alt-drag still duplicates too.)
+    // On a Mac, Ctrl+left is the secondary (right) click — handled below — so it never reaches here.
     if (e.metaKey || (e.ctrlKey && !IS_MAC)) {
-      setSelectedNodeIds(prev => { const s = new Set(prev); if (s.has(nodeId)) s.delete(nodeId); else s.add(nodeId); return s })
-      setSelected(null); setSelectedImageIds(new Set())
+      const srcSim = simNodesRef.current.find(n => n.id === nodeId)
+      const vp = viewNodePropsRef.current[nodeId] || {}
+      const label = storeNodes.find(n => n.id === nodeId)?.label || ''
+      const hasChildren = storeEdges.some(ed => ed.source === nodeId)
+      const start = { x: e.clientX, y: e.clientY }
+      let moved = false, ghostOn = false
+      const onMove = me => {
+        if (!moved && Math.hypot(me.clientX - start.x, me.clientY - start.y) < 4) return
+        moved = true
+        const [sx, sy] = clientToSim(me.clientX, me.clientY)
+        if (!ghostOn && srcSim) { setDupGhost({ x: srcSim.x, y: srcSim.y, label, fill: vp.fillColor, shape: vp.shape || 'circle', scale: vp.scale || 1 }); setGestureCursor('copy'); ghostOn = true }
+        setDupGhost(g => g ? { ...g, x: sx, y: sy } : g)
+      }
+      const onUp = me => {
+        window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp)
+        if (!moved) {   // plain modifier-click → toggle multi-selection
+          setSelectedNodeIds(prev => { const s = new Set(prev); if (s.has(nodeId)) s.delete(nodeId); else s.add(nodeId); return s })
+          setSelected(null); setSelectedImageIds(new Set())
+          return
+        }
+        setDupGhost(null); setGestureCursor(null)
+        const [dx, dy] = clientToSim(me.clientX, me.clientY)
+        pushUndo()
+        const newId = duplicateNodeAt(nodeId, dx, dy)
+        if (!newId) return
+        setSelected({ id: newId, type: 'node' }); setSelectedNodeIds(new Set())
+        setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === newId); if (sn) { sn.x = dx; sn.y = dy; sn.fx = dx; sn.fy = dy } scheduleRender() }, 0)
+        if (hasChildren) setDupChildrenPrompt({ srcId: nodeId, newId, cx: me.clientX, cy: me.clientY })
+      }
+      window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
       return
     }
     // Mac Ctrl+left-click = secondary click: don't start a drag/selection here; the contextmenu opens the menu.
@@ -5395,9 +5425,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const T = zoomTransformRef.current
 
     if (mode === 'drag') {
-      const isShift = e.shiftKey || e.metaKey || (e.ctrlKey && !IS_MAC)
+      // Ctrl (Win/Linux) / ⌘ (Mac) + DRAG duplicates this image and drops the copy where released;
+      // the same modifier + CLICK (no drag) toggles it in/out of the selection. (Alt-drag duplicates too.)
+      const dupMod = e.altKey || e.metaKey || (e.ctrlKey && !IS_MAC)
+      if (dupMod) {
+        const start = { x: e.clientX, y: e.clientY }
+        let moved = false
+        const onMove = me => {
+          if (!moved && Math.hypot(me.clientX - start.x, me.clientY - start.y) < 4) return
+          if (!moved) setGestureCursor('copy')
+          moved = true
+        }
+        const onUp = me => {
+          window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp)
+          if (!moved) {   // plain modifier-click → toggle selection
+            setSelectedImageIds(prev => { const s = new Set(prev); if (s.has(imageId)) s.delete(imageId); else s.add(imageId); return s })
+            return
+          }
+          setGestureCursor(null)
+          pushUndo()
+          const [dx, dy] = clientToSim(me.clientX, me.clientY)
+          const newId = duplicateImage(imageId)
+          if (newId) { updateImage(newId, { x: dx, y: dy }); setSelectedImageIds(new Set([newId])); setDrilledImageId(null) }
+        }
+        window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+        return
+      }
 
-      if (isShift) {
+      if (e.shiftKey) {
         // Shift-click toggles only the individual image — never expands to whole group
         setSelectedImageIds(prev => {
           const next = new Set(prev)
