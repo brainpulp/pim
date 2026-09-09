@@ -226,14 +226,18 @@ export function cutSkipTarget(t, cuts) {
 }
 
 // ── Markers ─────────────────────────────────────────────────────────────────────────────────
-// A marker on a clip is a range [s,e] with two INDEPENDENT flags:
-//   • cut  → skip [s,e] during playback (a "cutout" — same effect as a legacy `cut`).
-//   • stop → pause when the playhead reaches `s`; playback resumes on the next → / click.
-// A point marker (s === e) is a pure stop. A cut+stop marker pauses at its start, then skips.
-// Legacy `clip.cuts` (cut-only) are read as markers so old shows keep working.
+// A marker on a clip is a range [s,e]. Its WIDTH decides whether it's a cut — there is no separate flag:
+//   • a LINE (e ≈ s, zero width) is just a point on the timeline.
+//   • a WIDE marker (e − s ≥ CUT_MIN) is a CUTOUT — that range is skipped during playback.
+// An independent `stop` flag can be set on either: when true, playback PAUSES at `s` until → is pressed.
+//   → a line + stop = a plain pause step · a wide marker = a silent cut · a wide marker + stop = pause,
+//     then skip · a line without stop is inert (the editor never makes one).
+// Legacy `clip.cuts` are read as wide (cut) markers so old shows keep working.
+export const CUT_MIN = 0.1   // a marker at least this wide counts as a cutout
+export const isCut = (m) => (Math.max(m.s, m.e) - Math.min(m.s, m.e)) >= CUT_MIN
 export function resolveMarkers(clip) {
   if (clip?.markers?.length) return clip.markers
-  if (clip?.cuts?.length) return clip.cuts.map((c, i) => ({ id: `cut${i}`, s: c.s, e: c.e, cut: true, stop: false }))
+  if (clip?.cuts?.length) return clip.cuts.map((c, i) => ({ id: `cut${i}`, s: c.s, e: c.e, stop: false }))
   return []
 }
 
@@ -243,23 +247,21 @@ export function resolveMarkers(clip) {
 export function markerAction(t, markers, consumed) {
   if (t == null || !markers || !markers.length) return null
   const eps = 0.05
-  // Stops win over cuts, so a cut+stop marker pauses BEFORE it skips. Pick the earliest pending stop
-  // whose start the playhead has just reached.
+  // Stops win over cuts, so a wide-and-stop marker PAUSES before it skips. Earliest pending stop wins.
   let best = null
   for (const m of markers) {
     if (!m.stop || consumed?.has(m.id)) continue
     const s = Math.min(m.s, m.e ?? m.s)
-    // Trigger window: a range stop fires anywhere in [s,e]; a point stop gets a generous 1.5s window so a
-    // fast/slow poll can't overshoot it silently (consumed prevents re-firing after resume).
-    const hi = (m.e > m.s) ? Math.max(m.s, m.e) : s + 1.5
+    // A wide stop fires anywhere in its range; a line stop gets a generous 1.5s window so a fast/slow
+    // poll can't overshoot it silently (consumed prevents re-firing after resume).
+    const hi = isCut(m) ? Math.max(m.s, m.e) : s + 1.5
     if (t >= s - eps && t < hi - 0.05) { if (!best || s < best.s) best = { type: 'stop', id: m.id, s } }
   }
   if (best) return best
-  // Then cuts — any stop here is already consumed, so skipping is safe.
+  // Then cuts (width) — any stop here is already consumed, so skipping is safe.
   for (const m of markers) {
-    if (!m.cut) continue
+    if (!isCut(m)) continue
     const s = Math.min(m.s, m.e), e = Math.max(m.s, m.e)
-    if (e - s < 0.05) continue
     if (t >= s - eps && t < e - 0.1) return { type: 'skip', to: e }
   }
   return null
@@ -469,10 +471,8 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
   const commit = (arr) => onChange(sorted(arr))
   const setM = (i, patch) => onChange(markers.map((m, j) => j === i ? { ...m, ...patch } : m))
   const addMarker = () => {
-    const at = snap(getTime?.() ?? M / 2)
-    const w = Math.min(Math.max(2, M * 0.04), M * 0.3)
-    const s = snap(Math.max(0, Math.min(at, M - w))), e = snap(Math.min(M, s + w))
-    commit([...(markers || []), { id: newMarkerId(), s, e, cut: false, stop: true }])   // default: a stop you can stretch/convert
+    const at = snap(getTime?.() ?? M / 2)   // a LINE (zero width) — a stop point. Drag its right edge to widen → a cutout.
+    commit([...(markers || []), { id: newMarkerId(), s: at, e: at, stop: true }])
   }
   const dragHandle = (i, which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation()
@@ -480,6 +480,7 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
       const t = snap(frac * stateRef.current.M)
+      // which='s' moves the start (carrying the whole line), which='e' stretches the end (creates a cutout)
       onChange(stateRef.current.markers.map((m, j) => j !== i ? m : (which === 's' ? { ...m, s: Math.min(t, m.e) } : { ...m, e: Math.max(t, m.s) })))
     }
     const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); commit(stateRef.current.markers) }
@@ -492,45 +493,42 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
       onBlur={e => { const v = parseTime(e.target.value); if (v == null) { e.target.value = fmtTime(value, 1); return } onCommit(snap(v)) }}
       style={{ width: 58, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '3px 5px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
   )
-  const toggle = (on, label, title, onClick, color) => (
-    <button title={title} onClick={onClick}
-      style={{ background: on ? color.bg : 'transparent', border: `1px solid ${on ? color.br : '#2d3a6a'}`, color: on ? color.fg : '#7d84a4', borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 11, fontWeight: on ? 700 : 500, whiteSpace: 'nowrap' }}>{label}</button>
-  )
   const iconBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
   const phPct = playhead != null && playhead >= 0 && playhead <= M ? pct(playhead) : null
   return (
     <div style={{ margin: '2px 8px' }}>
-      <div ref={trackRef} style={{ position: 'relative', height: 24 }}>
-        <div style={{ position: 'absolute', top: 10, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
-        {phPct != null && <div style={{ position: 'absolute', top: 1, left: `calc(${phPct}% - 1px)`, width: 2, height: 20, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />}
+      <div style={{ fontSize: 10.5, color: '#7c86ad', marginBottom: 4 }}>A <b style={{ color: '#ffcf8a' }}>line</b> = a stop; drag its right edge to widen it into a <b style={{ color: '#ffb0c0' }}>cutout</b>. Toggle ⏸ to make a cutout also pause.</div>
+      <div ref={trackRef} style={{ position: 'relative', height: 26 }}>
+        <div style={{ position: 'absolute', top: 11, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
+        {phPct != null && <div style={{ position: 'absolute', top: 1, left: `calc(${phPct}% - 1px)`, width: 2, height: 22, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 3 }} />}
         {markers.map((m, i) => {
-          const s = pct(Math.min(m.s, m.e)), e = pct(Math.max(m.s, m.e))
-          const hcol = m.stop ? '#ffb454' : '#f87171'
+          const a = pct(Math.min(m.s, m.e)), bb = pct(Math.max(m.s, m.e)); const wide = isCut(m)
           return (
             <div key={m.id || i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-              {m.cut && <div style={{ position: 'absolute', top: 8, left: `${s}%`, width: `${Math.max(0, e - s)}%`, height: 8, borderRadius: 2, background: 'rgba(248,113,113,0.4)', border: '1px solid #f87171' }} />}
-              {m.stop && <div title="Stop marker" style={{ position: 'absolute', top: 0, left: `calc(${s}% - 1px)`, width: 3, height: 22, borderRadius: 1, background: '#ffb454', boxShadow: '0 0 4px rgba(255,180,84,0.8)' }} />}
-              <div onMouseDown={dragHandle(i, 's')} title="Drag the start" style={{ position: 'absolute', top: 2, left: `calc(${s}% - 5px)`, width: 10, height: 20, borderRadius: 3, background: hcol, cursor: 'ew-resize', pointerEvents: 'auto' }} />
-              {m.cut && <div onMouseDown={dragHandle(i, 'e')} title="Drag the end" style={{ position: 'absolute', top: 2, left: `calc(${e}% - 5px)`, width: 10, height: 20, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />}
+              {wide && <div title="Cutout — skipped on playback" style={{ position: 'absolute', top: 8, left: `${a}%`, width: `${Math.max(0, bb - a)}%`, height: 10, borderRadius: 2, background: 'rgba(248,113,113,0.4)', border: '1px solid #f87171' }} />}
+              <div title={m.stop ? 'Stop point' : 'Marker'} style={{ position: 'absolute', top: 0, left: `calc(${a}% - 1.5px)`, width: 3, height: 24, borderRadius: 1, background: m.stop ? '#ffb454' : '#8a94c0', boxShadow: m.stop ? '0 0 4px rgba(255,180,84,0.8)' : 'none' }} />
+              <div onMouseDown={dragHandle(i, 's')} title="Drag to move the marker" style={{ position: 'absolute', top: 3, left: `calc(${a}% - 11px)`, width: 10, height: 20, borderRadius: '3px 0 0 3px', background: m.stop ? '#ffb454' : '#8a94c0', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              <div onMouseDown={dragHandle(i, 'e')} title="Drag right to widen into a cutout" style={{ position: 'absolute', top: 3, left: `calc(${bb}% + 1px)`, width: 10, height: 20, borderRadius: '0 3px 3px 0', background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
             </div>
           )
         })}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
         {markers.map((m, i) => {
-          const cs = Math.min(m.s, m.e), ce = Math.max(m.s, m.e)
+          const cs = Math.min(m.s, m.e), ce = Math.max(m.s, m.e); const wide = isCut(m)
           return (
             <div key={m.id || i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap', padding: '4px 0', borderTop: i ? '1px solid #1b2036' : 'none' }}>
+              <span style={{ minWidth: 66, color: wide ? '#ffb0c0' : '#ffcf8a', fontWeight: 600 }}>{wide ? `✂ cut ${fmtTime(ce - cs, 1)}` : '⏸ stop'}</span>
               <span style={{ color: '#7c86ad' }}>at</span>
-              <TimeField value={cs} title="Marker start (m:ss.s)" onCommit={v => setM(i, { s: Math.min(v, ce) })} />
+              <TimeField value={cs} title="Marker time (m:ss.s)" onCommit={v => setM(i, { s: Math.min(v, ce) })} />
               {getTime && <button style={iconBtn} title="Set to the current playhead" onClick={() => setM(i, { s: Math.min(snap(getTime()), ce) })}>⇤</button>}
-              <span style={{ color: '#7c86ad' }}>→</span>
-              <TimeField value={ce} title="Marker end (m:ss.s) — only matters for a Cut" onCommit={v => setM(i, { e: Math.max(v, cs) })} />
-              {getTime && <button style={iconBtn} title="Set to the current playhead" onClick={() => setM(i, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
+              <span style={{ color: '#7c86ad' }}>–</span>
+              <TimeField value={ce} title="Cutout end (m:ss.s) — set later than the start to make a cutout" onCommit={v => setM(i, { e: Math.max(v, cs) })} />
+              {getTime && <button style={iconBtn} title="Set the cutout end to the current playhead" onClick={() => setM(i, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
               {onScrub && <button style={iconBtn} title="Preview: jump to just before this marker" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
               <span style={{ flex: 1, minWidth: 4 }} />
-              {toggle(!!m.stop, '⏸ Stop', 'Pause here until → is pressed', () => setM(i, { stop: !m.stop }), { bg: '#3a2c10', br: '#8a6a2f', fg: '#ffcf8a' })}
-              {toggle(!!m.cut, '✂ Cut', 'Skip this range during playback', () => setM(i, { cut: !m.cut }), { bg: '#3a1620', br: '#8a3550', fg: '#ffb0c0' })}
+              <button title="Pause here until → is pressed" onClick={() => setM(i, { stop: !m.stop })}
+                style={{ background: m.stop ? '#3a2c10' : 'transparent', border: `1px solid ${m.stop ? '#8a6a2f' : '#2d3a6a'}`, color: m.stop ? '#ffcf8a' : '#7d84a4', borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 11, fontWeight: m.stop ? 700 : 500, whiteSpace: 'nowrap' }}>⏸ Stop</button>
               <button onClick={() => commit(markers.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>✕</button>
             </div>
           )
@@ -601,6 +599,9 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
     return () => clearInterval(t)
   }, [cur?.id]) // eslint-disable-line
   useEffect(() => () => clearEndLoop(), [])
+  // Live playhead for the trim slider + markers timeline (polls the node preview's current time).
+  const [curT, setCurT] = useState(0)
+  useEffect(() => { const t = setInterval(() => setCurT(preview?.time?.() || 0), 120); return () => clearInterval(t) }, [preview])
 
   // Trim edits persist immediately (the scrub/loop preview is driven by the slider's onScrub/onLoop).
   const onTrimChange = (s, e) => { patch(sel, { start: s, end: e >= max ? 0 : e }) }
@@ -665,7 +666,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         return (
         <div style={{ padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
           {timed && <>
-            <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
+            <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 2 }}>
               <span>Start</span>
               <input style={inp} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
@@ -679,7 +680,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               const mk = resolveMarkers(cur)
               return <div style={{ marginTop: 6 }}>
                 <Collapsible label={`◆ Markers${mk.length ? ` (${mk.length})` : ''} — stop points & cutouts`} defaultOpen={mk.length > 0}>
-                  <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
+                  <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} playhead={curT} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
                 </Collapsible>
               </div>
             })()}
