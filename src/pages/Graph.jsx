@@ -1125,6 +1125,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
   const [showFlowchart, setShowFlowchart] = useState(false)  // flowchart text⇄graph panel
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
+  const [frameStyleId, setFrameStyleId] = useState(null) // frame whose FILL picker is open (right-click only)
   const [dupGhost, setDupGhost] = useState(null)         // alt-drag duplicate: translucent preview { x, y, label, fill, shape, scale }
   const [dupChildrenPrompt, setDupChildrenPrompt] = useState(null) // { srcId, newId, cx, cy } after alt-drop when source has children
   const [floatDock, setFloatDock] = useState(() => { try { return localStorage.getItem('pim_style_undock') === '1' } catch { return false } })
@@ -2844,9 +2845,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (Math.abs(sx - n.x) <= hw && Math.abs(sy - n.y) <= hh) fHit = n
         }
         if (fHit) {
-          setContextMenu(null); setPhotoMenu(null)
+          setContextMenu(null); setPhotoMenu(null); setNodeMenu(null)
           setSelected({ id: fHit.id, type: 'node' }); setSelectedImageIds(new Set())
-          setNodeMenu({ nodeId: fHit.id, px, py })
+          setFrameStyleId(fHit.id)   // opens the dedicated frame FILL picker (right-click only)
           rcLog.current(`✓ FRAME style menu opened (${fHit.id})`)
           return
         }
@@ -3362,6 +3363,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
     canvasFocused.current = true
+    setFrameStyleId(null)   // a left-click closes the frame FILL picker (right-click reopens it)
 
     // Alt-drag → duplicate: drag a translucent ghost (original stays put); on drop, create a copy —
     // a sister under the same parent, or a floating node if the source has no parent. If the source
@@ -7524,11 +7526,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         </div>}
 
 
-        {/* Frame color picker â€" shows when a frame is selected */}
-        {!isPresenting && selected?.type === 'node' && (() => {
-          const sn = simNodesRef.current.find(n => n.id === selected.id)
+        {/* Frame FILL picker — opens on RIGHT-CLICK of a selected frame only (not on plain selection). */}
+        {!isPresenting && frameStyleId && selected?.type === 'node' && selected.id === frameStyleId && (() => {
+          const sn = simNodesRef.current.find(n => n.id === frameStyleId)
           if (!sn) return null
-          const fvp = getVP(selected.id)
+          const fvp = getVP(frameStyleId)
           if (fvp.shape !== 'frame') return null
           const { halfH: defHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
           const halfH = fvp.frameHalfH ?? defHH
