@@ -93,6 +93,9 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
   const clipRef = useRef(clip); clipRef.current = clip
   const loopRef = useRef(loop); loopRef.current = loop
   const cbRef = useRef({}); cbRef.current = { onReady, onEnded, onStateChange }
+  const waitingRef = useRef(false)         // paused at a stop marker, waiting for → / resume
+  const consumedRef = useRef(new Set())    // stop-marker ids already released this playthrough
+  const lastTRef = useRef(0)
 
   useEffect(() => {
     let dead = false
@@ -137,10 +140,12 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
 
   // Build the imperative handle the graph/inspector drives.
   const makeHandle = (p) => ({
-    play: () => { try { p.playVideo() } catch { /* */ } },
+    play: () => { waitingRef.current = false; try { p.playVideo() } catch { /* */ } },
     pause: () => { try { p.pauseVideo() } catch { /* */ } },
+    isWaiting: () => waitingRef.current,                                   // paused at a stop marker?
+    resume: () => { waitingRef.current = false; try { p.playVideo() } catch { /* */ } },   // → continue to the next marker/end
     seekBy: (d) => { try { p.seekTo(Math.max(0, (p.getCurrentTime?.() || 0) + d), true) } catch { /* */ } },
-    seekTo: (t) => { try { p.seekTo(Math.max(0, t), true) } catch { /* */ } },
+    seekTo: (t) => { if (t <= (clipRef.current?.start || 0) + 0.5) consumedRef.current.clear(); try { p.seekTo(Math.max(0, t), true) } catch { /* */ } },
     mute: () => { try { p.mute() } catch { /* */ } },
     unMute: () => { try { p.unMute() } catch { /* */ } },
     setRate: (r) => { try { p.setPlaybackRate(r || 1) } catch { /* */ } },
@@ -170,14 +175,19 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
     } catch { /* */ }
   }, [clip?.youtubeId, clip?.start, clip?.end, clip?.speed]) // eslint-disable-line
 
-  // Snip playback: poll currentTime and jump over any cut range.
+  // Marker playback: poll currentTime, skip cut ranges, and pause at stop markers.
   useEffect(() => {
     const iv = setInterval(() => {
       const p = playerRef.current; if (!p?.getCurrentTime) return
-      const cuts = clipRef.current?.cuts; if (!cuts?.length) return
+      const markers = resolveMarkers(clipRef.current); if (!markers.length) return
+      if (waitingRef.current) return   // paused at a stop → wait for resume
       let t; try { t = p.getCurrentTime() } catch { return }
-      const tgt = cutSkipTarget(t, cuts)
-      if (tgt != null) { try { p.seekTo(tgt, true) } catch { /* */ } }
+      if (t < lastTRef.current - 1) consumedRef.current.clear()   // rewound/looped → stops fire again
+      lastTRef.current = t
+      const a = markerAction(t, markers, consumedRef.current)
+      if (!a) return
+      if (a.type === 'skip') { try { p.seekTo(a.to, true) } catch { /* */ } }
+      else if (a.type === 'stop') { consumedRef.current.add(a.id); waitingRef.current = true; try { p.pauseVideo() } catch { /* */ } }
     }, 120)
     return () => clearInterval(iv)
   }, [])
@@ -215,23 +225,72 @@ export function cutSkipTarget(t, cuts) {
   return null
 }
 
+// ── Markers ─────────────────────────────────────────────────────────────────────────────────
+// A marker on a clip is a range [s,e] with two INDEPENDENT flags:
+//   • cut  → skip [s,e] during playback (a "cutout" — same effect as a legacy `cut`).
+//   • stop → pause when the playhead reaches `s`; playback resumes on the next → / click.
+// A point marker (s === e) is a pure stop. A cut+stop marker pauses at its start, then skips.
+// Legacy `clip.cuts` (cut-only) are read as markers so old shows keep working.
+export function resolveMarkers(clip) {
+  if (clip?.markers?.length) return clip.markers
+  if (clip?.cuts?.length) return clip.cuts.map((c, i) => ({ id: `cut${i}`, s: c.s, e: c.e, cut: true, stop: false }))
+  return []
+}
+
+// Decide what should happen at time `t`. `consumed` is a Set of stop-marker ids already released
+// this playthrough (so we don't re-pause at the same stop after the user hits →).
+// Returns { type:'stop', id } | { type:'skip', to } | null.
+export function markerAction(t, markers, consumed) {
+  if (t == null || !markers || !markers.length) return null
+  const eps = 0.05
+  // Stops win over cuts, so a cut+stop marker pauses BEFORE it skips. Pick the earliest pending stop
+  // whose start the playhead has just reached.
+  let best = null
+  for (const m of markers) {
+    if (!m.stop || consumed?.has(m.id)) continue
+    const s = Math.min(m.s, m.e ?? m.s)
+    // Trigger window: a range stop fires anywhere in [s,e]; a point stop gets a generous 1.5s window so a
+    // fast/slow poll can't overshoot it silently (consumed prevents re-firing after resume).
+    const hi = (m.e > m.s) ? Math.max(m.s, m.e) : s + 1.5
+    if (t >= s - eps && t < hi - 0.05) { if (!best || s < best.s) best = { type: 'stop', id: m.id, s } }
+  }
+  if (best) return best
+  // Then cuts — any stop here is already consumed, so skipping is safe.
+  for (const m of markers) {
+    if (!m.cut) continue
+    const s = Math.min(m.s, m.e), e = Math.max(m.s, m.e)
+    if (e - s < 0.05) continue
+    if (t >= s - eps && t < e - 0.1) return { type: 'skip', to: e }
+  }
+  return null
+}
+
 // ── Native <video>/<audio> file player with a YT-compatible handle ────────────────────────────
 function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interactive = true, onReady, onEnded, style }) {
   const ref = useRef(null)
+  const clipRef = useRef(clip); clipRef.current = clip   // markers/cuts read live so editing them doesn't reseek
   const start = clip.start || 0
   const end = (clip.end && clip.end > start) ? clip.end : 0
   useEffect(() => {
     const el = ref.current; if (!el) return
     el.playbackRate = clip.speed || 1
     el.loop = !!clip.loop
-    let ended = false
-    const seekStart = () => { if (start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
+    let ended = false, waiting = false, lastT = 0
+    const consumed = new Set()
+    const seekStart = () => { consumed.clear(); waiting = false; if (start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
     const onLoaded = () => { seekStart(); el.playbackRate = clip.speed || 1 }
     const onTime = () => {
-      const tgt = cutSkipTarget(el.currentTime, clip.cuts)
-      if (tgt != null) { try { el.currentTime = tgt } catch { /* */ } return }
+      if (waiting) return
+      const t = el.currentTime
+      if (t < lastT - 1) consumed.clear()   // rewound/looped → stops fire again
+      lastT = t
+      const a = markerAction(t, resolveMarkers(clipRef.current), consumed)
+      if (a) {
+        if (a.type === 'skip') { try { el.currentTime = a.to } catch { /* */ } return }
+        if (a.type === 'stop') { consumed.add(a.id); waiting = true; el.pause(); return }
+      }
       if (end && el.currentTime >= end) {
-        if (clip.loop) { try { el.currentTime = start } catch { /* */ } el.play().catch(() => {}) }
+        if (clip.loop) { try { el.currentTime = start } catch { /* */ } consumed.clear(); el.play().catch(() => {}) }
         else if (!ended) { ended = true; el.pause(); onEnded?.() }
       }
     }
@@ -244,15 +303,17 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
     if (autoplay) { el.muted = !!muted; el.play().catch(() => { el.muted = true; el.play().catch(() => {}) }) }
     else el.muted = !!muted
     onReady?.({
-      play: () => el.play().catch(() => {}), pause: () => el.pause(),
+      play: () => { waiting = false; el.play().catch(() => {}) }, pause: () => el.pause(),
+      isWaiting: () => waiting,                                        // paused at a stop marker?
+      resume: () => { waiting = false; el.play().catch(() => {}) },    // → continue to the next marker/end
       seekBy: (d) => { try { el.currentTime = Math.max(start, (el.currentTime || 0) + d) } catch { /* */ } },
-      seekTo: (t) => { try { el.currentTime = Math.max(0, t) } catch { /* */ } },
+      seekTo: (t) => { if (t <= start + 0.5) consumed.clear(); try { el.currentTime = Math.max(0, t) } catch { /* */ } },
       mute: () => { el.muted = true }, unMute: () => { el.muted = false },
       setRate: (r) => { el.playbackRate = r || 1 },
       duration: () => el.duration || 0, time: () => el.currentTime || 0,
     })
     return () => { el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
-  }, [clip.src, clip.start, clip.end, clip.speed, clip.loop, JSON.stringify(clip.cuts || [])]) // eslint-disable-line
+  }, [clip.src, clip.start, clip.end, clip.speed, clip.loop]) // eslint-disable-line
 
   if (kind === 'audio') {
     return (
@@ -395,20 +456,23 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
 // ── Snip ("inverse trim") editor: red bands over the timeline mark ranges to SKIP during playback. ──
 // Full editing surface: drag the red handles on the timeline OR punch exact in/out times in the numeric
 // fields; ⇤/⇥ snap a boundary to the current playhead; ▷ previews the snip; the playhead is shown live.
-function CutsEditor({ cuts = [], max, getTime, playhead, onScrub, onChange }) {
+// Markers editor: each marker is a range [s,e] with two independent toggles — Cut (skip it) and Stop
+// (pause there until →). Punch exact m:ss.s in/out, drag the handles, ⇤/⇥ snap to the playhead, ▷ preview.
+const newMarkerId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'm' + Math.random().toString(36).slice(2))
+function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange }) {
   const trackRef = useRef(null)
   const M = Math.max(max || 1, 1)
-  const stateRef = useRef({ cuts, M }); stateRef.current = { cuts, M }
+  const stateRef = useRef({ markers, M }); stateRef.current = { markers, M }
   const pct = t => Math.max(0, Math.min(1, t / M)) * 100
   const snap = t => Math.round(Math.max(0, Math.min(M, t)) * 10) / 10   // 0.1s
   const sorted = (arr) => [...arr].sort((a, b) => Math.min(a.s, a.e) - Math.min(b.s, b.e))
   const commit = (arr) => onChange(sorted(arr))
-  const setCut = (i, patch) => onChange(cuts.map((c, j) => j === i ? { ...c, ...patch } : c))
-  const addCut = () => {
+  const setM = (i, patch) => onChange(markers.map((m, j) => j === i ? { ...m, ...patch } : m))
+  const addMarker = () => {
     const at = snap(getTime?.() ?? M / 2)
-    const w = Math.min(Math.max(3, M * 0.05), M * 0.3)
+    const w = Math.min(Math.max(2, M * 0.04), M * 0.3)
     const s = snap(Math.max(0, Math.min(at, M - w))), e = snap(Math.min(M, s + w))
-    commit([...(cuts || []), { s, e }])
+    commit([...(markers || []), { id: newMarkerId(), s, e, cut: false, stop: true }])   // default: a stop you can stretch/convert
   }
   const dragHandle = (i, which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation()
@@ -416,57 +480,62 @@ function CutsEditor({ cuts = [], max, getTime, playhead, onScrub, onChange }) {
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
       const t = snap(frac * stateRef.current.M)
-      onChange(stateRef.current.cuts.map((c, j) => j !== i ? c : (which === 's' ? { ...c, s: Math.min(t, c.e - 0.1) } : { ...c, e: Math.max(t, c.s + 0.1) })))
+      onChange(stateRef.current.markers.map((m, j) => j !== i ? m : (which === 's' ? { ...m, s: Math.min(t, m.e) } : { ...m, e: Math.max(t, m.s) })))
     }
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); commit(stateRef.current.cuts) }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); commit(stateRef.current.markers) }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
-  // Editable m:ss.d field that commits on blur/Enter and reverts on a bad value.
   const TimeField = ({ value, onCommit, title }) => (
     <input defaultValue={fmtTime(value, 1)} key={value} title={title}
       onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
       onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.currentTarget.value = fmtTime(value, 1); e.currentTarget.blur() } }}
       onBlur={e => { const v = parseTime(e.target.value); if (v == null) { e.target.value = fmtTime(value, 1); return } onCommit(snap(v)) }}
-      style={{ width: 62, background: '#0f0f22', border: '1px solid #3a2530', borderRadius: 5, color: '#f2c9cf', fontSize: 11.5, padding: '3px 6px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
+      style={{ width: 58, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '3px 5px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
   )
+  const toggle = (on, label, title, onClick, color) => (
+    <button title={title} onClick={onClick}
+      style={{ background: on ? color.bg : 'transparent', border: `1px solid ${on ? color.br : '#2d3a6a'}`, color: on ? color.fg : '#7d84a4', borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 11, fontWeight: on ? 700 : 500, whiteSpace: 'nowrap' }}>{label}</button>
+  )
+  const iconBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
   const phPct = playhead != null && playhead >= 0 && playhead <= M ? pct(playhead) : null
   return (
     <div style={{ margin: '2px 8px' }}>
-      <div ref={trackRef} style={{ position: 'relative', height: 22 }}>
-        <div style={{ position: 'absolute', top: 9, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
-        {phPct != null && <div style={{ position: 'absolute', top: 1, left: `calc(${phPct}% - 1px)`, width: 2, height: 18, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />}
-        {cuts.map((c, i) => {
-          const s = pct(Math.min(c.s, c.e)), e = pct(Math.max(c.s, c.e))
+      <div ref={trackRef} style={{ position: 'relative', height: 24 }}>
+        <div style={{ position: 'absolute', top: 10, left: 0, right: 0, height: 4, borderRadius: 2, background: '#233' }} />
+        {phPct != null && <div style={{ position: 'absolute', top: 1, left: `calc(${phPct}% - 1px)`, width: 2, height: 20, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />}
+        {markers.map((m, i) => {
+          const s = pct(Math.min(m.s, m.e)), e = pct(Math.max(m.s, m.e))
+          const hcol = m.stop ? '#ffb454' : '#f87171'
           return (
-            <div key={i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-              <div style={{ position: 'absolute', top: 7, left: `${s}%`, width: `${Math.max(0, e - s)}%`, height: 8, borderRadius: 2, background: 'rgba(248,113,113,0.45)', border: '1px solid #f87171' }} />
-              <div onMouseDown={dragHandle(i, 's')} title="Drag the snip start" style={{ position: 'absolute', top: 1, left: `calc(${s}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
-              <div onMouseDown={dragHandle(i, 'e')} title="Drag the snip end" style={{ position: 'absolute', top: 1, left: `calc(${e}% - 5px)`, width: 10, height: 18, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+            <div key={m.id || i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              {m.cut && <div style={{ position: 'absolute', top: 8, left: `${s}%`, width: `${Math.max(0, e - s)}%`, height: 8, borderRadius: 2, background: 'rgba(248,113,113,0.4)', border: '1px solid #f87171' }} />}
+              {m.stop && <div title="Stop marker" style={{ position: 'absolute', top: 0, left: `calc(${s}% - 1px)`, width: 3, height: 22, borderRadius: 1, background: '#ffb454', boxShadow: '0 0 4px rgba(255,180,84,0.8)' }} />}
+              <div onMouseDown={dragHandle(i, 's')} title="Drag the start" style={{ position: 'absolute', top: 2, left: `calc(${s}% - 5px)`, width: 10, height: 20, borderRadius: 3, background: hcol, cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              {m.cut && <div onMouseDown={dragHandle(i, 'e')} title="Drag the end" style={{ position: 'absolute', top: 2, left: `calc(${e}% - 5px)`, width: 10, height: 20, borderRadius: 3, background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />}
             </div>
           )
         })}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 5 }}>
-        {cuts.map((c, i) => {
-          const cs = Math.min(c.s, c.e), ce = Math.max(c.s, c.e)
-          const iconBtn = { background: 'transparent', border: '1px solid #3a2530', color: '#f0a0a0', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+        {markers.map((m, i) => {
+          const cs = Math.min(m.s, m.e), ce = Math.max(m.s, m.e)
           return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap' }}>
-              <span style={{ color: '#f0a0a0' }}>✂</span>
-              <span style={{ color: '#7c86ad' }}>from</span>
-              <TimeField value={cs} title="Snip start (m:ss.s)" onCommit={v => setCut(i, { s: Math.min(v, ce - 0.1) })} />
-              {getTime && <button style={iconBtn} title="Set start to the current playhead" onClick={() => setCut(i, { s: Math.min(snap(getTime()), ce - 0.1) })}>⇤</button>}
-              <span style={{ color: '#7c86ad' }}>to</span>
-              <TimeField value={ce} title="Snip end (m:ss.s)" onCommit={v => setCut(i, { e: Math.max(v, cs + 0.1) })} />
-              {getTime && <button style={iconBtn} title="Set end to the current playhead" onClick={() => setCut(i, { e: Math.max(snap(getTime()), cs + 0.1) })}>⇥</button>}
-              {onScrub && <button style={iconBtn} title="Preview: jump to just before this snip" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
-              <span style={{ color: '#6a7290' }}>({fmtTime(ce - cs, 1)})</span>
-              <span style={{ flex: 1 }} />
-              <button onClick={() => commit(cuts.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>remove</button>
+            <div key={m.id || i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap', padding: '4px 0', borderTop: i ? '1px solid #1b2036' : 'none' }}>
+              <span style={{ color: '#7c86ad' }}>at</span>
+              <TimeField value={cs} title="Marker start (m:ss.s)" onCommit={v => setM(i, { s: Math.min(v, ce) })} />
+              {getTime && <button style={iconBtn} title="Set to the current playhead" onClick={() => setM(i, { s: Math.min(snap(getTime()), ce) })}>⇤</button>}
+              <span style={{ color: '#7c86ad' }}>→</span>
+              <TimeField value={ce} title="Marker end (m:ss.s) — only matters for a Cut" onCommit={v => setM(i, { e: Math.max(v, cs) })} />
+              {getTime && <button style={iconBtn} title="Set to the current playhead" onClick={() => setM(i, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
+              {onScrub && <button style={iconBtn} title="Preview: jump to just before this marker" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
+              <span style={{ flex: 1, minWidth: 4 }} />
+              {toggle(!!m.stop, '⏸ Stop', 'Pause here until → is pressed', () => setM(i, { stop: !m.stop }), { bg: '#3a2c10', br: '#8a6a2f', fg: '#ffcf8a' })}
+              {toggle(!!m.cut, '✂ Cut', 'Skip this range during playback', () => setM(i, { cut: !m.cut }), { bg: '#3a1620', br: '#8a3550', fg: '#ffb0c0' })}
+              <button onClick={() => commit(markers.filter((_, j) => j !== i))} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a' }}>✕</button>
             </div>
           )
         })}
-        <button onClick={addCut} style={{ ...trimBtn, alignSelf: 'flex-start', color: '#f0a0a0', borderColor: '#5a2a3a' }}>✂ Snip at playhead</button>
+        <button onClick={addMarker} style={{ ...trimBtn, alignSelf: 'flex-start', color: '#aeb8ff', borderColor: '#3a4a8a' }}>＋ Marker at playhead</button>
       </div>
     </div>
   )
@@ -606,13 +675,14 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               <input style={inp} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
                 onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
             </div>
-            {(k === 'youtube' || k === 'video') && (
-              <div style={{ marginTop: 6 }}>
-                <Collapsible label={`✂ Cuts${cur.cuts?.length ? ` (${cur.cuts.length})` : ''} — snip out sections`}>
-                  <CutsEditor cuts={cur.cuts || []} max={max} getTime={() => preview?.time?.() || 0} onScrub={scrubTo} onChange={cuts => patch(sel, { cuts: cuts.length ? cuts : undefined })} />
+            {(k === 'youtube' || k === 'video') && (() => {
+              const mk = resolveMarkers(cur)
+              return <div style={{ marginTop: 6 }}>
+                <Collapsible label={`◆ Markers${mk.length ? ` (${mk.length})` : ''} — stop points & cutouts`} defaultOpen={mk.length > 0}>
+                  <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
                 </Collapsible>
               </div>
-            )}
+            })()}
           </>}
           {k === 'image' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8' }}>
@@ -817,10 +887,12 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
               </div>
             )
           })()}
-          {/* Cuts (inverse trim) — snip sections out of the middle */}
-          <Collapsible label={`✂ Cuts${video.cuts?.length ? ` (${video.cuts.length})` : ''} — snip out sections`}>
-            <CutsEditor cuts={video.cuts || []} max={max} getTime={getTime} playhead={curT} onScrub={onScrubTime} onChange={cuts => onPatch({ cuts: cuts.length ? cuts : undefined })} />
-          </Collapsible>
+          {/* Markers — stop points (pause until →) and cutouts (skip a range) inside the clip */}
+          {(() => { const mk = resolveMarkers(video); return (
+            <Collapsible label={`◆ Markers${mk.length ? ` (${mk.length})` : ''} — stop points & cutouts`} defaultOpen={mk.length > 0}>
+              <MarkersEditor markers={mk} max={max} getTime={getTime} playhead={curT} onScrub={onScrubTime} onChange={markers => onPatch({ markers: markers.length ? markers : undefined, cuts: undefined })} />
+            </Collapsible>
+          ) })()}
         </>}
         {/* Speed */}
         {hasVideo && (
@@ -949,6 +1021,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       if (e.key === ' ') { e.preventDefault(); if (fsPlaying.current) { handleRef.current?.pause?.(); fsPlaying.current = false } else { handleRef.current?.play?.(); fsPlaying.current = true } return }
       if (e.key === 'ArrowRight') {
         e.preventDefault()
+        if (handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }   // resume from a stop marker
         const i = idxRef.current
         if (i < clips.length - 1) goto(i + 1)
         else if (!endedRef.current) { setEnded(true); handleRef.current?.pause?.() }   // to last frame + replay

@@ -2957,6 +2957,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
           if (e.key === 'ArrowRight') {
             e.preventDefault()
+            if (h?.isWaiting?.()) { h.resume(); ytssPlayingRef.current = true; return }   // paused at a stop marker → continue to the next marker/end
             if (cur < clips.length - 1) goClip(cur + 1)
             else if (presenting) { h?.pause?.(); ytssPlayingRef.current = false; advanceBuild(1) }   // freeze the last frame, then leave the slide (elegant transition)
             else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
@@ -7611,7 +7612,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (videoEdit.kind === 'image') {
           const img = (activeView?.images || []).find(i => i.id === videoEdit.id)
           if (!img || img.type !== 'video') return null
-          video = { youtubeId: img.youtubeId, videoKind: img.videoKind, src: img.src, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, keepPlaying: img.keepPlaying, fullscreenOnSlide: img.fullscreenOnSlide }
+          video = { youtubeId: img.youtubeId, videoKind: img.videoKind, src: img.src, start: img.start, end: img.end, autoplayOnZoom: img.autoplayOnZoom, autoplayOnSlide: img.autoplayOnSlide, muted: img.muted, speed: img.speed, captions: img.captions, loop: img.loop, poster: img.poster, cuts: img.cuts, markers: img.markers, keepPlaying: img.keepPlaying, fullscreenOnSlide: img.fullscreenOnSlide }
           onPatch = patch => updateImage(videoEdit.id, patch)
           onPatchPoster = url => updateImage(videoEdit.id, { poster: url })
           if (rect) anchor = { x: rect.left + T.x + (img.x + (img.width || 0) / 2) * T.k + 14, y: rect.top + T.y + img.y * T.k }
@@ -7619,7 +7620,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const node = storeNodes.find(n => n.id === videoEdit.id)
           const m = node?.media; if (!m || m.kind !== 'video') return null
           const meta = node.meta || {}
-          video = { youtubeId: m.youtubeId, videoKind: m.videoKind, src: m.src, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, keepPlaying: m.keepPlaying, fullscreenOnSlide: m.fullscreenOnSlide }
+          video = { youtubeId: m.youtubeId, videoKind: m.videoKind, src: m.src, start: m.start, end: m.end, autoplayOnZoom: meta.autoplayOnZoom, autoplayOnSlide: meta.autoplayOnSlide, muted: m.muted, speed: m.speed, captions: m.captions, loop: m.loop, poster: m.poster, cuts: m.cuts, markers: m.markers, keepPlaying: m.keepPlaying, fullscreenOnSlide: m.fullscreenOnSlide }
           onPatchPoster = url => updateNodeMedia(videoEdit.id, { poster: url })
           onPatch = patch => {
             const metaKeys = ['autoplayOnZoom', 'autoplayOnSlide']
