@@ -439,19 +439,20 @@ function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
 
   // Snap to 0.1s. Bounds come from the LIVE stateRef (never a stale prop) so start/end can't fight each
   // other or the preview mid-drag. The track always spans the whole video [0, M].
-  const timeAtClientX = (clientX) => {
+  const timeAtClientX = (clientX, scale = stateRef.current.M) => {
     const r = trackRef.current.getBoundingClientRect()
     const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
-    return Math.round(frac * stateRef.current.M * 10) / 10
+    return Math.round(frac * scale * 10) / 10
   }
   const drag = (which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation()
     setDragging(which)
+    const Md = stateRef.current.M   // freeze the time scale for the whole drag
     const move = (ev) => {
-      const t = timeAtClientX(ev.clientX)
-      const { s: cs, e: ce, M: m } = stateRef.current
+      const t = timeAtClientX(ev.clientX, Md)
+      const { s: cs, e: ce } = stateRef.current
       if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 0.1)); onChange(nv, ce, 'start'); onScrub?.(nv, 'start') }
-      else { const nv = Math.min(m, Math.max(t, cs + 0.1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
+      else { const nv = Math.min(Md, Math.max(t, cs + 0.1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
     }
     const up = () => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
@@ -537,13 +538,15 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
   const trimRef = useRef({ ts, te }); trimRef.current = { ts, te }
   const dragTrim = (which) => (ev0) => {
     ev0.preventDefault(); ev0.stopPropagation(); setSel(null)
+    const Md = stateRef.current.M   // FREEZE the time scale for the whole drag — a mid-drag duration
+    const snapM = t => Math.round(Math.max(0, Math.min(Md, t)) * 10) / 10   // refresh must not move the handle
     const move = ev => {
       const r = trackRef.current.getBoundingClientRect()
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const t = snap(frac * M)
+      const t = snapM(frac * Md)
       const { ts: cs, te: ce } = trimRef.current
-      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 0.1)); onTrim(nv, ce >= M ? 0 : ce); onScrub?.(nv, 'start') }
-      else { const nv = Math.min(M, Math.max(t, cs + 0.1)); onTrim(cs, nv >= M ? 0 : nv); onScrub?.(nv, 'end') }
+      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 0.1)); onTrim(nv, ce >= Md ? 0 : ce); onScrub?.(nv, 'start') }
+      else { const nv = Math.min(Md, Math.max(t, cs + 0.1)); onTrim(cs, nv >= Md ? 0 : nv); onScrub?.(nv, 'end') }
     }
     const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
@@ -555,19 +558,21 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
     const startX = ev0.clientX
     const orig = stateRef.current.markers[i]
     const width = Math.abs((orig.e ?? orig.s) - orig.s)
+    const Md = stateRef.current.M   // freeze the time scale for the whole drag (no mid-drag jumps)
+    const snapM = t => Math.round(Math.max(0, Math.min(Md, t)) * 10) / 10
     let moved = false
     const move = ev => {
       if (Math.abs(ev.clientX - startX) > 3) moved = true
       const r = trackRef.current?.getBoundingClientRect() || r0
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
-      const t = snap(frac * stateRef.current.M)
+      const t = snapM(frac * Md)
       onChange(stateRef.current.markers.map((m, j) => {
         if (j !== i) return m
         if (which === 's') return { ...m, s: Math.min(t, m.e) }
         if (which === 'e') return { ...m, e: Math.max(t, m.s) }
         // 'move' — slide the whole cut, keeping its width, clamped to [0, M]
-        let s = Math.max(0, Math.min(stateRef.current.M - width, snap(t - width / 2)))
-        return { ...m, s, e: snap(s + width) }
+        let s = Math.max(0, Math.min(Md - width, snapM(t - width / 2)))
+        return { ...m, s, e: snapM(s + width) }
       }))
     }
     const up = () => {
@@ -734,7 +739,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
       // Keep the duration fresh: YouTube often reports it late, and the one-shot poll can miss it — a stale
       // 0 duration is what made the timeline scale to the 30s floor and the playhead stop halfway.
       const d = preview?.duration?.() || 0
-      if (d) setDur(prev => (Math.abs(d - prev) > 0.4 ? d : prev))
+      if (d) setDur(prev => (prev === 0 || d > prev + 1) ? d : prev)   // adopt a real duration once; ignore small flaps (kept the timeline jittering)
     }, 120)
     return () => clearInterval(t)
   }, [preview])
@@ -992,7 +997,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
     const t = setInterval(() => {
       setCurT(getTime() || 0)
       const d = getDuration?.() || 0
-      if (d) setDur(prev => (Math.abs(d - prev) > 0.4 ? d : prev))
+      if (d) setDur(prev => (prev === 0 || d > prev + 1) ? d : prev)   // adopt a real duration once; ignore small flaps (kept the timeline jittering)
     }, 120)
     return () => clearInterval(t)
   }, [hasVideo, getTime, getDuration])
