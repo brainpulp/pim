@@ -222,6 +222,25 @@ export async function uploadImageDataUrl(dataUrl, projectId) {
   } catch (e) { console.warn('Image offload failed, keeping inline:', e?.message || e); return dataUrl }
 }
 
+// Rehost a REMOTE image URL (e.g. a Google Slides/Docs image pasted as HTML, whose src is a
+// googleusercontent link) into Storage, so the pasted image survives the source URL expiring. Falls
+// back to the original URL if the cross-origin fetch is blocked or the upload fails — the browser can
+// usually still render the source URL directly in the meantime.
+export async function uploadImageFromUrl(url, projectId) {
+  if (!url || typeof url !== 'string' || !/^https?:/i.test(url)) return url
+  try {
+    const res = await fetch(url, { mode: 'cors' }); if (!res.ok) throw new Error('fetch ' + res.status)
+    const blob = await res.blob()
+    if (!blob.type.startsWith('image/')) throw new Error('not an image: ' + blob.type)
+    const ext = ((blob.type.split('/')[1] || 'png').split('+')[0]).slice(0, 5)
+    const path = `${projectId}/img-${crypto.randomUUID()}.${ext}`
+    const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: blob.type })
+    if (error) throw error
+    const { data } = supabase.storage.from(BUCKET).getPublicUrl(path)
+    return data.publicUrl
+  } catch (e) { console.warn('Remote image rehost failed, keeping source URL:', e?.message || e); return url }
+}
+
 // Offload every embedded base64 image in a project's views to Storage. Returns { views, changed }.
 export async function compactProjectViews(projectId, views) {
   let changed = 0

@@ -8,7 +8,7 @@ import { generateWords, assessRisk, checkUSPTO, hasWordgenKey, getWordgenKey, se
 import { generateContent } from '../lib/ai'
 import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
-import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
+import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadImageFromUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { pickDriveVideo, downloadDriveFile, driveEmbedUrl, hasDriveCreds, setDriveCreds } from '../lib/gdrive'
 import { luminance as lumaOf, c as T_C, sp as T_SP, r as T_R, fs as T_FS, fw as T_FW, shadow as T_SH } from '../lib/theme'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
@@ -5049,6 +5049,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const id = addTableNodeFrom(grid, cx, cy)
           setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy } scheduleRender() }, 0)
           setSelected({ id, type: 'node' })
+          return
+        }
+        // A copied image OBJECT (Google Slides / Google Docs, or a web-page image) arrives as HTML with
+        // an <img src>, NOT as a bitmap clipboard item — pull the image out and drop it on the canvas.
+        // The src is usually a remote googleusercontent URL; we render it immediately, then try to
+        // re-host it on Storage (data: srcs go straight to Storage).
+        const imgMatch = html.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i)
+        const pastedImgSrc = imgMatch && imgMatch[1]
+        if (pastedImgSrc && /^(https?:\/\/|data:image\/)/i.test(pastedImgSrc)) {
+          e.preventDefault()
+          const place = (w, h) => {
+            const imgId = addImage(pastedImgSrc, cx, cy, w, h, { z: 'front' })
+            const off = pastedImgSrc.startsWith('data:')
+              ? uploadImageDataUrl(pastedImgSrc, projectId)
+              : uploadImageFromUrl(pastedImgSrc, projectId)
+            off.then(url => { if (url && url !== pastedImgSrc) updateImage(imgId, { src: url }) }).catch(() => {})
+          }
+          const probe = new window.Image()
+          probe.onload = () => { const maxW = 400; const s = Math.min(1, maxW / (probe.width || maxW)); place(Math.round((probe.width || maxW) * s), Math.round((probe.height || 300) * s)) }
+          probe.onerror = () => place(360, 240)   // couldn't measure (auth-gated) → default size, still add it
+          probe.src = pastedImgSrc
           return
         }
         // A YouTube link ANYWHERE in the pasted text → drop a video (or add to a selected slideshow).
