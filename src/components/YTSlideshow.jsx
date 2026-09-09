@@ -1323,8 +1323,10 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
           style={{ cursor: 'pointer', userSelect: 'none' }}>  ✎ rename</text>
       )}
       <foreignObject x={-W / 2} y={-H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
-        <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
-          border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
+        <div style={{ width: '100%', height: '100%', borderRadius: 2, overflow: 'hidden',
+          // Match the free-image selection: a thin, sharp-cornered frame (dashed blue when selected).
+          border: isDropTarget ? '2px solid #4ade80' : (selected ? '1.5px dashed #5b6af0' : '1px solid #2d3a6a'),
+          boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
             ? <>
                 {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
@@ -1385,8 +1387,8 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
       {selected && !active && (
         <g transform={`translate(${W / 2},${H / 2})`} onMouseDown={startScale}
           style={{ cursor: 'nwse-resize' }} title="Drag to resize">
-          <circle r={9} fill="#16162a" stroke="#5b6af0" strokeWidth={1.5} />
-          <path d="M4 -4 L-4 4 M4 0 L0 4" stroke="#5b6af0" strokeWidth={1.5} fill="none" strokeLinecap="round" />
+          {/* Square handle, matching the free-image selection handles. */}
+          <rect x={-5} y={-5} width={10} height={10} fill="#fff" stroke="#5b6af0" strokeWidth={1.5} />
         </g>
       )}
     </g>
