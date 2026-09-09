@@ -3503,15 +3503,29 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Any media node (youtube/video/audio/image) can be dropped INTO a slideshow.
     const isDragMedia = !!_dragMedia && (!!_dragMedia.youtubeId || !!_dragMedia.src)
 
+    // Frame geometry (used to carry everything visually inside the frame, not just `containedIn` nodes).
+    let frameGeom = null
+    if (isFrame) {
+      const fvp = viewNodePropsRef.current[nodeId] || {}
+      const fr = NODE_R * (fvp.scale || 1)
+      const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
+      frameGeom = { cx: simNode.x || 0, cy: simNode.y || 0, hw: fvp.frameHalfW ?? dHW, hh: fvp.frameHalfH ?? dHH }
+    }
+    const insideFrame = (x, y) => frameGeom && Math.abs((x || 0) - frameGeom.cx) <= frameGeom.hw && Math.abs((y || 0) - frameGeom.cy) <= frameGeom.hh
+
     // Collect drag group
     let dragGroup = [simNode]
     if (multiDrag) {
       dragGroup = simNodesRef.current.filter(n => curNodeSel.has(n.id))
     } else if (isFrame) {
-      // Frame drag: also move all nodes contained in this frame
+      // Frame drag carries everything inside it: nodes marked `containedIn` OR geometrically within the
+      // frame's box (so items you just dropped in, without a formal containedIn, still travel). Nested
+      // frames/containers are left alone.
       simNodesRef.current.forEach(n => {
-        if (n.id !== nodeId && (viewNodePropsRef.current[n.id] || {}).containedIn === nodeId)
-          dragGroup.push(n)
+        if (n.id === nodeId) return
+        const nvp = viewNodePropsRef.current[n.id] || {}
+        if (nvp.shape === 'frame' || nvp.shape === 'container') return
+        if (nvp.containedIn === nodeId || insideFrame(n.x, n.y)) dragGroup.push(n)
       })
     } else if (e.shiftKey) {
       // Shift-drag: collect exclusive descendants (children with only one parent)
@@ -3533,7 +3547,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // Media attached to any node in the drag group follows it (group move).
     const dragIdSet = new Set(dragGroup.map(n => n.id))
     const dragViewImgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
-    const attachedStart = dragViewImgs.filter(im => im.attachedTo && dragIdSet.has(im.attachedTo)).map(im => ({ id: im.id, ox: im.x, oy: im.y }))
+    // Free images/text boxes that travel with the drag: attached to a dragged node, part of the same
+    // multi-selection, or geometrically inside a dragged frame. (Fixes items being left behind.)
+    const attachedStart = dragViewImgs.filter(im =>
+      (im.attachedTo && dragIdSet.has(im.attachedTo)) ||
+      (multiDrag && selectedImageIdsRef.current.has(im.id)) ||
+      insideFrame(im.x, im.y)
+    ).map(im => ({ id: im.id, ox: im.x, oy: im.y }))
     let didDrag = false
     let lastClient = { x: e.clientX, y: e.clientY }
     let panRaf = null
@@ -5562,8 +5582,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const img = images.find(i => i.id === id)
         if (img) origins[id] = { x: img.x, y: img.y }
       })
+      // Mixed selection: if the grabbed image is part of the current selection, carry the selected NODES
+      // along too (so a rubber-band selection of images + nodes moves as one, nothing left behind).
+      const nodeCarry = curSel.has(imageId)
+        ? [...selectedNodeIdsRef.current].map(nid => simNodesRef.current.find(n => n.id === nid)).filter(Boolean)
+            .map(sn => ({ node: sn, ox: sn.fx ?? sn.x ?? 0, oy: sn.fy ?? sn.y ?? 0 }))
+        : []
 
-      const canAttach = dragIds.length === 1   // attach only a single media item to a node
+      const canAttach = dragIds.length === 1 && nodeCarry.length === 0   // attach only a single lone media item
       let lastCenter = null, lastCursor = null
       let lastClientX = startClientX, lastClientY = startClientY, imgPanRaf = null
       const draggedImg = images.find(i => i.id === imageId)
@@ -5594,6 +5620,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const sx = (lastClientX - T2.x) / T2.k, sy = (lastClientY - T2.y) / T2.k
         const dx = sx - startWX, dy = sy - startWY
         dragIds.forEach(id => { if (origins[id]) updateImage(id, { x: origins[id].x + dx, y: origins[id].y + dy }) })
+        if (nodeCarry.length) { nodeCarry.forEach(({ node, ox, oy }) => { node.fx = ox + dx; node.fy = oy + dy }); scheduleRender() }
         // Feedback: highlight the node this media would attach to (drop = becomes its child), OR the
         // slideshow it would be added to (drop = becomes a slide).
         if (canAttach) {
@@ -5633,6 +5660,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         window.removeEventListener('blur', onUp)
         window.removeEventListener('keydown', onKeyAbort, true)
         hideDragShield()
+        // Persist the positions of any nodes carried along with this image drag.
+        if (nodeCarry.length) nodeCarry.forEach(({ node }) => setAnchor(node.id, node.fx, node.fy))
         // Dropped onto a slideshow → add this media as a slide and remove the free image from the canvas.
         if (canAttach) {
           const ytssHit = ytssHitAt(lastCursor)
