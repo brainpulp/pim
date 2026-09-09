@@ -1157,7 +1157,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   useEffect(() => {
     if (!floatDock) return
     if (nodeGestureRef.current) return   // mid node-drag → don't spring the panel; mouseup reopens on a clean click
-    if (selected?.type === 'node') setNodeMenu(m => (m?.nodeId === selected.id ? m : { nodeId: selected.id, px: 0, py: 0 }))
+    // Frames: the style/colour panel opens on RIGHT-CLICK only — a plain selection must not spring it.
+    if (selected?.type === 'node' && viewNodePropsRef.current?.[selected.id]?.shape !== 'frame') {
+      setNodeMenu(m => (m?.nodeId === selected.id ? m : { nodeId: selected.id, px: 0, py: 0 }))
+    }
   }, [floatDock, selected])
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   // Right-click diagnostic: append ?rcdebug=1 to the URL to show, in a corner badge, exactly what each
@@ -2825,6 +2828,29 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
       if (isCtrl && (hitNode || hitImg)) return   // ctrl-click on a node/image → leave it to multi-select
+      // A SELECTED frame: a plain right-click on it opens its style/colour toolbar (frames are skipped by
+      // the small-node hit-test above, so an UNSELECTED frame still gives the insert/background menu, and
+      // Shift+right-click — handled earlier as forceBg — forces that menu even on a selected frame).
+      if (!isCtrl) {
+        const selId = selectedRef.current?.type === 'node' ? selectedRef.current.id : null
+        const selSet = selectedNodeIdsRef.current
+        let fHit = null
+        for (const n of simNodesRef.current) {
+          if (!visibleNodeIdsRef.current.has(n.id) || n.x == null) continue
+          const nvp = viewNodePropsRef.current[n.id] || {}
+          if (nvp.shape !== 'frame' || (n.id !== selId && !selSet.has(n.id))) continue
+          const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (nvp.scale || 1))
+          const hw = nvp.frameHalfW ?? dHW, hh = nvp.frameHalfH ?? dHH
+          if (Math.abs(sx - n.x) <= hw && Math.abs(sy - n.y) <= hh) fHit = n
+        }
+        if (fHit) {
+          setContextMenu(null); setPhotoMenu(null)
+          setSelected({ id: fHit.id, type: 'node' }); setSelectedImageIds(new Set())
+          setNodeMenu({ nodeId: fHit.id, px, py })
+          rcLog.current(`✓ FRAME style menu opened (${fHit.id})`)
+          return
+        }
+      }
       setNodeMenu(null); setPhotoMenu(null)
       setContextMenu({ px, py, sx, sy })
       rcLog.current(`✓ BACKGROUND menu opened at world (${Math.round(sx)},${Math.round(sy)}) — nothing under the cursor`)
@@ -3689,7 +3715,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // Gesture over. If it was a clean click (no drag) while the style panel is undocked, retarget/open
       // it now — the retarget effect was suppressed during the gesture so a drag can't spring it.
       nodeGestureRef.current = false
-      if (!didDrag && floatDockRef.current) setNodeMenu(m => (m?.nodeId === nodeId ? m : { nodeId, px: 0, py: 0 }))
+      if (!didDrag && floatDockRef.current && viewNodePropsRef.current?.[nodeId]?.shape !== 'frame') setNodeMenu(m => (m?.nodeId === nodeId ? m : { nodeId, px: 0, py: 0 }))
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -11053,6 +11079,9 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
             <rect x={-halfW + off} y={-halfH + off} width={halfW * 2} height={halfH * 2}
               fill={shadowColor} opacity={shadowOp} filter={`url(#${bId})`} />
           </g>
+          {/* Selected: a hair-thin accent outline (constant on-screen thickness). */}
+          {isSelected && <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
+            fill="none" stroke="#6470f5" strokeWidth={Math.max(0.4, 1 / k)} style={{ pointerEvents: 'none' }} />}
         </>
       })()}
 
