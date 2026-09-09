@@ -125,6 +125,31 @@ const youtubeEmbedUrl = (img) => {
   return `https://www.youtube-nocookie.com/embed/${img.youtubeId}?${p.toString()}`
 }
 
+// Split a rich-text box's html into LINES by intentional breaks only (block boundaries / <br>), never by
+// visual wrapping. Inline formatting (bold/colour/size spans) is preserved within each line.
+function splitTextLines(html) {
+  if (!html) return ['']
+  const s = String(html)
+    .replace(/<div[^>]*>/gi, '')
+    .replace(/<\/div>/gi, '')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/<\/p>/gi, '')
+    .replace(/<br\s*\/?>/gi, '')
+  const parts = s.split('')
+  // Drop a single trailing empty produced by a closing block; keep intentional blank lines otherwise.
+  if (parts.length > 1 && parts[parts.length - 1].replace(/<[^>]+>/g, '').trim() === '') parts.pop()
+  const lines = parts.length ? parts : ['']
+  return lines
+}
+// Render the first `n` lines, wrapping the newest revealed line for an optional fade-in.
+function joinTextLines(lines, n, fade) {
+  const shown = lines.slice(0, Math.max(0, n))
+  return shown.map((ln, i) => {
+    const block = `<div>${ln === '' ? '<br>' : ln}</div>`
+    return (fade && i === shown.length - 1 && n > 0) ? `<div class="pim-line-fade">${ln === '' ? '<br>' : ln}</div>` : block
+  }).join('')
+}
+
 // Convert a canvas media element (a node's `media`, or a free `view.images` entry) into a slideshow
 // slide. Media nodes carry `kind`; free images carry `type`. Returns null if it isn't playable media.
 function elementToSlide(o, label) {
@@ -1175,6 +1200,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const prevFrameCountRef = useRef(0)
   const [presentingSlideIdx, setPresentingSlideIdx] = useState(null)
   const presentingSlideIdxRef = useRef(null)
+  const [revealCounts, setRevealCounts] = useState({})   // unfolding text boxes: {[imgId]: shown line count}
+  const revealCountsRef = useRef({})
+  useEffect(() => { revealCountsRef.current = revealCounts }, [revealCounts])
+  // Timed unfolding: while presenting a frame with timed text boxes, auto-reveal a line at their cadence.
+  useEffect(() => {
+    if (presentingSlideIdx == null) return
+    const timed = (typeof frameUnfoldTexts === 'function' ? frameUnfoldTexts(presentingSlideIdx) : []).filter(im => im.reveal?.mode === 'time')
+    if (!timed.length) return
+    const ms = Math.max(300, Math.min(...timed.map(im => im.reveal?.ms || 1500)))
+    const t = setInterval(() => {
+      for (const im of timed) {
+        const total = splitTextLines(im.html).length
+        const shown = revealCountsRef.current[im.id] ?? (im.reveal?.startEmpty ? 0 : 1)
+        if (shown < total) { setRevealCounts(m => ({ ...m, [im.id]: shown + 1 })); return }
+      }
+    }, ms)
+    return () => clearInterval(t)
+  }, [presentingSlideIdx]) // eslint-disable-line -- frameUnfoldTexts is a later const, referenced only in the body
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
   // Declared here — before any early return — so the hooks order never changes (React #310).
   const exitPresentationRef = useRef(null)
@@ -5880,6 +5923,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         isCropping={cropImageId === img.id}
         onMouseDown={handleImageMouseDown}
         mediaPlay={mediaPlay}
+        revealLines={(isPresenting && img.type === 'text' && img.reveal) ? (revealCounts[img.id] ?? (img.reveal.startEmpty ? 0 : 1)) : null}
+        revealFade={!!img.reveal?.fade}
         onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
         onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
         onTextChange={html => updateImage(img.id, { html })}
@@ -6085,7 +6130,47 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         ? { youtubeId: fsVid.youtubeId, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1, captions: fsVid.captions === true }
         : { src: fsVid.src, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1 }), 200)
     }
+
+    // Reset the unfolding text boxes on this frame to their starting reveal (first line, or empty).
+    setRevealCounts(() => {
+      const nx = {}
+      frameUnfoldTexts(idx).forEach(im => { nx[im.id] = im.reveal?.startEmpty ? 0 : 1 })
+      return nx
+    })
   }
+
+  // Unfolding text boxes: the text boxes inside a frame slide that reveal line-by-line, in reveal order.
+  const frameUnfoldTexts = (idx) => {
+    const fr = slideSimNodes[idx]; if (!fr || fr.__elementSlide) return []
+    const fvp = getVP(fr.id); const r = NODE_R * (fvp.scale || 1)
+    const { halfW: dHW, halfH: dHH } = shapeDims('frame', r)
+    const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
+    return (activeView?.images || [])
+      .filter(im => im.type === 'text' && im.reveal && im.visible !== false &&
+        Math.abs((im.x || 0) - (fr.x || 0)) <= hw && Math.abs((im.y || 0) - (fr.y || 0)) <= hh)
+      .sort((a, b) => (a.reveal.order ?? 0) - (b.reveal.order ?? 0) || (a.y || 0) - (b.y || 0) || (a.x || 0) - (b.x || 0))
+  }
+  const revealBase = (im) => im.reveal?.startEmpty ? 0 : 1
+  // Reveal the next line of the earliest unfolding text box that still has lines. Returns true if it did.
+  const tryRevealForward = () => {
+    for (const im of frameUnfoldTexts(presentingSlideIdxRef.current ?? 0)) {
+      const total = splitTextLines(im.html).length
+      const shown = revealCountsRef.current[im.id] ?? revealBase(im)
+      if (shown < total) { setRevealCounts(m => ({ ...m, [im.id]: shown + 1 })); return true }
+    }
+    return false
+  }
+  // Re-fold the last revealed line (reverse order). Returns true if it did.
+  const tryRevealBack = () => {
+    const texts = frameUnfoldTexts(presentingSlideIdxRef.current ?? 0)
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const im = texts[i]
+      const shown = revealCountsRef.current[im.id] ?? revealBase(im)
+      if (shown > revealBase(im)) { setRevealCounts(m => ({ ...m, [im.id]: shown - 1 })); return true }
+    }
+    return false
+  }
+
   // Cross forward to the next slide, optionally bouncing through the designated interim view first
   // (when the gap after the current slide has it enabled). current → interim (brief) → next slide.
   const crossToNextSlide = () => {
@@ -6111,11 +6196,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const advanceBuild = (dir) => {
     const cur = presentingSlideIdxRef.current ?? 0
     const frame = slideSimNodes[cur]; if (!frame) return
+    // Unfolding text: forward reveals a line first; backward re-folds one before leaving the frame.
+    if (dir > 0 && tryRevealForward()) return
     const stages = slideStages(cur)
-    if (!stages.length) { if (dir > 0) crossToNextSlide(); else presentSlide(cur - 1, 'back'); return }
+    if (!stages.length) {
+      if (dir > 0) crossToNextSlide()
+      else if (!tryRevealBack()) presentSlide(cur - 1, 'back')
+      return
+    }
     const next = presentStageIdxRef.current + dir
     if (next >= stages.length) { crossToNextSlide(); return }
-    if (next < 0) { presentSlide(cur - 1, 'back'); return }
+    if (next < 0) { if (!tryRevealBack()) presentSlide(cur - 1, 'back'); return }
     setPresentStage(next)
     applyStage(frame.id, next)
     moveCamForStage(stages, next, true, stages[next]?.dur ?? 340)
@@ -10942,11 +11033,40 @@ function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
       <button style={{ ...btn, background: (box?.valign || 'top') === 'top' ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Align text to top" onClick={() => onBoxStyle?.({ valign: 'top' })}>⤒</button>
       <button style={{ ...btn, background: box?.valign === 'middle' ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Center vertically" onClick={() => onBoxStyle?.({ valign: 'middle' })}>⇔</button>
       <button style={{ ...btn, background: box?.valign === 'bottom' ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Align text to bottom" onClick={() => onBoxStyle?.({ valign: 'bottom' })}>⤓</button>
+      {sep}
+      {/* Unfold lines: reveal the text line-by-line during a presentation (arrow or timer). */}
+      {(() => {
+        const rv = box?.reveal
+        const setRv = patch => onBoxStyle?.({ reveal: rv ? { ...rv, ...patch } : { mode: 'click', ms: 1500, fade: true, order: 0, startEmpty: false, ...patch } })
+        return (<>
+          <button style={{ ...btn, background: rv ? '#232a5c' : 'transparent', color: rv ? '#aeb8ff' : '#c5d0ff' }} onMouseDown={keep}
+            title="Unfold lines one by one during a presentation" onClick={() => onBoxStyle?.({ reveal: rv ? undefined : { mode: 'click', ms: 1500, fade: true, order: 0, startEmpty: false } })}>⤋ Unfold</button>
+          {rv && (<>
+            <select value={rv.mode || 'click'} onChange={e => setRv({ mode: e.target.value })} onMouseDown={e => e.stopPropagation()} style={selStyle} title="Advance by">
+              <option value="click">On →/click</option>
+              <option value="time">Timed</option>
+            </select>
+            {rv.mode === 'time' && (
+              <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Seconds per line">
+                <input type="number" min="0.2" step="0.1" value={((rv.ms ?? 1500) / 1000)} onMouseDown={e => e.stopPropagation()}
+                  onChange={e => { const s = parseFloat(e.target.value); if (!isNaN(s)) setRv({ ms: Math.max(200, Math.round(s * 1000)) }) }}
+                  style={{ width: 40, background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 4, fontSize: 11, padding: '2px 3px', textAlign: 'center' }} />s</label>
+            )}
+            <button style={{ ...btn, background: rv.fade ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Fade each line in" onClick={() => setRv({ fade: !rv.fade })}>Fade {rv.fade ? '✓' : ''}</button>
+            <button style={{ ...btn, background: rv.startEmpty ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Start with no lines shown (else the first line shows)" onClick={() => setRv({ startEmpty: !rv.startEmpty })}>Empty {rv.startEmpty ? '✓' : ''}</button>
+            <span style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 2 }} title="Reveal order among text boxes in the same frame">
+              #<button style={{ ...btn, padding: '2px 5px' }} onMouseDown={keep} onClick={() => setRv({ order: (rv.order || 0) - 1 })}>−</button>
+              <span style={{ minWidth: 12, textAlign: 'center', color: '#c5d0ff' }}>{rv.order || 0}</span>
+              <button style={{ ...btn, padding: '2px 5px' }} onMouseDown={keep} onClick={() => setRv({ order: (rv.order || 0) + 1 })}>+</button>
+            </span>
+          </>)}
+        </>)
+      })()}
     </div>
   )
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange, onTextAutoHeight, zoomK = 1 }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange, onTextAutoHeight, revealLines = null, revealFade = false, zoomK = 1 }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
@@ -11123,7 +11243,8 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         // Rich text box — a contentEditable card. Editable when selected; pass-through otherwise so the
         // canvas pans/zooms over it. Content (HTML) saved on input.
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
-          <RichTextBox html={img.html} editable={textEditing} selected={isSelected} bgColor={bgColor}
+          <RichTextBox html={revealLines != null && !textEditing ? joinTextLines(splitTextLines(img.html), revealLines, revealFade) : img.html}
+            editable={textEditing} selected={isSelected} bgColor={bgColor}
             borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo} fontScale={img.fontScale}
             valign={img.valign} zoomK={zoomK} boxW={width} boxH={height} textId={id}
             onChange={html => onTextChange?.(html)} onResize={(mode, e) => onMouseDown(e, id, mode)}
