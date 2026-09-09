@@ -539,8 +539,14 @@ const useGraphStore = create((set, get) => ({
   removeSlide: (frameId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v,
-      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
-        ...ss, slides: ss.slides.filter(id => id !== frameId),
+      slideshows: (v.slideshows || []).map(ss => {
+        if (ss.id !== v.activeSlideshowId) return ss
+        const slideGroup = { ...(ss.slideGroup || {}) }; delete slideGroup[frameId]
+        const usedGroups = new Set(Object.values(slideGroup))
+        return {
+          ...ss, slides: ss.slides.filter(id => id !== frameId), slideGroup,
+          groups: (ss.groups || []).filter(g => usedGroups.has(g.id)),   // drop now-empty groups
+        }
       }),
     }),
   })),
@@ -549,6 +555,57 @@ const useGraphStore = create((set, get) => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v,
       slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : { ...ss, slides: newSlides }),
+    }),
+  })),
+
+  // ── Slide groups (folders in the slide sidebar) ──────────────────────────────────────────────
+  // A group tags a set of slides (ss.slideGroup[frameId] = groupId) and, so presentation order tracks
+  // what you see, the grouped slides are pulled contiguous at the position of the first one.
+  groupSlides: (slideIds, name = 'Group') => set(s => {
+    const gid = uid()
+    return { views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => {
+        if (ss.id !== v.activeSlideshowId) return ss
+        const sel = new Set((slideIds || []).filter(id => ss.slides.includes(id)))
+        if (sel.size < 1) return ss
+        const order = ss.slides
+        const firstIdx = order.findIndex(id => sel.has(id))
+        const selInOrder = order.filter(id => sel.has(id))
+        const rest = order.filter(id => !sel.has(id))
+        const before = order.slice(0, firstIdx).filter(id => !sel.has(id)).length
+        const newSlides = [...rest.slice(0, before), ...selInOrder, ...rest.slice(before)]
+        const slideGroup = { ...(ss.slideGroup || {}) }
+        selInOrder.forEach(id => { slideGroup[id] = gid })
+        return { ...ss, slides: newSlides, slideGroup, groups: [...(ss.groups || []), { id: gid, name, collapsed: false }] }
+      }),
+    }) }
+  }),
+  ungroupSlides: (groupId) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => {
+        if (ss.id !== v.activeSlideshowId) return ss
+        const slideGroup = { ...(ss.slideGroup || {}) }
+        Object.keys(slideGroup).forEach(id => { if (slideGroup[id] === groupId) delete slideGroup[id] })
+        return { ...ss, slideGroup, groups: (ss.groups || []).filter(g => g.id !== groupId) }
+      }),
+    }),
+  })),
+  renameSlideGroup: (groupId, name) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
+        ...ss, groups: (ss.groups || []).map(g => g.id === groupId ? { ...g, name } : g),
+      }),
+    }),
+  })),
+  toggleSlideGroupCollapsed: (groupId) => set(s => ({
+    views: s.views.map(v => v.id !== s.activeViewId ? v : {
+      ...v,
+      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
+        ...ss, groups: (ss.groups || []).map(g => g.id === groupId ? { ...g, collapsed: !g.collapsed } : g),
+      }),
     }),
   })),
 

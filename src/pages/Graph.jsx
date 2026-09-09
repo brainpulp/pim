@@ -1360,6 +1360,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addSlide            = useGraphStore(s => s.addSlide)
   const removeSlide         = useGraphStore(s => s.removeSlide)
   const reorderSlides       = useGraphStore(s => s.reorderSlides)
+  const groupSlides         = useGraphStore(s => s.groupSlides)
+  const ungroupSlides       = useGraphStore(s => s.ungroupSlides)
+  const renameSlideGroup    = useGraphStore(s => s.renameSlideGroup)
+  const toggleSlideGroupCollapsed = useGraphStore(s => s.toggleSlideGroupCollapsed)
   const addSlideshow        = useGraphStore(s => s.addSlideshow)
   const deleteSlideshow     = useGraphStore(s => s.deleteSlideshow)
   const renameSlideshow     = useGraphStore(s => s.renameSlideshow)
@@ -7153,6 +7157,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onGenWords={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'words' }); close() }}
               onGenVariations={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'variations' }); close() }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
+              onMakeSlide={vp.shape === 'frame' ? () => { if (slideIds.includes(hn.id)) { removeSlide(hn.id) } else { addSlide(hn.id); setShowSlideSidebar(true) } close() } : null}
+              isSlide={slideIds.includes(hn.id)}
               onToggleList={() => { toggleListNode(hn.id); close() }}
               isList={listNodeSet.has(hn.id)}
               onToggleKanban={() => { toggleKanbanNode(hn.id); close() }}
@@ -7736,6 +7742,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           removeSlide={removeSlide}
           addSlide={addSlide}
           reorderSlides={reorderSlides}
+          groupSlides={groupSlides}
+          ungroupSlides={ungroupSlides}
+          renameSlideGroup={renameSlideGroup}
+          toggleSlideGroupCollapsed={toggleSlideGroupCollapsed}
           addSlideshow={addSlideshow}
           deleteSlideshow={deleteSlideshow}
           renameSlideshow={renameSlideshow}
@@ -8042,22 +8052,49 @@ function ThreeDWrapper({ children, onFocus }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
+  const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
+  const slideGroups = activeSlideshow?.groups || []       // [{ id, name, collapsed }]
+  const groupById = Object.fromEntries(slideGroups.map(g => [g.id, g]))
   const [dragIdx, setDragIdx] = useState(null)
   const [dropIdx, setDropIdx] = useState(null)
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
   const [currentIdx, setCurrentIdx] = useState(0)   // which slide "Update slide" targets (last clicked / presented)
+  const [selectedIds, setSelectedIds] = useState(() => new Set())   // multi-select for grouping
+  const [groupMenu, setGroupMenu] = useState(null)   // { groupId, name, x, y } — right-click a group header
+  const [renamingGroupId, setRenamingGroupId] = useState(null)
+  const [groupRenameVal, setGroupRenameVal] = useState('')
   const containerRef = useRef()
-  const [slideMenu, setSlideMenu] = useState(null)   // { frameId, label, x, y } — right-click options
+  const [slideMenu, setSlideMenu] = useState(null)   // { frameId, label, x, y, selectedIds } — right-click options
   const activeIdx = presentingSlideIdx ?? currentIdx
 
-  // Whole-card drag with click threshold â€" click zooms, drag reorders
+  // Clear multi-selection when switching slideshows (ids belong to the other show).
+  useEffect(() => { setSelectedIds(new Set()) }, [activeSlideshowId])
+
+  // Whole-card drag with click threshold â€" click zooms, drag reorders.
+  // Ctrl/Cmd/Shift click toggles the card in the multi-selection (no zoom, no drag).
   const handleCardMouseDown = (e, idx) => {
     if (e.button !== 0 || e.target.closest('[data-remove]')) return
     e.preventDefault()
+    const fnId = slideSimNodes[idx]?.id
+    if ((e.ctrlKey || e.metaKey || e.shiftKey) && fnId) {
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        if (e.shiftKey && next.size) {
+          // Range-extend from the last current index to here.
+          const lo = Math.min(currentIdx, idx), hi = Math.max(currentIdx, idx)
+          for (let k = lo; k <= hi; k++) { const id = slideSimNodes[k]?.id; if (id) next.add(id) }
+        } else {
+          next.has(fnId) ? next.delete(fnId) : next.add(fnId)
+        }
+        return next
+      })
+      setCurrentIdx(idx)
+      return
+    }
     const startX = e.clientX, startY = e.clientY
     let dragging = false
 
@@ -8086,6 +8123,7 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
       document.removeEventListener('mouseup', onUp)
       if (!dragging) {
         setCurrentIdx(idx)
+        setSelectedIds(new Set())   // plain click clears any multi-selection
         zoomToFrame(slideSimNodes[idx])
         setDragIdx(null); setDropIdx(null)
         return
@@ -8187,16 +8225,49 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
             (Math.abs((n.x||0) - (fn.x||0)) < halfW && Math.abs((n.y||0) - (fn.y||0)) < halfH)
         })
         const showLineBefore = dragIdx !== null && dropIdx === i && dragIdx !== i
+        // Group header injection: grouped slides are contiguous, so the first slide of a group draws a
+        // collapsible folder header above it. Collapsed groups hide their member cards.
+        const thisGroupId = slideGroup[fn.id]
+        const prevGroupId = i > 0 ? slideGroup[slideSimNodes[i - 1].id] : undefined
+        const isFirstOfGroup = thisGroupId && thisGroupId !== prevGroupId
+        const grp = thisGroupId ? groupById[thisGroupId] : null
+        const collapsed = !!grp?.collapsed
+        const groupCount = thisGroupId ? slideSimNodes.filter(s => slideGroup[s.id] === thisGroupId).length : 0
+        const isSel = selectedIds.has(fn.id)
+        const header = isFirstOfGroup && grp ? (
+          renamingGroupId === thisGroupId ? (
+            <input key={`gh-${thisGroupId}`} autoFocus value={groupRenameVal}
+              onChange={e => setGroupRenameVal(e.target.value)}
+              onMouseDown={e => e.stopPropagation()}
+              onBlur={() => { renameSlideGroup(thisGroupId, groupRenameVal || grp.name); setRenamingGroupId(null) }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { renameSlideGroup(thisGroupId, groupRenameVal || grp.name); setRenamingGroupId(null) } e.stopPropagation() }}
+              style={{ width:'100%', fontSize:'0.74rem', fontWeight:600, background:'#0d1020', border:'1px solid #4a5280', borderRadius:5, color:'#e0e4ff', padding:'4px 8px', outline:'none', marginBottom:6, boxSizing:'border-box' }}
+            />
+          ) : (
+            <div key={`gh-${thisGroupId}`}
+              onMouseDown={e => e.stopPropagation()}
+              onClick={() => toggleSlideGroupCollapsed(thisGroupId)}
+              onDoubleClick={() => { setRenamingGroupId(thisGroupId); setGroupRenameVal(grp.name) }}
+              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setGroupMenu({ groupId: thisGroupId, name: grp.name, x: e.clientX, y: e.clientY }) }}
+              style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 6px', marginBottom:6, borderRadius:5,
+                background:'#171d38', border:'1px solid #2a3358', cursor:'pointer', userSelect:'none' }}>
+              <span style={{ fontSize:'0.7rem', color:'#8fa0d8', width:10, textAlign:'center' }}>{collapsed ? '▸' : '▾'}</span>
+              <span style={{ flex:1, fontSize:'0.74rem', fontWeight:600, color:'#c5d0ff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{grp.name}</span>
+              <span style={{ fontSize:'0.64rem', color:'#7080a0', background:'#0d1020', borderRadius:8, padding:'1px 7px' }}>{groupCount}</span>
+            </div>
+          )
+        ) : null
         return [
-          showLineBefore && <div key={`line-${i}`} style={{ height:3, background:'#22e06a', borderRadius:2, margin:'2px 0 6px', boxShadow:'0 0 6px rgba(34,224,106,0.7)' }} />,
-          <div key={fn.id} data-slide-idx={i}
+          header,
+          !collapsed && showLineBefore && <div key={`line-${i}`} style={{ height:3, background:'#22e06a', borderRadius:2, margin:'2px 0 6px', boxShadow:'0 0 6px rgba(34,224,106,0.7)' }} />,
+          !collapsed && <div key={fn.id} data-slide-idx={i}
             onMouseDown={e => handleCardMouseDown(e, i)}
-            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSlideMenu({ frameId: fn.id, label: fn.label || 'Frame', x: e.clientX, y: e.clientY }) }}
-            style={{ marginBottom: 8, position: 'relative', cursor: 'grab', userSelect: 'none',
+            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSlideMenu({ frameId: fn.id, label: fn.label || 'Frame', x: e.clientX, y: e.clientY, selectedIds: selectedIds.has(fn.id) ? [...selectedIds] : [], inGroup: !!thisGroupId, groupId: thisGroupId || null }) }}
+            style={{ marginBottom: 8, marginLeft: thisGroupId ? 12 : 0, position: 'relative', cursor: 'grab', userSelect: 'none',
               opacity: dragIdx === i ? 0.4 : 1,
               borderRadius: 6 }}>
             <div style={{ borderRadius:6, overflow:'hidden',
-              border: activeIdx === i ? '2px solid #5b6af0' : '1.5px solid #1e2a3a',
+              border: isSel ? '2px solid #22e06a' : activeIdx === i ? '2px solid #5b6af0' : '1.5px solid #1e2a3a',
               background: '#111827' }}>
               <svg width={TW} height={TH}
                 viewBox={`${-halfW} ${-halfH} ${halfW*2} ${halfH*2}`}
@@ -8350,12 +8421,42 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
               ))}
             </div>
             <div style={{ borderTop:'1px solid #1e2a3a', margin:'4px 0' }} />
+            {(slideMenu.selectedIds?.length >= 2) && (
+              <div onClick={() => { const ids = slideMenu.selectedIds; const name = window.prompt('Group name', 'Group'); if (name !== null) { groupSlides(ids, name || 'Group'); setSelectedIds(new Set()) } setSlideMenu(null) }}
+                onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+                style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>▸ Group {slideMenu.selectedIds.length} slides…</div>
+            )}
+            {slideMenu.inGroup && (
+              <div onClick={() => { ungroupSlides(slideMenu.groupId); setSlideMenu(null) }}
+                onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+                style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Ungroup</div>
+            )}
             <div onClick={() => { const idx = slideSimNodes.findIndex(s => s.id === slideMenu.frameId); if (idx >= 0) { onPresent ? onPresent(idx) : (setPresentingSlideIdx(idx), zoomToFrame(slideSimNodes[idx])) } setSlideMenu(null) }}
               onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
               style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Present from here</div>
             <div onClick={() => { removeSlide(slideMenu.frameId); setSlideMenu(null) }}
               onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
               style={{ padding:'8px 12px', cursor:'pointer', color:'#f87171', fontSize:'0.8rem' }}>Remove from slideshow</div>
+          </div>
+        </>
+      )}
+
+      {/* Right-click a group header → rename / ungroup */}
+      {groupMenu && (
+        <>
+          <div onMouseDown={() => setGroupMenu(null)} onContextMenu={e => { e.preventDefault(); setGroupMenu(null) }}
+            style={{ position:'fixed', inset:0, zIndex:9998 }} />
+          <div onMouseDown={e => e.stopPropagation()}
+            style={{ position:'fixed', left: Math.min(groupMenu.x, window.innerWidth - 180), top: Math.min(groupMenu.y, window.innerHeight - 100),
+              zIndex:9999, background:T_C.bg, border:`1px solid ${T_C.border}`, borderRadius:T_R.lg, padding:'6px 0', minWidth:160,
+              boxShadow:'0 12px 34px rgba(0,0,0,0.55)' }}>
+            <div style={{ padding:'2px 12px 8px', fontSize:'0.72rem', color:'#8090b8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{groupMenu.name}</div>
+            <div onClick={() => { setRenamingGroupId(groupMenu.groupId); setGroupRenameVal(groupMenu.name); setGroupMenu(null) }}
+              onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              style={{ padding:'8px 12px', cursor:'pointer', color:'#c5d0ff', fontSize:'0.8rem' }}>Rename</div>
+            <div onClick={() => { ungroupSlides(groupMenu.groupId); setGroupMenu(null) }}
+              onMouseEnter={e => e.currentTarget.style.background='#1e2547'} onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              style={{ padding:'8px 12px', cursor:'pointer', color:'#f87171', fontSize:'0.8rem' }}>Ungroup</div>
           </div>
         </>
       )}
@@ -12590,7 +12691,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, onAutoStyle, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
-  floating = false, onUndock, onRedock, nodeTitle }) {
+  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
@@ -12758,6 +12859,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         {onGenWords && textRow('Generate words', onGenWords, { icon: '⚡', opens: null })}
         {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
+        {onMakeSlide && textRow(isSlide ? 'In slideshow ✓' : 'Make a slide', onMakeSlide, { icon: '▦', right: isSlide ? '✓' : '›', rightColor: isSlide ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && textRow('Show as…', () => setPanel('showas'), { icon: '▧', right: (isList || isKanban || isStrategy) ? '•' : '›', rightColor: (isList || isKanban || isStrategy) ? '#f6ad55' : '#8090b8', opens: 'showas' })}
         {hasChildrenForList && onAutoStyle && textRow('Auto-style children…', onAutoStyle, { icon: '🪄', opens: null })}
         {textRow('Hide', onHide, { icon: '🙈', opens: null })}
