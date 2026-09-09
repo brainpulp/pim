@@ -1224,8 +1224,14 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     else { setEnded(true); handleRef.current?.pause?.() }
   }
   // Forward navigation shared by the → key AND the click-catcher (so tapping the slide advances too).
+  // A video at an authored stop marker reports isWaiting() → a single Next resumes it. But that could trap a
+  // presenter on a stuck video, so a SECOND Next on the same clip (or a quick double-press) forces past it.
+  const lastRightRef = useRef({ t: 0, idx: -1 })
   const goRight = () => {
-    if (handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }
+    const now = Date.now(), lr = lastRightRef.current
+    const repeat = lr.idx === idxRef.current && (now - lr.t < 1500)   // pressed Next again on the same clip → escape
+    lastRightRef.current = { t: now, idx: idxRef.current }
+    if (!repeat && handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }
     const cb = cbRef.current
     const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
     if (act === 'clip-next') goto(idxRef.current + 1)

@@ -2548,6 +2548,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
   const ytssFullscreenIdRef = useRef(null); useEffect(() => { ytssFullscreenIdRef.current = ytssFullscreenId }, [ytssFullscreenId])
+  const ytssLastRightRef = useRef({ t: 0, key: '' })   // double-tap Next on the same video clip → escape a stuck/waiting one
   const ytssInspectorIdRef = useRef(null); useEffect(() => { ytssInspectorIdRef.current = ytssInspectorId }, [ytssInspectorId])
   const ytssEndedRef = useRef(null); useEffect(() => { ytssEndedRef.current = ytssEndedId }, [ytssEndedId])
   // Leaving a slideshow (nav away, deselect, Esc, end-ladder) resets it to clip 0, so returning replays
@@ -3185,7 +3186,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (e.key === ' ') { e.preventDefault(); if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
           if (e.key === 'ArrowRight') {
             e.preventDefault()
-            if (h?.isWaiting?.()) { h.resume(); ytssPlayingRef.current = true; return }   // paused at a stop marker → continue to the next marker/end
+            // A single Next resumes a video paused at an authored stop marker; a second Next on the same
+            // clip (within 1.5s) forces past it, so a stuck video is never a dead end.
+            const nowR = Date.now(), lrR = ytssLastRightRef.current, keyR = nid + ':' + cur
+            const repeatR = lrR.key === keyR && (nowR - lrR.t < 1500)
+            ytssLastRightRef.current = { t: nowR, key: keyR }
+            if (!repeatR && h?.isWaiting?.()) { h.resume(); ytssPlayingRef.current = true; return }   // paused at a stop marker → continue to the next marker/end
             if (cur < clips.length - 1) goClip(cur + 1)
             else if (presenting) { h?.pause?.(); ytssPlayingRef.current = false; advanceBuild(1) }   // freeze the last frame, then leave the slide (elegant transition)
             else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
