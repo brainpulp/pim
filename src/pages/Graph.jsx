@@ -7983,22 +7983,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         )}
 
         {/* Presentation controls overlay */}
-        {isPresenting && (
-          <div style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:30 }}>
-            {/* Bottom nav bar */}
-            <div style={{ position:'absolute', bottom:24, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
-              background:'rgba(10,10,24,0.88)', border:'1px solid #2d3a6a', borderRadius:10,
-              padding:'8px 18px', display:'flex', gap:14, alignItems:'center', boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}>
-              <button style={canvasBtnStyle} onClick={() => advanceBuild(-1)} title="Previous build (←)">← Prev</button>
-              <span style={{ color:'#88b4e8', fontSize:'0.85rem', minWidth:60, textAlign:'center', lineHeight:1.25 }}>
+        {isPresenting && (() => {
+          // Always-on-top control bar: sits ABOVE the fullscreen video/slideshow overlays (zIndex 4000) so
+          // it's always clickable, and its buttons dispatch a synthetic arrow key — which drives the deck
+          // even when a video/iframe has trapped the physical keyboard. This is the guaranteed on-stage control.
+          const navBtn = { background:'#1a2246', border:'1px solid #3a4780', color:'#dbe2ff', cursor:'pointer',
+            borderRadius:9, padding:'12px 20px', fontSize:'1.05rem', fontWeight:700, lineHeight:1, minWidth:70 }
+          return (
+          <div style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:4200 }}>
+            <div style={{ position:'absolute', bottom:22, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
+              background:'rgba(8,8,20,0.92)', border:'1px solid #2d3a6a', borderRadius:14,
+              padding:'10px 14px', display:'flex', gap:10, alignItems:'center', boxShadow:'0 8px 28px rgba(0,0,0,0.75)' }}>
+              <button style={navBtn} onClick={() => remoteKey('ArrowLeft')} title="Previous (←)">‹ Prev</button>
+              <span style={{ color:'#c5d0ff', fontSize:'0.88rem', minWidth:66, textAlign:'center', lineHeight:1.25 }}>
                 <div>Slide {(presentingSlideIdx ?? 0) + 1} / {slideSimNodes.length}</div>
                 {(() => { const st = slideSimNodes[presentingSlideIdx ?? 0]; const ns = st ? (getVP(st.id).stages || []).length : 0; return ns > 1 ? <div style={{ fontSize:'0.68rem', color:'#7c8cff' }}>build {presentStageIdx + 1} / {ns}</div> : null })()}
               </span>
-              <button style={canvasBtnStyle} onClick={() => advanceBuild(1)} title="Next build (→ / Space)">Next →</button>
-              <span style={{ color:'#7c8cff', fontSize:'0.62rem', maxWidth:130, lineHeight:1.2 }}>↑↓ jump slides · <b>f</b> play fullscreen</span>
+              <button style={{ ...navBtn, background:'linear-gradient(180deg,#5b6af0,#4652d6)', border:'none', color:'#fff' }} onClick={() => remoteKey('ArrowRight')} title="Next (→ / Space)">Next ›</button>
+              <button style={{ ...navBtn, minWidth:0, padding:'12px 14px', color:'#f9b4b4', background:'#241318', border:'1px solid #5a2a2a' }} onClick={() => exitPresentation()} title="Exit (Esc)">✕</button>
             </div>
           </div>
-        )}
+          )
+        })()}
       </div>
 
       {/* Draw palette (tabbed with Slides via the right rail; mutually exclusive) */}
