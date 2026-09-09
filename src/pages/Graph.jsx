@@ -10,6 +10,7 @@ import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { pickDriveVideo, downloadDriveFile, driveEmbedUrl, hasDriveCreds, setDriveCreds } from '../lib/gdrive'
+import { luminance as lumaOf } from '../lib/theme'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -6099,6 +6100,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <FrameNode key={n.id} node={n}
                 viewProps={getVP(n.id)}
                 zoomK={T.k}
+                ground={bgColor}
                 isSelected={(selected?.id === n.id && selected?.type === 'node') || selectedNodeIds.has(n.id)}
                 inSlides={slideIds.includes(n.id)}
                 isPresenting={isPresenting}
@@ -10988,7 +10990,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
 }
 
 // â"€â"€â"€ FrameNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function FrameNode({ node, viewProps, zoomK = 1, isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
+function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [hover, setHover] = useState(false)
@@ -11021,20 +11023,32 @@ function FrameNode({ node, viewProps, zoomK = 1, isSelected, inSlides, isPresent
       {/* Invisible hit target - makes frame draggable even with no fill */}
       <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
         fill="transparent" stroke="none" style={{ cursor: 'move' }} />
-      {/* Frame body — hidden in presentation mode or when outlines hidden. Border thickness is held at a
-          constant on-screen size (like a photo's selection outline), clamped; the selected frame matches
-          the photo's thickness with a distinct finer dash so the two read as the same family. */}
+      {/* Frame body — NO border line, just a soft shadow whose colour reacts to the background (a light
+          glow on a dark ground, a dark drop shadow on a light one) plus a barely-there fill. Selection is
+          shown by tinting that shadow with the accent colour, so the frame still reads as "no line". */}
       {!isPresenting && !hideOutline && (() => {
-        // Border held at a constant on-screen size (like a photo's selection outline). Uses the same
-        // bright blue as a photo so it stays clearly visible over busy content; a distinct finer dash
-        // when selected, a longer dash otherwise, so a frame still reads as a frame (not a photo).
-        const ui = Math.min(6, Math.max(0.2, 1 / (zoomK || 1)))
-        return <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
-          fill={fill} fillOpacity={fillOpacity}
-          stroke={isSelected ? '#7c8cff' : '#5b6af0'}
-          strokeWidth={2 * ui}
-          strokeDasharray={isSelected ? `${2.5 * ui},${3.5 * ui}` : `${10 * ui},${7 * ui}`}
-        />
+        const lightBg = lumaOf(ground) > 0.5
+        // Shadow: dark on a light ground, light glow on a dark ground; accent-tinted when selected.
+        const shadowColor = isSelected ? '#6470f5' : (lightBg ? '#000000' : '#ffffff')
+        const shadowOp = isSelected ? 0.5 : (lightBg ? 0.26 : 0.14)
+        const dy = lightBg ? 4 : 0                 // downward drop on light; even glow on dark
+        const blur = Math.max(6, Math.min(26, 12 / (zoomK || 1)))
+        // Fill: the frame's own colour if set, else a whisper of surface tint so it reads as a soft plate.
+        const bodyFill = fill !== 'none' ? fill : (lightBg ? '#000000' : '#ffffff')
+        const bodyOp = fill !== 'none' ? 0.14 : (lightBg ? 0.035 : 0.05)
+        const rad = 12
+        const bId = `frmsh-${node.id}`
+        return <>
+          <defs>
+            <filter id={bId} x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation={blur} />
+            </filter>
+          </defs>
+          <rect x={-halfW} y={-halfH + dy} width={halfW * 2} height={halfH * 2} rx={rad}
+            fill={shadowColor} opacity={shadowOp} filter={`url(#${bId})`} style={{ pointerEvents: 'none' }} />
+          <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={rad}
+            fill={bodyFill} fillOpacity={bodyOp} stroke="none" />
+        </>
       })()}
 
       {/* Title at top-left */}
