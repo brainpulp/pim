@@ -12569,13 +12569,13 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   const shapeIcons = { circle:'○', ellipse:'⬭', roundrect:'▭', rect:'□', diamond:'◇', none:'╌', '3d':'⬡' }
 
   const wrap = floating ? {
-    position:'relative', background:'#16162a', border:'1px solid #3a4a8a', borderRadius:10,
-    padding: 4, minWidth: 200, boxShadow:'0 12px 40px rgba(0,0,0,0.7)', pointerEvents:'all',
+    position:'relative', background:T_C.bg, border:`1px solid ${T_C.border2}`, borderRadius:T_R.lg,
+    padding: T_SP[2], minWidth: 200, boxShadow:T_SH.lg, pointerEvents:'all',
   } : {
     position:'absolute', left: x, top: y,
-    background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
-    padding: 4, minWidth: 184,
-    boxShadow:'0 4px 20px rgba(0,0,0,0.6)', zIndex:20, pointerEvents:'all',
+    background:T_C.bg, border:`1px solid ${T_C.border}`, borderRadius:T_R.lg,
+    padding: T_SP[2], minWidth: 184,
+    boxShadow:T_SH.md, zIndex:20, pointerEvents:'all',
   }
   // Sub-sections fly out beside the toolbar (flip to the left near the right screen edge).
   const flipLeft = typeof window !== 'undefined' && x > window.innerWidth * 0.6
@@ -12583,12 +12583,12 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     position:'absolute', top: Math.max(-1, panelTop - 6),   // align to the row that opened it (near the cursor)
     [flipLeft ? 'right' : 'left']: '100%',
     [flipLeft ? 'marginRight' : 'marginLeft']: 0,   // flush with the menu — no dead-zone gap to cross
-    background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8,
+    background:T_C.bg, border:`1px solid ${T_C.border}`, borderRadius:T_R.lg,
     // Invisible 6px bridge on the menu-facing side (part of the flyout, so hovering it keeps it open).
     // Declared AFTER `border` so the shorthand doesn't reset it.
     [flipLeft ? 'borderRight' : 'borderLeft']: '6px solid transparent',
     padding:'8px 10px', minWidth:210, maxWidth:284, maxHeight:'72vh', overflowY:'auto',
-    boxShadow:'0 6px 24px rgba(0,0,0,0.6)', zIndex:21,
+    boxShadow:T_SH.md, zIndex:21,
   }
   // Text menu row — matches the canvas right-click menu styling.
   // opts.opens: panel id to open on hover (submenu row), or null to close any open flyout
@@ -12597,15 +12597,15 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
     const isOpen = opts.opens != null && (panel === opts.opens || (opts.opens === 'color' && STYLE_PANES.includes(panel)))
     return (
       <div onClick={e => { cancelPanelTimer(); if (opts.opens != null) setPanelTop(e.currentTarget.offsetTop); onClick?.() }}
-        onMouseEnter={e => { e.currentTarget.style.background = '#23234a'; if (opts.opens != null) queuePanel(opts.opens, e.currentTarget.offsetTop) }}
-        onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#23234a' : 'transparent' }}
-        style={{ padding:'6px 12px', fontSize:'0.82rem', color: opts.color || '#c5d0ff', cursor:'pointer',
-          background: isOpen ? '#23234a' : 'transparent',
-          whiteSpace:'nowrap', borderRadius:4, display:'flex', justifyContent:'space-between', gap:16 }}>
-        <span style={{ display:'flex', alignItems:'center', gap:9 }}>
-          {opts.icon && <span style={{ width:16, textAlign:'center', fontSize:'0.88rem', opacity:0.9, flexShrink:0 }}>{opts.icon}</span>}
+        onMouseEnter={e => { e.currentTarget.style.background = T_C.bg2; if (opts.opens != null) queuePanel(opts.opens, e.currentTarget.offsetTop) }}
+        onMouseLeave={e => { e.currentTarget.style.background = isOpen ? T_C.bg2 : 'transparent' }}
+        style={{ padding:`${T_SP[3]}px ${T_SP[5]}px`, fontSize:T_FS.sm, color: opts.color || T_C.tx, cursor:'pointer',
+          background: isOpen ? T_C.bg2 : 'transparent',
+          whiteSpace:'nowrap', borderRadius:T_R.sm, display:'flex', justifyContent:'space-between', gap:T_SP[6] }}>
+        <span style={{ display:'flex', alignItems:'center', gap:T_SP[4] }}>
+          {opts.icon && <span style={{ width:16, textAlign:'center', fontSize:T_FS.md, opacity:0.9, flexShrink:0 }}>{opts.icon}</span>}
           <span>{label}</span>
-        </span>{opts.right && <span style={{ color: opts.rightColor || '#8090b8' }}>{opts.right}</span>}
+        </span>{opts.right && <span style={{ color: opts.rightColor || T_C.tx3 }}>{opts.right}</span>}
       </div>
     )
   }
