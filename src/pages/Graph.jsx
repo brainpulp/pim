@@ -7644,12 +7644,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         )}
 
         {/* "Edit builds" entry chip — shown when a frame is selected and we're not already editing it. */}
-        {!readOnly && !isPresenting && timelineFrameId == null && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (
-          <button onClick={() => enterTimeline(selected.id)}
-            style={{ position: 'absolute', left: 12, bottom: 64, zIndex: 40, background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 9, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 7 }}>
-            🎬 Stages{(getVP(selected.id).stages?.length) ? ` · ${getVP(selected.id).stages.length}` : ''}
-          </button>
-        )}
+        {!readOnly && !isPresenting && timelineFrameId == null && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (() => {
+          // Pin the chip to the frame's bottom-left corner (screen space), not the screen's corner.
+          const fvp = getVP(selected.id)
+          const fsn = simNodesRef.current.find(n => n.id === selected.id)
+          const fr = NODE_R * (fvp.scale || 1)
+          const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
+          const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
+          const left = T.x + ((fsn?.x ?? 0) - hw) * T.k
+          const top = T.y + ((fsn?.y ?? 0) + hh) * T.k + 8
+          return (
+            <button onClick={() => enterTimeline(selected.id)}
+              style={{ position: 'absolute', left, top, zIndex: 40, background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 9, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 7 }}>
+              🎬 Stages{(fvp.stages?.length) ? ` · ${fvp.stages.length}` : ''}
+            </button>
+          )
+        })()}
 
         {/* Container options — shown when a container node is selected. */}
         {!readOnly && !isPresenting && selected?.type === 'node' && getVP(selected.id).shape === 'container' && (() => {
