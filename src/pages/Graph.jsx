@@ -1243,18 +1243,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }, ms)
     return () => clearInterval(t)
   }, [presentingSlideIdx]) // eslint-disable-line -- frameUnfoldTexts is a later const, referenced only in the body
-  // Keyboard focus-guard while presenting: a playing video/YouTube iframe grabs keyboard focus and then
-  // swallows EVERY key (arrows, space, Esc) — they never reach the page, so the deck looks frozen. A
-  // cross-origin iframe's keys are unreachable from here, so instead we keep focus OFF it: poll, and if
-  // focus has landed on an iframe, blur it (playback continues; focus falls back to the page). This makes
-  // the physical arrow keys work over video slides. (The phone remote is immune regardless.)
+  // Keyboard focus-guard while presenting: a playing video — a YouTube/embed IFRAME **or** an uploaded
+  // <video>/<audio> element — grabs keyboard focus and then swallows EVERY key (arrows, space, Esc), so the
+  // deck looks frozen. A media element's keys can't be intercepted from here, so instead we keep focus OFF
+  // it: poll, and if focus has landed on any media element, blur it (playback continues; focus falls back to
+  // the page). This makes the physical keys work over any video slide. (The phone remote is immune anyway.)
   useEffect(() => {
     if (presentingSlideIdx === null) return
     const grab = () => {
       const ae = document.activeElement
-      if (ae && ae.tagName === 'IFRAME') { try { ae.blur() } catch { /* ignore */ } }
+      if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'VIDEO' || ae.tagName === 'AUDIO')) { try { ae.blur() } catch { /* ignore */ } }
     }
-    const iv = setInterval(grab, 350)
+    const iv = setInterval(grab, 300)
     return () => clearInterval(iv)
   }, [presentingSlideIdx])
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.

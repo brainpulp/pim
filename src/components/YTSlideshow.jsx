@@ -1201,18 +1201,20 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     }
   }, []) // eslint-disable-line
 
-  // Keep keyboard focus on the parent wrapper (not a video/YouTube iframe). A cross-origin iframe that
-  // grabs focus swallows arrow keys — they never reach our window listener. Refocus the wrapper on mount
-  // and on every clip change so the physical arrows keep driving the show. (The phone remote dispatches
-  // synthetic keys and works regardless of focus.)
+  // Keep keyboard focus on the parent wrapper, never on the playing media. A YouTube/embed IFRAME or an
+  // uploaded <video>/<audio> that holds focus swallows the arrow keys (they never reach our window
+  // listener), which is exactly the "stuck on a video" freeze. Poll continuously while this player is up and
+  // pull focus back to the wrapper whenever a media element has grabbed it — playback keeps going. This
+  // fixes both the standalone fullscreen video and a video inside a fullscreen slideshow, YouTube or
+  // uploaded. (The phone remote and the click-catcher work regardless of focus.)
   useEffect(() => {
     const el = wrapRef.current
-    const refocus = () => { try { if (el && document.activeElement?.tagName === 'IFRAME') el.focus({ preventScroll: true }) } catch { /* ignore */ } }
+    const isMedia = (n) => n && (n.tagName === 'IFRAME' || n.tagName === 'VIDEO' || n.tagName === 'AUDIO')
+    const refocus = () => { try { if (el && isMedia(document.activeElement)) el.focus({ preventScroll: true }) } catch { /* ignore */ } }
     el?.focus?.({ preventScroll: true })
-    const t1 = setTimeout(refocus, 300)   // after a clip's iframe autofocuses on load, take focus back
-    const t2 = setTimeout(refocus, 1200)
-    return () => { clearTimeout(t1); clearTimeout(t2) }
-  }, [idx])
+    const iv = setInterval(refocus, 300)
+    return () => clearInterval(iv)
+  }, [])
 
   const fsPlaying = useRef(true)
   const goto = (i) => { setEnded(false); fsPlaying.current = true; setIdx(i) }   // remount → autoplay the new slide
