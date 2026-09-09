@@ -505,10 +505,10 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
           const a = pct(Math.min(m.s, m.e)), bb = pct(Math.max(m.s, m.e)); const wide = isCut(m)
           return (
             <div key={m.id || i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-              {wide && <div title="Cutout — skipped on playback" style={{ position: 'absolute', top: 8, left: `${a}%`, width: `${Math.max(0, bb - a)}%`, height: 10, borderRadius: 2, background: 'rgba(248,113,113,0.4)', border: '1px solid #f87171' }} />}
-              <div title={m.stop ? 'Stop point' : 'Marker'} style={{ position: 'absolute', top: 0, left: `calc(${a}% - 1.5px)`, width: 3, height: 24, borderRadius: 1, background: m.stop ? '#ffb454' : '#8a94c0', boxShadow: m.stop ? '0 0 4px rgba(255,180,84,0.8)' : 'none' }} />
-              <div onMouseDown={dragHandle(i, 's')} title="Drag to move the marker" style={{ position: 'absolute', top: 3, left: `calc(${a}% - 11px)`, width: 10, height: 20, borderRadius: '3px 0 0 3px', background: m.stop ? '#ffb454' : '#8a94c0', cursor: 'ew-resize', pointerEvents: 'auto' }} />
-              <div onMouseDown={dragHandle(i, 'e')} title="Drag right to widen into a cutout" style={{ position: 'absolute', top: 3, left: `calc(${bb}% + 1px)`, width: 10, height: 20, borderRadius: '0 3px 3px 0', background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              {wide && <div title="Cutout — skipped on playback" style={{ position: 'absolute', top: 10, left: `${a}%`, width: `${Math.max(0, bb - a)}%`, height: 6, borderRadius: 2, background: 'rgba(248,113,113,0.4)', border: '1px solid #f87171' }} />}
+              <div title={m.stop ? 'Stop point' : 'Marker'} style={{ position: 'absolute', top: 1, left: `calc(${a}% - 1px)`, width: 2, height: 24, borderRadius: 1, background: m.stop ? '#ffb454' : '#8a94c0', boxShadow: m.stop ? '0 0 4px rgba(255,180,84,0.8)' : 'none' }} />
+              <div onMouseDown={dragHandle(i, 's')} title="Drag to move the marker" style={{ position: 'absolute', top: 5, left: `calc(${a}% - 6px)`, width: 5, height: 16, borderRadius: '3px 0 0 3px', background: m.stop ? '#ffb454' : '#8a94c0', cursor: 'ew-resize', pointerEvents: 'auto' }} />
+              <div onMouseDown={dragHandle(i, 'e')} title="Drag right to widen into a cutout" style={{ position: 'absolute', top: 5, left: `calc(${bb}% + 1px)`, width: 5, height: 16, borderRadius: '0 3px 3px 0', background: '#f87171', cursor: 'ew-resize', pointerEvents: 'auto' }} />
             </div>
           )
         })}
@@ -621,7 +621,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
       const c = rowsRef.current; if (!c) return
       const rows = [...c.querySelectorAll('[data-cliprow]')]
       to = rows.length
-      for (let k = 0; k < rows.length; k++) { const r = rows[k].getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { to = k; break } }
+      for (let k = 0; k < rows.length; k++) { const r = rows[k].getBoundingClientRect(); if (ev.clientX < r.left + r.width / 2) { to = k; break } }   // horizontal strip
       setDropIdx(to)
     }
     const up = () => {
@@ -638,148 +638,123 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
 
   const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
   const max = Math.max(dur || 0, cur?.end || 0, 30)
-  const W = 380
-  const pos = anchor
-    ? { position: 'fixed', left: Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - W - 8)), top: Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 420)), width: W, maxHeight: '86vh', borderRadius: 12, border: '1px solid #2d3a6a' }
-    : { position: 'fixed', top: 0, right: 0, height: '100%', width: 420, maxWidth: '96vw', borderLeft: '1px solid #2d3a6a' }
+  const k = cur ? clipKind(cur) : null, timed = cur ? isTimeMedia(cur) : false
+  // FOOTER layout: a full-width bar docked to the bottom so the timeline gets the whole screen width.
   return (
-    <div style={{ ...pos, background: '#12122a', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '52vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
       onMouseDown={e => e.stopPropagation()}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
-        <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>Slideshow</div>
-        {cur && isTimeMedia(cur) && <IconBtn name={previewPlaying ? 'pause' : 'play'} title={previewPlaying ? 'Pause preview' : 'Play preview'} onClick={togglePreview} size={26} />}
-        <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
-      </div>
-
-      {/* Slideshow-level playback options (per-slide sound/loop/captions live in each slide's settings) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', borderBottom: '1px solid #23234a' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5, cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} />
-          Play in fullscreen
-          <span style={{ color: '#7080a0', fontSize: 11 }}>— entering opens fullscreen</span>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', borderBottom: '1px solid #23234a' }}>
+        <div style={{ color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>Slideshow editor</div>
+        {cur && isTimeMedia(cur) && <IconBtn name={previewPlaying ? 'pause' : 'play'} title={previewPlaying ? 'Pause preview' : 'Play preview'} onClick={togglePreview} size={24} />}
+        <span style={{ color: '#6a7290', fontSize: 11 }}>← → preview clips · space play/pause</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#c5d0ff', fontSize: 12, cursor: 'pointer', marginLeft: 6 }}>
+          <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Play in fullscreen
         </label>
+        <span style={{ flex: 1 }} />
+        <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={24} />
       </div>
 
-      {/* Per-clip settings (preview is the node itself). Trim/speed only for timed media; images get a duration. */}
-      {cur && (() => {
-        const k = clipKind(cur), timed = isTimeMedia(cur)
-        return (
-        <div style={{ padding: '10px 12px', borderBottom: '1px solid #23234a' }}>
-          {timed && <>
-            <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 2 }}>
-              <span>Start</span>
-              <input style={inp} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
-                onBlur={e => { const v = parseTime(e.target.value); if (v != null) { patch(sel, { start: v }); preview?.seek?.(v); preview?.play?.() } }} />
-              <span style={{ flex: 1 }} />
-              <span>End</span>
-              <input style={inp} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
-                onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
-            </div>
-            {(k === 'youtube' || k === 'video') && (() => {
-              const mk = resolveMarkers(cur)
-              return <div style={{ marginTop: 6 }}>
-                <Collapsible label={`◆ Markers${mk.length ? ` (${mk.length})` : ''} — stop points & cutouts`} defaultOpen={mk.length > 0}>
-                  <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} playhead={curT} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
-                </Collapsible>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 14px 12px', overflowY: 'auto' }}>
+        {/* Top row: horizontal clips strip + the selected clip's quick controls */}
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+          <div ref={rowsRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, paddingBottom: 4, minHeight: 52 }}>
+            {clips.map((c, i) => {
+              const ck = clipKind(c)
+              const thumbSrc = ck === 'youtube' ? ytThumb(c.youtubeId) : (ck === 'image' ? c.src : null)
+              return (
+                <div key={c.id} data-cliprow onMouseDown={rowDrag(i)} title={c.title || ck}
+                  style={{ position: 'relative', flex: '0 0 auto', width: 108, borderRadius: 7, cursor: 'grab', overflow: 'hidden',
+                    opacity: dragIdx === i ? 0.4 : 1, background: i === sel ? '#1c2148' : '#0e0e1c',
+                    borderLeft: `2px solid ${dropIdx === i && dragIdx != null ? '#5b6af0' : 'transparent'}`,
+                    outline: i === sel ? '1.5px solid #5b6af0' : '1px solid #23234a' }}>
+                  {thumbSrc
+                    ? <img src={thumbSrc} alt="" width={108} height={40} style={{ objectFit: 'cover', display: 'block', background: '#000' }} />
+                    : <div style={{ width: 108, height: 40, background: '#0e0e1c', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d84a4', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 }}>{ck === 'audio' ? 'Audio' : 'Video'}</div>}
+                  <div style={{ padding: '2px 5px' }}>
+                    <div style={{ color: '#c5d0ff', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i + 1}. {c.title || (ck === 'youtube' ? c.youtubeId : ck)}</div>
+                    <div style={{ display: 'flex', gap: 1, marginTop: 1 }}>
+                      <IconBtn name="copy" title="Duplicate" size={18} tone="ghost" onClick={() => dup(i)} />
+                      {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={18} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}
+                      <IconBtn name="trash" title="Delete" size={18} tone="danger" onClick={() => del(i)} />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {/* Add card */}
+            <div style={{ flex: '0 0 auto', width: 150, display: 'flex', flexDirection: 'column', gap: 4, padding: 5, borderRadius: 7, border: '1px dashed #3a4a8a' }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <input value={urlInput} onChange={e => setUrlInput(e.target.value)} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') addUrl() }}
+                  placeholder="YouTube link…" style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left', fontSize: 11, padding: '4px 6px' }} />
+                <button onClick={addUrl} style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>+</button>
               </div>
-            })()}
-          </>}
-          {k === 'image' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8' }}>
-              <span>Show for</span>
-              <input style={{ ...inp, width: 54 }} defaultValue={String(cur.duration || 5)} key={'dur' + cur.id}
-                onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
+              {onUpload && <button onClick={onUpload} style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>⤒ Upload file…</button>}
             </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#8fa0d8', marginTop: 10 }}>
-            <span>Advance</span>
-            <select value={cur.trigger || 'click'} onChange={e => patch(sel, { trigger: e.target.value })}
-              style={{ ...inp, width: 'auto', textAlign: 'left', flex: 1 }}>
-              <option value="click">On click / key</option>
-              <option value="auto">Automatically{timed ? ' (when it ends)' : ''}</option>
-              <option value="delay">After a delay</option>
-            </select>
-            {cur.trigger === 'delay' && (
-              <input style={{ ...inp, width: 54 }} defaultValue={String((cur.delayMs || 1500) / 1000)} key={'d' + cur.id}
-                onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }} title="seconds" />
-            )}
-            {cur.trigger === 'delay' && <span>s</span>}
           </div>
-          {timed && (
-            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px 14px', fontSize: 11.5, color: '#8fa0d8', marginTop: 8 }}>
-              {(k === 'youtube' || k === 'video') && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Speed
-                  <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
-                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
-                  </select>
-                </span>
+
+          {/* Quick controls for the selected clip */}
+          {cur && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 210, flex: '0 0 auto', fontSize: 11.5, color: '#8fa0d8' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Advance</span>
+                <select value={cur.trigger || 'click'} onChange={e => patch(sel, { trigger: e.target.value })} style={{ ...inp, width: 'auto', textAlign: 'left', flex: 1 }}>
+                  <option value="click">On click / key</option>
+                  <option value="auto">Automatically{timed ? ' (when it ends)' : ''}</option>
+                  <option value="delay">After a delay</option>
+                </select>
+                {cur.trigger === 'delay' && <input style={{ ...inp, width: 46 }} defaultValue={String((cur.delayMs || 1500) / 1000)} key={'d' + cur.id}
+                  onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }} title="seconds" />}
+              </div>
+              {k === 'image' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span>Show for</span>
+                  <input style={{ ...inp, width: 48 }} defaultValue={String(cur.duration || 5)} key={'dur' + cur.id}
+                    onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
+                </div>
               )}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
-                <input type="checkbox" checked={!!cur.loop} onChange={e => patch(sel, { loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Loop
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
-                <input type="checkbox" checked={cur.muted !== true} onChange={e => { patch(sel, { muted: !e.target.checked }); if (e.target.checked) preview?.unMute?.(); else preview?.mute?.() }} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Sound
-              </label>
-              {(k === 'youtube' || k === 'video') && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#c5d0ff' }}>
-                  <input type="checkbox" checked={!!cur.captions} onChange={e => patch(sel, { captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Captions
-                </label>
+              {timed && (
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 12px' }}>
+                  {(k === 'youtube' || k === 'video') && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Speed
+                      <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
+                        {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
+                      </select></span>
+                  )}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}><input type="checkbox" checked={!!cur.loop} onChange={e => patch(sel, { loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Loop</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}><input type="checkbox" checked={cur.muted !== true} onChange={e => { patch(sel, { muted: !e.target.checked }); if (e.target.checked) preview?.unMute?.(); else preview?.mute?.() }} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Sound</label>
+                  {(k === 'youtube' || k === 'video') && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}><input type="checkbox" checked={!!cur.captions} onChange={e => patch(sel, { captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> CC</label>
+                  )}
+                </div>
               )}
-              {/* One-click ad-free: swap this YouTube clip for an uploaded video file (native player, no
-                  ads, no YouTube chrome). Trim/speed/etc. carry over. */}
               {k === 'youtube' && onReplaceClipFile && (
-                <button onClick={() => onReplaceClipFile(sel)}
-                  style={{ marginTop: 4, gridColumn: '1 / -1', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, background: '#183a2a', border: '1px solid #2f6a48', color: '#a7f3d0', borderRadius: 7, padding: '7px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-                  ⤒ Replace with uploaded file <span style={{ color: '#6fae8c', fontWeight: 400 }}>— ad-free</span>
-                </button>
+                <button onClick={() => onReplaceClipFile(sel)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: '#183a2a', border: '1px solid #2f6a48', color: '#a7f3d0', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 11.5, fontWeight: 600 }}>⤒ Replace with file — ad-free</button>
               )}
             </div>
           )}
         </div>
-        )
-      })()}
 
-      {/* Clips column — drag a row to reorder */}
-      <div ref={rowsRef} style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
-        {clips.map((c, i) => (
-          <div key={c.id} data-cliprow onMouseDown={rowDrag(i)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, borderRadius: 7, marginBottom: 4, cursor: 'grab',
-              opacity: dragIdx === i ? 0.4 : 1,
-              background: i === sel ? '#1c2148' : 'transparent',
-              borderTop: `2px solid ${dropIdx === i && dragIdx != null ? '#5b6af0' : 'transparent'}`,
-              border: `1px solid ${i === sel ? '#3a4a8a' : 'transparent'}` }}>
-            <span title="Drag to reorder" style={{ color: '#7d84a4', display: 'flex', flex: '0 0 auto' }}><Icon name="drag" size={16} /></span>
-            {(() => {
-              const k = clipKind(c)
-              const thumbSrc = k === 'youtube' ? ytThumb(c.youtubeId) : (k === 'image' ? c.src : null)
-              if (thumbSrc) return <img src={thumbSrc} alt="" width={62} height={35} style={{ borderRadius: 4, objectFit: 'cover', flexShrink: 0, background: '#000' }} />
-              return <div style={{ width: 62, height: 35, borderRadius: 4, flexShrink: 0, background: '#0e0e1c', border: '1px solid #23234a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d84a4', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 }}>{k === 'audio' ? 'Audio' : 'Video'}</div>
-            })()}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: '#c5d0ff', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title || (clipKind(c) === 'youtube' ? c.youtubeId : clipKind(c))}</div>
-              <div style={{ color: '#7080a0', fontSize: 10.5 }}>{clipKind(c) === 'image' ? `${c.duration || 5}s image` : `${fmtTime(c.start || 0)}–${c.end ? fmtTime(c.end) : 'end'}`} · {c.trigger || 'click'}{c.loop ? ' · loop' : ''}</div>
-            </div>
-            <IconBtn name="copy" title="Duplicate (to show a different part of the same video)" size={22} tone="ghost" onClick={() => dup(i)} />
-            {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={22} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}
-            <IconBtn name="trash" title="Delete" size={22} tone="danger" onClick={() => del(i)} />
+        {/* Full-width timelines for the selected clip */}
+        {cur && timed && <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: '#8fa0d8', marginTop: 2 }}>
+            <span style={{ fontWeight: 600, color: '#aeb8ff', minWidth: 52 }}>Trim</span>
+            <span>Start</span>
+            <input style={{ ...inp, width: 58 }} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
+              onBlur={e => { const v = parseTime(e.target.value); if (v != null) { patch(sel, { start: v }); preview?.seek?.(v); preview?.play?.() } }} />
+            <span>End</span>
+            <input style={{ ...inp, width: 58 }} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
+              onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
           </div>
-        ))}
-        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No slides yet. Paste a YouTube link or upload media below.</div>}
-      </div>
-
-      {/* Add */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, borderTop: '1px solid #23234a' }}>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input value={urlInput} onChange={e => setUrlInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addUrl() }}
-            placeholder="Paste a YouTube link…" style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left' }} />
-          <button onClick={addUrl} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}><Icon name="add" size={13} />Add</button>
-        </div>
-        {onUpload && (
-          <button onClick={onUpload} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5 }}>
-            <Icon name="add" size={13} /> Upload image, audio, or video…
-          </button>
-        )}
+          <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
+          {(k === 'youtube' || k === 'video') && (() => {
+            const mk = resolveMarkers(cur)
+            return <>
+              <div style={{ fontWeight: 600, color: '#aeb8ff', fontSize: 11, marginTop: 4 }}>◆ Markers{mk.length ? ` (${mk.length})` : ''} <span style={{ color: '#6a7290', fontWeight: 400 }}>— stop points & cutouts</span></div>
+              <MarkersEditor markers={mk} max={max} getTime={() => preview?.time?.() || 0} playhead={curT} onScrub={scrubTo} onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
+            </>
+          })()}
+        </>}
+        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No slides yet. Paste a YouTube link or upload media above.</div>}
       </div>
     </div>
   )

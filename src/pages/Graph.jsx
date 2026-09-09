@@ -2448,6 +2448,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
+  const ytssInspectorIdRef = useRef(null); useEffect(() => { ytssInspectorIdRef.current = ytssInspectorId }, [ytssInspectorId])
   const ytssEndedRef = useRef(null); useEffect(() => { ytssEndedRef.current = ytssEndedId }, [ytssEndedId])
   // Leaving a slideshow (nav away, deselect, Esc, end-ladder) resets it to clip 0, so returning replays
   // from the beginning rather than resuming where it was.
@@ -2931,6 +2932,30 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       // and we're not already presenting; otherwise F5 keeps its normal browser behavior (refresh).
       if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.shiftKey && presentingSlideIdxRef.current === null && slideSimNodes.length > 0) {
         e.preventDefault(); presentSlide(0, 'fwd'); return
+      }
+
+      // ── Slideshow editor open: arrows PREVIEW the clips (never fly the canvas away). ──
+      //   →/← next/prev clip · Shift+→/← ∓10s · Space play/pause · (stop markers resume on →)
+      if (ytssInspectorIdRef.current && !e.metaKey && !e.ctrlKey && !e.altKey &&
+          (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === ' ')) {
+        const nid = ytssInspectorIdRef.current
+        const yn = useGraphStore.getState().nodes.find(n => n.id === nid)
+        const clips = yn?.ytss?.clips || []
+        const h = ytssHandlesRef.current[nid]
+        const cur = Math.max(0, Math.min(ytssIdxMapRef.current[nid] || 0, clips.length - 1))
+        e.preventDefault()
+        if (e.key === ' ') { if (ytssPlayingRef.current) { h?.pause?.(); ytssPlayingRef.current = false } else { h?.play?.(); ytssPlayingRef.current = true } return }
+        if (e.key === 'ArrowRight' && e.shiftKey) { h?.seekBy?.(10); return }
+        if (e.key === 'ArrowLeft' && e.shiftKey) { h?.seekBy?.(-10); return }
+        if (e.key === 'ArrowRight') {
+          if (h?.isWaiting?.()) { h.resume(); ytssPlayingRef.current = true; return }
+          if (cur < clips.length - 1) { setYtssIdxMap(m => ({ ...m, [nid]: cur + 1 })); ytssPlayingRef.current = true }
+          return
+        }
+        if (e.key === 'ArrowLeft') {
+          if (cur > 0) { setYtssIdxMap(m => ({ ...m, [nid]: cur - 1 })); ytssPlayingRef.current = true }
+          return
+        }
       }
 
       // ── YouTube slideshow "entered": it owns the arrows until Esc. ──
