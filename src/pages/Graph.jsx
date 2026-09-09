@@ -11229,6 +11229,10 @@ const TEXT_FONTS = [
 ]
 function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
   const savedRange = useRef(null)
+  const [showColors, setShowColors] = useState(false)
+  // Curated text-colour swatches (readable on both light and dark): neutrals + vivids.
+  const TEXT_SWATCHES = ['#ffffff', '#e8ecff', '#c5d0ff', '#8b93b8', '#0f1420',
+    '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#30a46c', '#00a2c7', '#0090ff', '#3e63dd', '#6e56cf', '#8e4ec6', '#d6409f', '#e93d82']
   useEffect(() => {
     const onSel = () => {
       const s = window.getSelection()
@@ -11297,8 +11301,23 @@ function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
       <button style={{ ...btn, fontWeight: 800 }} onMouseDown={keep} title="Bold" onClick={() => exec('bold')}>B</button>
       <button style={{ ...btn, fontStyle: 'italic' }} onMouseDown={keep} title="Italic" onClick={() => exec('italic')}>I</button>
       <button style={{ ...btn, textDecoration: 'underline' }} onMouseDown={keep} title="Underline" onClick={() => exec('underline')}>U</button>
-      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Text color">A
-        <input type="color" defaultValue="#e8ecff" onInput={e => exec('foreColor', e.target.value)} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
+      <button style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 2, fontWeight: 700 }} onMouseDown={keep}
+        title="Text color" onClick={() => setShowColors(v => !v)}>A<span style={{ fontSize: 8, opacity: 0.7 }}>▾</span></button>
+      {showColors && (
+        <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, padding: '5px 2px 2px' }}>
+          {TEXT_SWATCHES.map(c => (
+            <div key={c} title={c} onMouseDown={keep} onClick={() => exec('foreColor', c)}
+              style={{ width: 18, height: 18, borderRadius: 5, background: c, cursor: 'pointer',
+                border: c === '#ffffff' || c === '#e8ecff' ? '1px solid #3a4570' : '1px solid rgba(255,255,255,0.15)' }} />
+          ))}
+          <label onMouseDown={keep} title="Custom color"
+            style={{ width: 18, height: 18, borderRadius: 5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              border: '1px solid #3a4570', background: 'conic-gradient(from 0deg,#e5484d,#ffc53d,#46a758,#00a2c7,#3e63dd,#8e4ec6,#e5484d)', overflow: 'hidden' }}>
+            <input type="color" defaultValue="#e8ecff" onInput={e => exec('foreColor', e.target.value)}
+              style={{ opacity: 0, width: '100%', height: '100%', cursor: 'pointer', border: 'none' }} />
+          </label>
+        </div>
+      )}
       {sep}
       <select title="Font" value="" onChange={e => exec('fontName', e.target.value)} style={selStyle}>
         <option value="" disabled>Font</option>
