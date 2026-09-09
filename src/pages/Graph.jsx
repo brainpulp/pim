@@ -627,7 +627,7 @@ async function copyImageToClipboard(src) {
 }
 
 function ImageToolbar({ images, selectedImageIds, anchor,
-    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onSetEffect, onResetEffects, onDuplicate, onDelete }) {
+    onGroup, onUngroup, onReorderImage, onAlign, onDistribute, onSetBlur, onSetEdgeBlur, onSetVideoOpt, onCrop, onCopyImage, onSetEffect, onResetEffects, onDuplicate, onDelete, onMakeSlide, isSlide = false }) {
   const [sub, setSub] = useState(null) // null | 'align' | 'video' | 'effects'
 
   if (selectedImageIds.size === 0 || !anchor) return null
@@ -780,6 +780,7 @@ function ImageToolbar({ images, selectedImageIds, anchor,
         {isSingle && !vid && stepperRow('Blur', blur, onSetBlur, 40)}
         {isSingle && !vid && stepperRow('Edge blur', edgeBlur, onSetEdgeBlur, 40)}
         {row(count >= 2 ? '⧉ Duplicate all' : '⧉ Duplicate', () => onDuplicate?.())}
+        {isSingle && onMakeSlide && row(isSlide ? '▦ In slideshow ✓' : '▦ Make a slide', onMakeSlide)}
         {row('Delete', onDelete, { color: '#f87171' })}
       </>)}
     </div>
@@ -5953,9 +5954,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const frameSimNodes = simNodesRef.current.filter(n => (viewNodeProps[n.id]?.shape) === 'frame')
   // Ordered list of frame sim-nodes that are in the slideshow
-  const slideSimNodes = slideIds
-    .map(id => frameSimNodes.find(n => n.id === id))
-    .filter(Boolean)
+  // Resolve a slide id to a target. A slide is usually a frame, but can also be ANY element (free image /
+  // text box / node / slideshow) added directly — presented by focusing the camera on its extents (no
+  // frame needed, to keep the canvas clean). Element slides carry __elementSlide + __rect {cx,cy,w,h}.
+  const resolveSlide = (id) => {
+    const fn = frameSimNodes.find(n => n.id === id)
+    if (fn) return fn
+    const img = (activeView?.images || []).find(i => i.id === id)
+    if (img) {
+      const w = (img.width || 360), h = (img.height || 240)
+      return { id, x: img.x || 0, y: img.y || 0, __elementSlide: true, __rect: { cx: img.x || 0, cy: img.y || 0, w, h }, label: img.title || (img.type === 'text' ? 'Text' : 'Photo') }
+    }
+    const sn = simNodesRef.current.find(n => n.id === id)
+    if (sn && visibleNodeIds.has(id)) {
+      const vp = getVP(id); const r = NODE_R * (vp.scale || 1)
+      const { halfW, halfH } = shapeDims(vp.shape || 'circle', r, storeNodeById[id]?.label || '', Math.max(9, Math.round(12 * (vp.scale || 1))), vp.labelWidth)
+      return { id, x: sn.x || 0, y: sn.y || 0, __elementSlide: true, __rect: { cx: sn.x || 0, cy: sn.y || 0, w: halfW * 2, h: halfH * 2 }, label: storeNodeById[id]?.label || 'Slide', __node: sn }
+    }
+    return null
+  }
+  const slideSimNodes = slideIds.map(resolveSlide).filter(Boolean)
   presentingSlideIdxRef.current = presentingSlideIdx
   const isPresenting = presentingSlideIdx !== null
 
@@ -6015,16 +6033,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
     setPresentingSlideIdx(idx)
     simRef.current?.stop()
-    const stages = slideStages(idx)
+    const target = slideSimNodes[idx]
+    const isEl = !!target.__elementSlide       // an element slide (image / node / slideshow), not a frame
+    const stages = isEl ? [] : slideStages(idx)
     const sIdx = stages.length ? (direction === 'back' ? stages.length - 1 : 0) : 0
-    // Open on this slide's camera if it has one, else fit the whole frame.
+    // Open on this slide's camera if it has one, else focus the frame / the element's extents.
     const camNow = stages.length ? effectiveCam(stages, sIdx) : null
-    if (camNow) applyCamRect(camNow, true, 550); else zoomToFrame(slideSimNodes[idx])
+    if (camNow) applyCamRect(camNow, true, 550)
+    else if (isEl) applyCamRect(target.__rect, true, 550)
+    else zoomToFrame(target)
     setPresentStage(sIdx)
-    if (stages.length) setTimeout(() => applyStage(slideSimNodes[idx].id, sIdx), 60)
+    if (stages.length) setTimeout(() => applyStage(target.id, sIdx), 60)
 
-    // Auto-enter a YouTube slideshow living on this slide (and exit the previous slide's, if any).
-    const yid = frameYtss(slideSimNodes[idx])
+    // Auto-enter a YouTube slideshow on this slide — a slideshow living inside a frame, OR an element
+    // slide that IS a slideshow node.
+    const yid = isEl ? (ytssNodeSet.has(target.id) ? target.id : null) : frameYtss(target)
     if (ytssActiveRef.current && ytssActiveRef.current !== yid) {
       const prev = ytssActiveRef.current
       ytssHandlesRef.current[prev]?.pause?.()   // freeze the last frame so it isn't still playing as we leave
@@ -6051,7 +6074,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // A free video on this slide flagged "Play fullscreen when presented" → jump to the clean
     // fullscreen player automatically (YouTube OR uploaded file). Esc returns to the slide.
     const frameF = slideSimNodes[idx]
-    if (frameF) {
+    if (frameF && !frameF.__elementSlide) {
       const fvpF = { ...DEFAULT_NODE_PROPS, ...(getVP(frameF.id) || {}) }
       const { halfW: fHWd, halfH: fHHd } = shapeDims('frame', NODE_R * (fvpF.scale || 1))
       const fhwF = fvpF.frameHalfW ?? fHWd, fhhF = fvpF.frameHalfH ?? fHHd
@@ -7225,7 +7248,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onGenWords={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'words' }); close() }}
               onGenVariations={() => { setWgErr(null); setWgDialog({ nodeId: hn.id, mode: 'variations' }); close() }}
               onDrill={() => { setDrillRoot(hn.id); close() }}
-              onMakeSlide={vp.shape === 'frame' ? () => { if (slideIds.includes(hn.id)) { removeSlide(hn.id) } else { addSlide(hn.id); setShowSlideSidebar(true) } close() } : null}
+              onMakeSlide={() => { if (slideIds.includes(hn.id)) { removeSlide(hn.id) } else { addSlide(hn.id); setShowSlideSidebar(true) } close() }}
               isSlide={slideIds.includes(hn.id)}
               onSetInterim={vp.shape === 'frame' ? () => { setInterimSlide(hn.id); setShowSlideSidebar(true); close() } : null}
               isInterim={activeSlideshow?.interimSlideId === hn.id}
@@ -7363,6 +7386,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               setPhotoMenu(null)
             }}
             onDelete={() => { setConfirmDeleteImages([...selectedImageIds]); setPhotoMenu(null) }}
+            onMakeSlide={() => { const id = photoMenu.imageId || [...selectedImageIds][0]; if (id) { if (slideIds.includes(id)) removeSlide(id); else { addSlide(id); setShowSlideSidebar(true) } } setPhotoMenu(null) }}
+            isSlide={slideIds.includes(photoMenu.imageId || [...selectedImageIds][0])}
           />
         </>)}
 
@@ -7805,7 +7830,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       )}
 
       {/* Slide sidebar â€" hidden while presenting */}
-      {!isPresenting && showSlideSidebar && frameSimNodes.length > 0 && (
+      {!isPresenting && showSlideSidebar && (frameSimNodes.length > 0 || slideSimNodes.length > 0) && (
         <SlideSidebar
           slideSimNodes={slideSimNodes}
           allSimNodes={simNodesRef.current}
