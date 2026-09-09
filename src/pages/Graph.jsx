@@ -1205,7 +1205,25 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Declared here — before any early return — so the hooks order never changes (React #310).
   const exitPresentationRef = useRef(null)
   useEffect(() => {
-    const onFs = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement && presentingSlideIdxRef.current !== null) exitPresentationRef.current?.() }
+    // Distinguish leaving the DECK's fullscreen (Esc on the presentation → end it) from leaving a NESTED
+    // video's fullscreen (a clip played fullscreen, then closed → we must stay in the presentation, NOT
+    // dump the user back to the canvas). We track the element that was fullscreen before this change.
+    let prevFsEl = null
+    const root = document.documentElement
+    const onFs = () => {
+      const el = document.fullscreenElement || document.webkitFullscreenElement || null
+      const prev = prevFsEl
+      prevFsEl = el
+      if (el) return                                   // entered / switched into a fullscreen element
+      if (presentingSlideIdxRef.current === null) return
+      if (prev === root) {
+        exitPresentationRef.current?.()                // left the deck's own fullscreen → end the show
+      } else if (prev) {
+        // Came back from a nested video's fullscreen → keep presenting; try to re-enter deck fullscreen.
+        const req = root.requestFullscreen || root.webkitRequestFullscreen
+        if (req) setTimeout(() => { try { const p = req.call(root); if (p && p.catch) p.catch(() => {}) } catch { /* windowed is fine */ } }, 0)
+      }
+    }
     document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs)
     return () => { document.removeEventListener('fullscreenchange', onFs); document.removeEventListener('webkitfullscreenchange', onFs) }
   }, [])
