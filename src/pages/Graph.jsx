@@ -1188,6 +1188,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Draw / Slides / Views toggles live in the store so the nav "View" menu (App.jsx) can drive them too.
   const showSlideSidebar = useGraphStore(s => s.showSlideSidebar)
   const setShowSlideSidebar = useGraphStore(s => s.setShowSlideSidebar)
+  const [showSlideGrid, setShowSlideGrid] = useState(false)   // full-screen slide-sorter overlay
+  useEffect(() => {
+    if (!showSlideGrid) return
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); setShowSlideGrid(false) } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [showSlideGrid])
   const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
   const setShowDraw = useGraphStore(s => s.setShowDraw)
   const showViews = useGraphStore(s => s.showViews)
@@ -7937,6 +7944,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           zoomToFrame={zoomToFrame}
           setPresentingSlideIdx={setPresentingSlideIdx}
           onPresent={(idx) => presentSlide(idx, 'fwd')}
+          onOpenGrid={() => setShowSlideGrid(true)}
           removeSlide={removeSlide}
           addSlide={addSlide}
           reorderSlides={reorderSlides}
@@ -7957,6 +7965,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onUpdateSlideToView={updateSlideToView}
           onClose={() => setShowSlideSidebar(false)}
           canvasBtnStyle={canvasBtnStyle}
+        />
+      )}
+
+      {/* Full-screen slide sorter (PowerPoint-style grid). Drag to reorder, double-click to open a slide. */}
+      {!isPresenting && showSlideGrid && (
+        <SlideGrid
+          slideSimNodes={slideSimNodes}
+          allSimNodes={simNodesRef.current}
+          storeNodeById={storeNodeById}
+          ytssIdxMap={ytssIdxMap}
+          viewImages={activeView?.images || []}
+          getVP={getVP}
+          reorderSlides={reorderSlides}
+          removeSlide={removeSlide}
+          interimSlideId={activeSlideshow?.interimSlideId || null}
+          onPresent={(idx) => { setShowSlideGrid(false); presentSlide(idx, 'fwd') }}
+          onJump={(idx) => { setShowSlideGrid(false); zoomToFrame(slideSimNodes[idx]) }}
+          onClose={() => setShowSlideGrid(false)}
         />
       )}
 
@@ -8255,8 +8281,232 @@ function ThreeDWrapper({ children, onFocus }) {
   return <div ref={ref} data-3d-canvas="true" style={{ width:'100%', height:'100%', borderRadius:12, overflow:'hidden' }}>{children}</div>
 }
 
+// ─── SlideThumbSVG — the miniature render of one slide (frame), shared by the sidebar and the grid ──
+// Draws the frame's contents (free images/text/video posters, contained nodes, slideshow/table/media
+// minis) into a fixed-width SVG. `TW` sets the pixel width; height follows the frame's aspect ratio.
+function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNodeById = {}, ytssIdxMap = {}, TW = 162 }) {
+  const fvp = getVP(fn.id)
+  const fr = NODE_R * (fvp.scale || 1)
+  const { halfW: defHW, halfH: defHH } = shapeDims('frame', fr)
+  const halfW = fvp.frameHalfW ?? defHW, halfH = fvp.frameHalfH ?? defHH
+  const TH = Math.max(60, Math.round(TW * halfH / halfW))
+  const nodesInFrame = allSimNodes.filter(n => {
+    if (n.id === fn.id) return false
+    const nvp = getVP(n.id)
+    if (nvp.shape === 'frame') return false
+    return nvp.containedIn === fn.id ||
+      (Math.abs((n.x||0) - (fn.x||0)) < halfW && Math.abs((n.y||0) - (fn.y||0)) < halfH)
+  })
+  return (
+    <svg width={TW} height={TH}
+      viewBox={`${-halfW} ${-halfH} ${halfW*2} ${halfH*2}`}
+      style={{ display:'block', background: fvp.fillColor || '#1a2a4a', opacity:0.92, pointerEvents:'none' }}>
+      {viewImages.map(img => {
+        const relX = (img.x || 0) - (fn.x || 0)
+        const relY = (img.y || 0) - (fn.y || 0)
+        const w = img.width || 60, h = img.height || 40
+        if (Math.abs(relX) > halfW + w / 2 || Math.abs(relY) > halfH + h / 2) return null
+        const poster = img.src || (img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : img.poster) || null
+        const plainText = img.type === 'text' ? String(img.html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').trim() : ''
+        return (
+          <g key={img.id} transform={`translate(${relX},${relY}) rotate(${img.rotation || 0})`}>
+            {img.bgColor && <rect x={-w/2} y={-h/2} width={w} height={h} fill={img.bgColor} rx={2} />}
+            {img.type === 'text' ? (
+              <text x={0} y={0} textAnchor="middle" dominantBaseline="central"
+                fontSize={Math.max(7, Math.min(h * 0.5, (img.fontScale ? 26 * img.fontScale : 22))) }
+                fill={img.textColor || '#eef1ff'} style={{ userSelect: 'none' }}>
+                {plainText.slice(0, 40) || 'Text'}
+              </text>
+            ) : poster ? (
+              <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
+            ) : (
+              <>
+                <rect x={-w/2} y={-h/2} width={w} height={h} fill="#1c2440" stroke="#2d3a6a" strokeWidth={1} rx={3} />
+                <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(9, h * 0.3)} fill="#8fa0d8" style={{ userSelect: 'none' }}>
+                  {img.type === 'video' ? '▶' : img.type === 'audio' ? '♪' : img.type === 'link' ? '🔗' : '▦'}
+                </text>
+              </>
+            )}
+          </g>
+        )
+      })}
+      {nodesInFrame.map(n => {
+        const nvp = getVP(n.id)
+        const nr = NODE_R * (nvp.scale || 1)
+        const nFs = Math.max(9, Math.round(12 * (nvp.scale || 1)))
+        const sn = storeNodeById[n.id] || {}
+        const dx = (n.x||0)-(fn.x||0), dy = (n.y||0)-(fn.y||0)
+        if (sn.ytss) {
+          const clips = sn.ytss.clips || []
+          const clip = clips[Math.max(0, Math.min(ytssIdxMap[n.id] || 0, clips.length - 1))]
+          const sc = nvp.ytssScale || 1, w = 480 * sc * 0.5, h = 270 * sc * 0.5
+          const yid = clip?.youtubeId
+          const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (clip?.src || null)
+          return (
+            <g key={n.id} transform={`translate(${dx},${dy})`}>
+              <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
+              {poster
+                ? <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
+                : <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(10, h*0.3)} fill="#8fa0d8">▶</text>}
+            </g>
+          )
+        }
+        if (sn.table) {
+          const w = 150 * (nvp.tableScale || 1), h = 90 * (nvp.tableScale || 1)
+          return (
+            <g key={n.id} transform={`translate(${dx},${dy})`}>
+              <rect x={-w/2} y={-h/2} width={w} height={h} rx={3} fill={nvp.fillColor || '#101026'} stroke="#2d3a6a" strokeWidth={1} />
+              {[0.33,0.66].map((f,i) => <line key={'v'+i} x1={-w/2 + w*f} y1={-h/2} x2={-w/2 + w*f} y2={h/2} stroke="#2d3a6a" strokeWidth={1} />)}
+              {[0.33,0.66].map((f,i) => <line key={'h'+i} x1={-w/2} y1={-h/2 + h*f} x2={w/2} y2={-h/2 + h*f} stroke="#2d3a6a" strokeWidth={1} />)}
+            </g>
+          )
+        }
+        if (sn.media) {
+          const w = (nvp.mediaW || 260), h = (nvp.mediaH || 150)
+          const yid = sn.media.youtubeId
+          const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (sn.media.poster || sn.media.src || null)
+          return (
+            <g key={n.id} transform={`translate(${dx},${dy})`}>
+              <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
+              {poster
+                ? <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
+                : <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(10, h*0.3)} fill="#8fa0d8">▶</text>}
+            </g>
+          )
+        }
+        const { halfW: nW, halfH: nH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', nFs, nvp.labelWidth)
+        return (
+          <g key={n.id} transform={`translate(${dx},${dy})`}>
+            <ShapeBody shape={nvp.shape||'circle'} halfW={nW} halfH={nH} r={nr}
+              fill={nvp.fillColor || '#12122a'} stroke="none" strokeWidth={0} />
+            {nvp.shape !== 'frame' && (
+              <text textAnchor="middle" dominantBaseline="central"
+                fontSize={Math.max(5, nFs * 0.8)}
+                fill={nvp.textColor || '#fff'}
+                style={{ userSelect:'none', pointerEvents:'none' }}>
+                {(n.label || '').split('\n')[0].slice(0, 24)}
+              </text>
+            )}
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+// ─── SlideGrid — full-screen "slide sorter" (PowerPoint-style). Big thumbnails in a wrapping grid,
+// drag any card to reorder, double-click to jump to that slide on the canvas, or Present. ──────────
+function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onClose, interimSlideId = null }) {
+  const gridRef = useRef(null)
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dropIdx, setDropIdx] = useState(null)
+
+  const handleDown = (e, idx) => {
+    if (e.button !== 0 || e.target.closest('[data-grid-remove]')) return
+    e.preventDefault()
+    const startX = e.clientX, startY = e.clientY
+    let dragging = false
+    const onMove = me => {
+      if (!dragging) {
+        if (Math.abs(me.clientX - startX) < 5 && Math.abs(me.clientY - startY) < 5) return
+        dragging = true; setDragIdx(idx)
+      }
+      if (!gridRef.current) return
+      const items = [...gridRef.current.querySelectorAll('[data-grid-idx]')]
+      // Insert position = first card whose center is past the cursor (reading order: row then column).
+      let insertBefore = slideSimNodes.length
+      for (const el of items) {
+        const r = el.getBoundingClientRect()
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2
+        // A card is "after" the cursor if it's on a later row, or same row and to the right.
+        const laterRow = me.clientY < r.top
+        const sameRowRight = me.clientY < cy + r.height / 2 && me.clientY > r.top && me.clientX < cx
+        if (laterRow || sameRowRight) { insertBefore = parseInt(el.dataset.gridIdx); break }
+      }
+      setDropIdx(insertBefore)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (!dragging) { setDragIdx(null); setDropIdx(null); return }
+      const fromIdx = idx
+      setDragIdx(null)
+      setDropIdx(dp => {
+        if (dp !== null && dp !== fromIdx && dp !== fromIdx + 1) {
+          const order = slideSimNodes.map(n => n.id)
+          const [moved] = order.splice(fromIdx, 1)
+          order.splice(dp > fromIdx ? dp - 1 : dp, 0, moved)
+          reorderSlides(order)
+        }
+        return null
+      })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  return (
+    <div onMouseDown={e => e.stopPropagation()}
+      style={{ position:'fixed', inset:0, zIndex:5000, background:'#0a0a14', display:'flex', flexDirection:'column' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 20px', borderBottom:'1px solid #1e1e2e', flexShrink:0 }}>
+        <span style={{ fontSize:'0.95rem', fontWeight:700, color:'#e6ebff', letterSpacing:'0.02em' }}>Slide sorter</span>
+        <span style={{ fontSize:'0.74rem', color:'#7080a0' }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · double-click to open</span>
+        <div style={{ flex:1 }} />
+        <button onClick={() => slideSimNodes.length && onPresent?.(0)} disabled={!slideSimNodes.length}
+          style={{ display:'flex', alignItems:'center', gap:7, background: slideSimNodes.length ? 'linear-gradient(180deg,#5b6af0,#4652d6)' : '#20233a',
+            border:'none', color: slideSimNodes.length ? '#fff' : '#5a6088', borderRadius:8, padding:'8px 16px',
+            cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.85rem', fontWeight:700 }}>▶ Present</button>
+        <button onClick={onClose} title="Close (Esc)"
+          style={{ background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:8, padding:'8px 14px', cursor:'pointer', fontSize:'0.85rem' }}>✕ Close</button>
+      </div>
+      <div ref={gridRef} style={{ flex:1, overflowY:'auto', padding:24,
+        display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:20, alignContent:'start' }}>
+        {slideSimNodes.map((fn, i) => {
+          const showLineBefore = dragIdx !== null && dropIdx === i && dragIdx !== i && dragIdx + 1 !== i
+          return (
+            <div key={fn.id} data-grid-idx={i}
+              onMouseDown={e => handleDown(e, i)}
+              onDoubleClick={() => onJump?.(i)}
+              style={{ position:'relative', cursor:'grab', userSelect:'none', opacity: dragIdx === i ? 0.35 : 1,
+                borderLeft: showLineBefore ? '3px solid #22e06a' : '3px solid transparent', paddingLeft: 5 }}>
+              <div style={{ borderRadius:8, overflow:'hidden', background:'#111827',
+                border: `2px solid ${fn.id === interimSlideId ? '#7a5a2a' : '#24304a'}`, boxShadow:'0 4px 16px rgba(0,0,0,0.4)' }}>
+                <div style={{ position:'relative' }}>
+                  <SlideThumbSVG fn={fn} getVP={getVP} viewImages={viewImages} allSimNodes={allSimNodes}
+                    storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={340} />
+                  <span style={{ position:'absolute', top:6, left:6, minWidth:20, height:20, padding:'0 6px', borderRadius:10,
+                    background:'rgba(10,10,22,0.82)', color:'#c5d0ff', fontSize:'0.72rem', fontWeight:700,
+                    display:'inline-flex', alignItems:'center', justifyContent:'center' }}>{i + 1}</span>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px' }}>
+                  <span style={{ flex:1, fontSize:'0.78rem', color:'#a9b6e8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    {fn.label || 'Slide'}
+                  </span>
+                  {fn.id === interimSlideId && (
+                    <span title="Interim slide" style={{ fontSize:'0.6rem', color:'#f6ad55', border:'1px solid #7a5a2a', borderRadius:4, padding:'0 4px', flexShrink:0 }}>⤾</span>
+                  )}
+                  <button data-grid-remove="true" title="Remove from slideshow"
+                    onMouseDown={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
+                    style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+        {dragIdx !== null && dropIdx === slideSimNodes.length && dragIdx !== slideSimNodes.length - 1 && (
+          <div style={{ width:3, background:'#22e06a', borderRadius:2, alignSelf:'stretch' }} />
+        )}
+        {slideSimNodes.length === 0 && (
+          <div style={{ color:'#7080a0', fontSize:'0.85rem', padding:20 }}>No slides yet — add frames to the slideshow first.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -8372,6 +8622,9 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
           <button onClick={onClose} style={{ background:'transparent', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1 }}>‹</button>
           <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
         </div>
+        <button onClick={() => onOpenGrid?.()} disabled={!slideSimNodes.length} title="Full-screen slide sorter"
+          style={{ display:'flex', alignItems:'center', gap:4, background:'transparent', border:'1px solid #2a3358', color: slideSimNodes.length ? '#c5d0ff' : '#5a6088',
+            borderRadius:6, padding:'2px 7px', cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.66rem', fontWeight:600 }}>⊞ Grid</button>
       </div>
 
       {/* Slideshow selector */}
@@ -8487,102 +8740,8 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
             <div style={{ borderRadius:6, overflow:'hidden',
               border: isSel ? '2px solid #22e06a' : activeIdx === i ? '2px solid #5b6af0' : '1.5px solid #1e2a3a',
               background: '#111827' }}>
-              <svg width={TW} height={TH}
-                viewBox={`${-halfW} ${-halfH} ${halfW*2} ${halfH*2}`}
-                style={{ display:'block', background: fvp.fillColor || '#1a2a4a', opacity:0.92, pointerEvents:'none' }}>
-                {viewImages.map(img => {
-                  const relX = (img.x || 0) - (fn.x || 0)
-                  const relY = (img.y || 0) - (fn.y || 0)
-                  const w = img.width || 60, h = img.height || 40
-                  if (Math.abs(relX) > halfW + w / 2 || Math.abs(relY) > halfH + h / 2) return null
-                  // Every free element must show in the thumbnail, not just images with a raw src:
-                  // a YouTube/file video shows its poster, a Text box shows its text, others a labelled tile.
-                  const poster = img.src || (img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : img.poster) || null
-                  const plainText = img.type === 'text' ? String(img.html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').trim() : ''
-                  return (
-                    <g key={img.id} transform={`translate(${relX},${relY}) rotate(${img.rotation || 0})`}>
-                      {img.bgColor && <rect x={-w/2} y={-h/2} width={w} height={h} fill={img.bgColor} rx={2} />}
-                      {img.type === 'text' ? (
-                        <text x={0} y={0} textAnchor="middle" dominantBaseline="central"
-                          fontSize={Math.max(7, Math.min(h * 0.5, (img.fontScale ? 26 * img.fontScale : 22))) }
-                          fill={img.textColor || '#eef1ff'} style={{ userSelect: 'none' }}>
-                          {plainText.slice(0, 40) || 'Text'}
-                        </text>
-                      ) : poster ? (
-                        <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
-                      ) : (
-                        <>
-                          <rect x={-w/2} y={-h/2} width={w} height={h} fill="#1c2440" stroke="#2d3a6a" strokeWidth={1} rx={3} />
-                          <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(9, h * 0.3)} fill="#8fa0d8" style={{ userSelect: 'none' }}>
-                            {img.type === 'video' ? '▶' : img.type === 'audio' ? '♪' : img.type === 'link' ? '🔗' : '▦'}
-                          </text>
-                        </>
-                      )}
-                    </g>
-                  )
-                })}
-                {nodesInFrame.map(n => {
-                  const nvp = getVP(n.id)
-                  const nr = NODE_R * (nvp.scale || 1)
-                  const nFs = Math.max(9, Math.round(12 * (nvp.scale || 1)))
-                  const sn = storeNodeById[n.id] || {}
-                  const dx = (n.x||0)-(fn.x||0), dy = (n.y||0)-(fn.y||0)
-                  // Card nodes (slideshow / table / media) aren't simple shapes — draw a faithful mini of each.
-                  if (sn.ytss) {
-                    const clips = sn.ytss.clips || []
-                    const clip = clips[Math.max(0, Math.min(ytssIdxMap[n.id] || 0, clips.length - 1))]
-                    const sc = nvp.ytssScale || 1, w = 480 * sc * 0.5, h = 270 * sc * 0.5
-                    const yid = clip?.youtubeId
-                    const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (clip?.src || null)
-                    return (
-                      <g key={n.id} transform={`translate(${dx},${dy})`}>
-                        <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
-                        {poster
-                          ? <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
-                          : <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(10, h*0.3)} fill="#8fa0d8">▶</text>}
-                      </g>
-                    )
-                  }
-                  if (sn.table) {
-                    const w = 150 * (nvp.tableScale || 1), h = 90 * (nvp.tableScale || 1)
-                    return (
-                      <g key={n.id} transform={`translate(${dx},${dy})`}>
-                        <rect x={-w/2} y={-h/2} width={w} height={h} rx={3} fill={nvp.fillColor || '#101026'} stroke="#2d3a6a" strokeWidth={1} />
-                        {[0.33,0.66].map((f,i) => <line key={'v'+i} x1={-w/2 + w*f} y1={-h/2} x2={-w/2 + w*f} y2={h/2} stroke="#2d3a6a" strokeWidth={1} />)}
-                        {[0.33,0.66].map((f,i) => <line key={'h'+i} x1={-w/2} y1={-h/2 + h*f} x2={w/2} y2={-h/2 + h*f} stroke="#2d3a6a" strokeWidth={1} />)}
-                      </g>
-                    )
-                  }
-                  if (sn.media) {
-                    const w = (nvp.mediaW || 260), h = (nvp.mediaH || 150)
-                    const yid = sn.media.youtubeId
-                    const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (sn.media.poster || sn.media.src || null)
-                    return (
-                      <g key={n.id} transform={`translate(${dx},${dy})`}>
-                        <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
-                        {poster
-                          ? <image href={poster} x={-w/2} y={-h/2} width={w} height={h} preserveAspectRatio="xMidYMid slice" />
-                          : <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(10, h*0.3)} fill="#8fa0d8">▶</text>}
-                      </g>
-                    )
-                  }
-                  const { halfW: nW, halfH: nH } = shapeDims(nvp.shape || 'circle', nr, n.label || '', nFs, nvp.labelWidth)
-                  return (
-                    <g key={n.id} transform={`translate(${dx},${dy})`}>
-                      <ShapeBody shape={nvp.shape||'circle'} halfW={nW} halfH={nH} r={nr}
-                        fill={nvp.fillColor || '#12122a'} stroke="none" strokeWidth={0} />
-                      {nvp.shape !== 'frame' && (
-                        <text textAnchor="middle" dominantBaseline="central"
-                          fontSize={Math.max(5, nFs * 0.8)}
-                          fill={nvp.textColor || '#fff'}
-                          style={{ userSelect:'none', pointerEvents:'none' }}>
-                          {(n.label || '').split('\n')[0].slice(0, 24)}
-                        </text>
-                      )}
-                    </g>
-                  )
-                })}
-              </svg>
+              <SlideThumbSVG fn={fn} getVP={getVP} viewImages={viewImages} allSimNodes={allSimNodes}
+                storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={162} />
               <div style={{ display:'flex', alignItems:'center', padding:'3px 6px 3px 8px', gap:4 }}>
                 <span style={{ flex:1, fontSize:'0.72rem', color:'#88b4e8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                   {i + 1}. {fn.label || 'Frame'}
