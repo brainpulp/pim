@@ -11023,31 +11023,36 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
       {/* Invisible hit target - makes frame draggable even with no fill */}
       <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={8}
         fill="transparent" stroke="none" style={{ cursor: 'move' }} />
-      {/* Frame body — NO border line, just a soft shadow whose colour reacts to the background (a light
-          glow on a dark ground, a dark drop shadow on a light one) plus a barely-there fill. Selection is
-          shown by tinting that shadow with the accent colour, so the frame still reads as "no line". */}
+      {/* Frame — NO line, NO interior fill: a single 45° drop shadow offset to the bottom-right, showing
+          only along the bottom and right edges (not a halo). Square corners. The shadow's colour reacts to
+          the background (light on a dark ground, dark on a light one); selection tints it with the accent.
+          Built by offsetting a blurred rect down-right, then MASKING OUT the frame's own area so only the
+          bottom/right crescent remains. */}
       {!isPresenting && !hideOutline && (() => {
         const lightBg = lumaOf(ground) > 0.5
-        // Shadow: dark on a light ground, light glow on a dark ground; accent-tinted when selected.
         const shadowColor = isSelected ? '#6470f5' : (lightBg ? '#000000' : '#ffffff')
-        const shadowOp = isSelected ? 0.5 : (lightBg ? 0.26 : 0.14)
-        const dy = lightBg ? 4 : 0                 // downward drop on light; even glow on dark
-        const blur = Math.max(6, Math.min(26, 12 / (zoomK || 1)))
-        // Fill: the frame's own colour if set, else a whisper of surface tint so it reads as a soft plate.
-        const bodyFill = fill !== 'none' ? fill : (lightBg ? '#000000' : '#ffffff')
-        const bodyOp = fill !== 'none' ? 0.14 : (lightBg ? 0.035 : 0.05)
-        const rad = 12
-        const bId = `frmsh-${node.id}`
+        const shadowOp = isSelected ? 0.6 : (lightBg ? 0.4 : 0.24)
+        const k = zoomK || 1
+        const off = Math.max(4, Math.min(20, 9 / k))     // 45° offset (down + right), ~constant on screen
+        const blur = Math.max(2, Math.min(14, 6 / k))    // keep < off so the blur doesn't spill past the top/left
+        const pad = off + blur * 3 + 4
+        const RX = -halfW - pad, RY = -halfH - pad, RW = halfW * 2 + pad * 2, RH = halfH * 2 + pad * 2
+        const bId = `frmsh-${node.id}`, mId = `frmmk-${node.id}`
         return <>
           <defs>
-            <filter id={bId} x="-40%" y="-40%" width="180%" height="180%">
+            <filter id={bId} x={RX} y={RY} width={RW} height={RH} filterUnits="userSpaceOnUse">
               <feGaussianBlur stdDeviation={blur} />
             </filter>
+            {/* white = shadow shows, black = hidden. Black over the frame's own rect kills the top/left/interior. */}
+            <mask id={mId} maskUnits="userSpaceOnUse" x={RX} y={RY} width={RW} height={RH}>
+              <rect x={RX} y={RY} width={RW} height={RH} fill="#fff" />
+              <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} fill="#000" />
+            </mask>
           </defs>
-          <rect x={-halfW} y={-halfH + dy} width={halfW * 2} height={halfH * 2} rx={rad}
-            fill={shadowColor} opacity={shadowOp} filter={`url(#${bId})`} style={{ pointerEvents: 'none' }} />
-          <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2} rx={rad}
-            fill={bodyFill} fillOpacity={bodyOp} stroke="none" />
+          <g mask={`url(#${mId})`} style={{ pointerEvents: 'none' }}>
+            <rect x={-halfW + off} y={-halfH + off} width={halfW * 2} height={halfH * 2}
+              fill={shadowColor} opacity={shadowOp} filter={`url(#${bId})`} />
+          </g>
         </>
       })()}
 
