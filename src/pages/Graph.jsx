@@ -134,9 +134,9 @@ function elementToSlide(o, label) {
   if (o.videoKind === 'youtube' && o.youtubeId) return { kind: 'youtube', youtubeId: o.youtubeId, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, cuts: o.cuts, trigger: 'click' }
   if (t === 'audio') return { kind: 'audio', src: o.src, title, start: o.start || 0, end: o.end || 0, cuts: o.cuts, trigger: 'click' }
   if (t === 'video' || o.videoKind === 'file') return { kind: 'video', src: o.src, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, loop: !!o.loop, cuts: o.cuts, trigger: 'click' }
-  // Free image → image slide: keep its look (blur, edge/contour blur, colour tint, opacity) so it
-  // presents the same in the slideshow as it did on the canvas.
-  if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5, blur: o.blur || 0, edgeBlur: o.edgeBlur || 0, tint: o.tint || null, opacity: o.opacity == null ? 1 : o.opacity }
+  // Free image → image slide: keep its look (blur, edge/contour blur, colour tint, opacity) AND its
+  // dimensions/rotation, so it presents the same in the slideshow and comes back out unchanged.
+  if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5, blur: o.blur || 0, edgeBlur: o.edgeBlur || 0, tint: o.tint || null, opacity: o.opacity == null ? 1 : o.opacity, width: o.width, height: o.height, rotation: o.rotation || 0 }
   return null
 }
 
@@ -5291,7 +5291,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const extractSlide = useCallback((clip, sx, sy) => {
     const k = clip.kind || (clip.youtubeId ? 'youtube' : 'video')
     const timed = { start: clip.start || 0, end: clip.end || 0, muted: clip.muted === true, loop: !!clip.loop, cuts: clip.cuts, title: clip.title || '' }
-    if (k === 'image') { addImage(clip.src, sx, sy, 360, 240, { z: 'front' }); return }
+    if (k === 'image') { addImage(clip.src, sx, sy, clip.width || 360, clip.height || 240, { z: 'front', rotation: clip.rotation || 0, blur: clip.blur || 0, edgeBlur: clip.edgeBlur || 0, tint: clip.tint || null, opacity: clip.opacity == null ? 1 : clip.opacity }); return }
     if (k === 'audio') { addAudio({ src: clip.src, ...timed, title: clip.title || 'Audio', autoplayOnZoom: false, autoplayOnSlide: false }, sx, sy, AUDIO_W, AUDIO_H); return }
     const W = 320
     if (k === 'youtube') { addVideo({ videoKind: 'youtube', youtubeId: clip.youtubeId, speed: clip.speed || 1, captions: !!clip.captions, ...timed }, sx, sy, W, Math.round(W * 9 / 16)); return }

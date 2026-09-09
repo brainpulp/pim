@@ -1093,6 +1093,20 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   const endedRef = useRef(false); endedRef.current = ended
   const advTimer = useRef(null)
   const cur = clips[idx] || null
+  // Image→image crossfade underlay (mirrors the on-canvas node).
+  const doFade = transition !== 'cut'
+  const prevClipRef = useRef(cur)
+  const [underlay, setUnderlay] = useState(null)
+  useEffect(() => {
+    const before = prevClipRef.current
+    prevClipRef.current = cur
+    if (doFade && before && cur && before.id !== cur.id && clipKind(before) === 'image') {
+      setUnderlay(before)
+      const t = setTimeout(() => setUnderlay(null), fadeMs)
+      return () => clearTimeout(t)
+    }
+    setUnderlay(null)
+  }, [cur?.id]) // eslint-disable-line
 
   // Enter real fullscreen on mount; exit on unmount. If the user leaves fullscreen (Esc via browser),
   // treat it as exit.
@@ -1149,8 +1163,9 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
-        {cur && <div key={'fade' + idx} style={{ width: '100%', height: '100%', animation: transition === 'cut' ? 'none' : `ytssFadeIn ${fadeMs ?? 1000}ms ease` }}>
+      <div style={{ position: 'relative', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
+        {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
+        {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease` : 'none' }}>
           <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
         </div>}
       </div>
@@ -1181,6 +1196,23 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
   const cur = clips[idx] || null
+  // Image→image crossfade: hold the PREVIOUS clip as a static underlay while the new clip fades in on top,
+  // so one image dissolves into the next (not through black). Only images can be held statically; a
+  // video/gdrive we're leaving can't, so those fall back to fade-through-black.
+  const fadeMs = ytss?.fadeMs ?? 1000
+  const doFade = (ytss?.transition || 'fade') !== 'cut'
+  const prevClipRef = useRef(cur)
+  const [underlay, setUnderlay] = useState(null)
+  useEffect(() => {
+    const before = prevClipRef.current
+    prevClipRef.current = cur
+    if (doFade && before && cur && before.id !== cur.id && clipKind(before) === 'image') {
+      setUnderlay(before)
+      const t = setTimeout(() => setUnderlay(null), fadeMs)
+      return () => clearTimeout(t)
+    }
+    setUnderlay(null)
+  }, [cur?.id]) // eslint-disable-line
   const W = 480 * (node.__scale || 1), H = 270 * (node.__scale || 1)
   const label = node.label || 'Slideshow'
   // Corner scale handle (bottom-right). Drag out to grow / in to shrink; pins the top-left. While
@@ -1227,9 +1259,12 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
         <div style={{ width: '100%', height: '100%', borderRadius: 10, overflow: 'hidden',
           border: `2px solid ${bd}`, boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
           {cur
-            ? <div key={'fade' + cur.id} style={{ width: '100%', height: '100%', animation: ytss.transition === 'cut' ? 'none' : `ytssFadeIn ${ytss.fadeMs ?? 1000}ms ease` }}>
-                <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
-              </div>
+            ? <>
+                {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
+                <div key={'fade' + cur.id} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease` : 'none' }}>
+                  <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
+                </div>
+              </>
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
                 <Icon name="play" size={30} />
                 <div style={{ fontSize: 13 }}>Empty slideshow</div>
