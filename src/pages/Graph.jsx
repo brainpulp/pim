@@ -3003,6 +3003,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         e.preventDefault(); presentSlide(0, 'fwd'); return
       }
 
+      // Escape closes the slideshow editor (its click-away backdrop was removed so canvas clicks don't).
+      if (e.key === 'Escape' && ytssInspectorIdRef.current && !ytssActiveRef.current) {
+        e.preventDefault(); ytssHandlesRef.current[ytssInspectorIdRef.current]?.pause?.(); setYtssInspectorId(null); return
+      }
+
       // ── Slideshow editor open: arrows PREVIEW the clips (never fly the canvas away). ──
       //   →/← next/prev clip · Shift+→/← ∓10s · Space play/pause · (stop markers resume on →)
       if (ytssInspectorIdRef.current && !e.metaKey && !e.ctrlKey && !e.altKey &&
@@ -7713,8 +7718,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         }
         const closeInspector = () => { ytssHandlesRef.current[ytssInspectorId]?.pause?.(); setYtssInspectorId(null) }
         return (<>
-          {/* Click-away backdrop — clicking anywhere outside the panel closes it. */}
-          <div onMouseDown={closeInspector} style={{ position: 'fixed', inset: 0, zIndex: 499 }} />
+          {/* No click-away backdrop: the editor is a docked footer, so clicking the slideshow (to preview
+              it) must NOT close it. Close via the ✕ button or Escape. */}
           <YTSlideshowInspector
             clips={yn.ytss.clips || []}
             anchor={anchor}
