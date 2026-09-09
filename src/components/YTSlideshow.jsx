@@ -1221,6 +1221,16 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     if (i < clips.length - 1) goto(i + 1)
     else { setEnded(true); handleRef.current?.pause?.() }
   }
+  // Forward navigation shared by the → key AND the click-catcher (so tapping the slide advances too).
+  const goRight = () => {
+    if (handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }
+    const cb = cbRef.current
+    const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
+    if (act === 'clip-next') goto(idxRef.current + 1)
+    else if (act === 'deck-next') cb.onDeckNext?.()
+    else if (act === 'freeze-end') { setEnded(true); handleRef.current?.pause?.() }
+    else if (act === 'exit') cb.onExit?.()
+  }
   const onEnded = () => {
     const clip = clips[idxRef.current]; if (!clip) return
     if (clip.trigger === 'auto') advance()
@@ -1238,17 +1248,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(10); return }
       if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(-10); return }
       if (e.key === ' ') { e.preventDefault(); if (fsPlaying.current) { handleRef.current?.pause?.(); fsPlaying.current = false } else { handleRef.current?.play?.(); fsPlaying.current = true } return }
-      if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        if (handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }   // resume from a stop marker
-        const cb = cbRef.current
-        const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
-        if (act === 'clip-next') goto(idxRef.current + 1)
-        else if (act === 'deck-next') cb.onDeckNext?.()               // presenting → next slide/build (stays fullscreen)
-        else if (act === 'freeze-end') { setEnded(true); handleRef.current?.pause?.() }
-        else if (act === 'exit') cb.onExit?.()
-        return
-      }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goRight(); return }
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
         const cb = cbRef.current
@@ -1270,6 +1270,14 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
           <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true || sound === false} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
         </div>}
       </div>
+      {/* While PRESENTING: a transparent full-screen catcher over the clip. It (a) advances on click/tap so
+          a stuck video slide isn't a dead end, and (b) keeps clicks off the video iframe so the iframe never
+          steals keyboard focus — arrow keys keep working. Hidden when not presenting (video controls usable). */}
+      {presenting && (
+        <div onMouseDown={e => { e.preventDefault(); wrapRef.current?.focus({ preventScroll: true }) }}
+          onClick={goRight}
+          style={{ position: 'absolute', inset: 0, zIndex: 6, background: 'transparent', cursor: 'default' }} />
+      )}
       {ended && !presenting && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
           <button onClick={() => goto(0, true)} title="Replay" style={{ width: 76, height: 76, borderRadius: '50%', background: 'rgba(18,18,42,0.85)', border: '2px solid #5b6af0', color: '#dbe2ff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="replay" size={34} /></button>
