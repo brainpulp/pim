@@ -7040,7 +7040,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             anchor={photoMenu}
             onGroup={() => groupImages([...selectedImageIds])}
             onUngroup={() => ungroupImages([...selectedImageIds])}
-            onReorderImage={(id, dir) => reorderImage(id, dir)}
+            onReorderImage={(id, dir) => { reorderImage(id, dir); setPhotoMenu(null) }}
             onSetBlur={v => selectedImageIds.forEach(id => updateImage(id, { blur: v }))}
             onSetEdgeBlur={v => selectedImageIds.forEach(id => updateImage(id, { edgeBlur: v }))}
             onSetVideoOpt={(id, patch) => updateImage(id, patch)}

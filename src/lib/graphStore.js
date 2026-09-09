@@ -783,10 +783,25 @@ const useGraphStore = create((set, get) => ({
       const imgs = [...(v.images || [])]
       const idx = imgs.findIndex(i => i.id === imageId)
       if (idx < 0) return v
-      if (direction === 'up' && idx < imgs.length - 1) {
-        [imgs[idx], imgs[idx + 1]] = [imgs[idx + 1], imgs[idx]]
-      } else if (direction === 'down' && idx > 0) {
-        [imgs[idx], imgs[idx - 1]] = [imgs[idx - 1], imgs[idx]]
+      // Paint order is split into two passes: z==='front' cards paint ABOVE nodes, the rest below.
+      // "Bring forward" must be able to CROSS that boundary — otherwise a background image can never
+      // rise above the node layer no matter how many times you click. So: promote to the front pass
+      // first (if not already there), then step within the array; "send backward" is the mirror.
+      // Paint order is two passes: z==='front' cards paint ABOVE nodes, the rest below. Step within
+      // the current pass by swapping with the nearest neighbour IN THE SAME pass; only when already at
+      // the extreme of the back pass does "bring forward" cross into the front pass (and vice-versa),
+      // so a background image can actually rise above the node layer instead of getting stuck.
+      const img = imgs[idx]
+      const front = img.z === 'front'
+      const dir = direction === 'up' ? 1 : -1
+      let j = idx + dir
+      while (j >= 0 && j < imgs.length && (imgs[j].z === 'front') !== front) j += dir
+      if (j >= 0 && j < imgs.length) {
+        [imgs[idx], imgs[j]] = [imgs[j], imgs[idx]]
+      } else if (direction === 'up' && !front) {
+        imgs[idx] = { ...img, z: 'front' }        // topmost in the back pass → promote above the nodes
+      } else if (direction === 'down' && front) {
+        imgs[idx] = { ...img, z: 'back' }          // bottom of the front pass → drop below the nodes
       }
       return { ...v, images: imgs }
     }),
