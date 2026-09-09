@@ -8,6 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { driveEmbedUrl, driveThumbUrl } from '../lib/gdrive'
 import { fsArrowAction } from '../lib/slideshowNav'
+import { plog } from '../lib/presDebug'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 export const parseYoutubeId = (str) => {
@@ -1233,9 +1234,10 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     const now = Date.now(), lr = lastRightRef.current
     const repeat = lr.idx === idxRef.current && (now - lr.t < 1500)   // pressed Next again on the same clip → escape
     lastRightRef.current = { t: now, idx: idxRef.current }
-    if (!repeat && handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }
+    if (!repeat && handleRef.current?.isWaiting?.()) { plog('  FSgoRight → resume (stop marker)'); handleRef.current.resume(); fsPlaying.current = true; return }
     const cb = cbRef.current
     const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
+    plog(`  FSgoRight idx=${idxRef.current}/${clips.length} kind=${clipKind(clips[idxRef.current])} wait=${handleRef.current?.isWaiting?.() ? 1 : 0} act=${act}`)
     if (act === 'clip-next') goto(idxRef.current + 1)
     else if (act === 'deck-next') cb.onDeckNext?.()
     else if (act === 'freeze-end') { setEnded(true); handleRef.current?.pause?.() }
@@ -1253,7 +1255,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     const onKey = (e) => {
       // Capture-phase + stopPropagation so these arrows drive ONLY the fullscreen player, never the graph nav.
       const keys = ['Escape', 'ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', ' ']
-      if (keys.includes(e.key)) e.stopPropagation()
+      if (keys.includes(e.key)) { e.stopPropagation(); plog(`FSplayerKD ${e.key === ' ' ? 'Space' : e.key} idx=${idxRef.current}`) }
       if (e.key === 'Escape') { e.preventDefault(); onExit?.(); return }
       if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(10); return }
       if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(-10); return }

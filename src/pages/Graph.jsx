@@ -21,6 +21,7 @@ import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptio
 import { playDrop } from '../lib/sound'
 import PresenterRemote from '../components/PresenterRemote'
 import QRCode from '../components/QRCode'
+import { plog, presLog } from '../lib/presDebug'
 
 // Platform: on a Mac, Ctrl+click IS the secondary (right) click — it fires a `contextmenu` event and
 // must open the context menu. Multi-select there uses Cmd (metaKey). On Windows/Linux, Ctrl is the
@@ -1191,6 +1192,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const showSlideSidebar = useGraphStore(s => s.showSlideSidebar)
   const setShowSlideSidebar = useGraphStore(s => s.setShowSlideSidebar)
   const [showSlideGrid, setShowSlideGrid] = useState(false)   // full-screen slide-sorter overlay
+  const [dbgTick, setDbgTick] = useState(0)   // Presentation diagnostic: refresh the on-screen log (see presDebug.js)
   useEffect(() => {
     if (!showSlideGrid) return
     const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); setShowSlideGrid(false) } }
@@ -1265,6 +1267,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     window.addEventListener('focusin', onFocusIn, true)
     const iv = setInterval(grab, 250)
     return () => { window.removeEventListener('focusin', onFocusIn, true); clearInterval(iv) }
+  }, [presentingSlideIdx])
+  // Presentation diagnostic: refresh the on-screen log while presenting.
+  useEffect(() => {
+    if (presentingSlideIdx === null) return
+    const iv = setInterval(() => setDbgTick(t => t + 1), 250)
+    return () => clearInterval(iv)
   }, [presentingSlideIdx])
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
   // Declared here — before any early return — so the hooks order never changes (React #310).
@@ -3124,12 +3132,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = e => {
+      if (presentingSlideIdxRef.current !== null && ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', ' ', 'Escape'].includes(e.key))
+        plog(`deckKD ${e.key === ' ' ? 'Space' : e.key} fs=${ytssFullscreenIdRef.current ? 'Y' : 'n'} act=${ytssActiveRef.current ? 'Y' : 'n'} cf=${canvasFocused.current ? 1 : 0} ae=${document.activeElement?.tagName || '?'}`)
       if (readOnly) return   // shared read-only view: no keyboard mutations
       // A fullscreen slideshow overlay owns ALL keys (its own window/capture handler drives it). Without
       // this, arrows here would ALSO fire (advancing the deck) and fight the player. Let Esc through so it
       // can still bubble if the player didn't handle it, but block the nav/build keys.
-      if (ytssFullscreenIdRef.current && e.key !== 'Escape') return
-      if (!canvasFocused.current) return
+      if (ytssFullscreenIdRef.current && e.key !== 'Escape') { if (presentingSlideIdxRef.current !== null) plog('  deck GUARD-bail (fullscreen player owns keys)'); return }
+      if (!canvasFocused.current) { if (presentingSlideIdxRef.current !== null && e.key.startsWith('Arrow')) plog('  deck bail: canvasFocused=false'); return }
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
 
       // F5 → start presenting from the first slide (PowerPoint/Keynote convention). Only when slides exist
@@ -3196,9 +3206,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const nowR = Date.now(), lrR = ytssLastRightRef.current, keyR = nid + ':' + cur
             const repeatR = lrR.key === keyR && (nowR - lrR.t < 1500)
             ytssLastRightRef.current = { t: nowR, key: keyR }
-            if (!repeatR && h?.isWaiting?.()) { h.resume(); ytssPlayingRef.current = true; return }   // paused at a stop marker → continue to the next marker/end
-            if (cur < clips.length - 1) goClip(cur + 1)
-            else if (presenting) { h?.pause?.(); ytssPlayingRef.current = false; advanceBuild(1) }   // freeze the last frame, then leave the slide (elegant transition)
+            plog(`  inline→ cur=${cur}/${clips.length} kind=${(clips[cur]?.kind || '?')} wait=${h?.isWaiting?.() ? 1 : 0} repeat=${repeatR ? 1 : 0} atEnd=${atEnd ? 1 : 0} present=${presenting ? 1 : 0}`)
+            if (!repeatR && h?.isWaiting?.()) { plog('    → resume (stop marker)'); h.resume(); ytssPlayingRef.current = true; return }   // paused at a stop marker → continue to the next marker/end
+            if (cur < clips.length - 1) { plog('    → goClip ' + (cur + 1)); goClip(cur + 1) }
+            else if (presenting) { plog('    → advanceBuild(1)'); h?.pause?.(); ytssPlayingRef.current = false; advanceBuild(1) }   // freeze the last frame, then leave the slide
             else if (!atEnd) { h?.pause?.(); ytssPlayingRef.current = false; setYtssEndedId(nid) }   // last frame + replay
             else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null) }   // → show the node on canvas
             return
@@ -6131,7 +6142,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }
 
   const presentSlide = (idx, direction) => {
-    if (idx < 0 || idx >= slideSimNodes.length) return
+    if (idx < 0 || idx >= slideSimNodes.length) { plog(`presentSlide OUT-OF-RANGE ${idx} (len ${slideSimNodes.length})`); return }
+    plog(`presentSlide ${idx} dir=${direction}`)
     const entering = presentingSlideIdxRef.current === null   // first slide of the show → go true-fullscreen
     if (entering) enterDeviceFullscreen()
     restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
@@ -6254,7 +6266,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   }
   const advanceBuild = (dir) => {
     const cur = presentingSlideIdxRef.current ?? 0
-    const frame = slideSimNodes[cur]; if (!frame) return
+    const frame = slideSimNodes[cur]; if (!frame) { plog('advanceBuild abort: no frame @' + cur); return }
+    plog(`advanceBuild(${dir}) cur=${cur} stages=${slideStages(cur).length}`)
     // Unfolding text: forward reveals a line first; backward re-folds one before leaving the frame.
     if (dir > 0 && tryRevealForward()) return
     const stages = slideStages(cur)
@@ -6294,7 +6307,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // works even when a video/YouTube iframe has stolen keyboard focus (real key events never reach the page
   // then, but a programmatic dispatch fires the window listeners directly). This is why the remote is the
   // reliable on-stage control.
-  const remoteKey = (key) => { canvasFocused.current = true; window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) }
+  const remoteKey = (key) => { plog('BAR/REMOTE press ' + key); canvasFocused.current = true; window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) }
   remoteActionsRef.current = {
     next: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent(); else remoteKey('ArrowRight') },
     prev: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) remoteKey('ArrowLeft') },
@@ -7991,6 +8004,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             borderRadius:9, padding:'12px 20px', fontSize:'1.05rem', fontWeight:700, lineHeight:1, minWidth:70 }
           return (
           <div style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:4200 }}>
+            {/* DIAGNOSTIC (temporary): live log of what each Next/arrow does. Screenshot this on the stuck slide. */}
+            <div style={{ position:'fixed', top:8, left:8, pointerEvents:'none', zIndex:99999,
+              background:'rgba(0,0,0,0.82)', color:'#8effa0', font:'11px/1.35 monospace', padding:'6px 8px',
+              borderRadius:6, maxWidth:'62vw', whiteSpace:'pre-wrap', border:'1px solid #2a3a2a' }}>
+              {`presIdx=${presentingSlideIdx} stage=${presentStageIdx} act=${ytssActiveId||'-'} fsId=${ytssFullscreenId||'-'} vidFS=${videoFullscreen?'Y':'-'} slides=${slideSimNodes.length}\n`}
+              {presLog.slice(-14).join('\n') || '(press Next / arrow to log…)'}
+            </div>
             <div style={{ position:'absolute', bottom:22, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
               background:'rgba(8,8,20,0.92)', border:'1px solid #2d3a6a', borderRadius:14,
               padding:'10px 14px', display:'flex', gap:10, alignItems:'center', boxShadow:'0 8px 28px rgba(0,0,0,0.75)' }}>
