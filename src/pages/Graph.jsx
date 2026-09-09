@@ -13496,10 +13496,10 @@ function ImageUrlPanel({ imageUrl, onSet, onBack, backBtn }) {
 const tlBtn = { background:'transparent', border:'1px solid #2d3a6a', color:'#aaa', cursor:'pointer', fontSize:'0.72rem', padding:'2px 7px', borderRadius:4, whiteSpace:'nowrap' }
 
 // Delete confirm overlay
-const confirmStyle = { position:'absolute', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50 }
-const confirmBox = { background:'#16162a', border:'1px solid #2d3a6a', borderRadius:10, padding:'1.25rem 1.5rem', minWidth:260, boxShadow:'0 8px 32px rgba(0,0,0,0.6)' }
-const confirmCancelBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px solid #2d3a6a', background:'transparent', color:'#888', cursor:'pointer', fontSize:'0.82rem' }
-const confirmOkBtn = { padding:'0.35rem 0.9rem', borderRadius:6, border:'1px solid #f87171', background:'#2a1a1a', color:'#f87171', cursor:'pointer', fontSize:'0.82rem', fontWeight:600 }
+const confirmStyle = { position:'absolute', inset:0, background:'rgba(6,6,16,0.55)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50 }
+const confirmBox = { background:T_C.bg, border:`1px solid ${T_C.border}`, borderRadius:T_R.xl, padding:'1.25rem 1.5rem', minWidth:260, boxShadow:T_SH.lg }
+const confirmCancelBtn = { padding:'0.35rem 0.9rem', borderRadius:T_R.md, border:`1px solid ${T_C.border}`, background:'transparent', color:T_C.tx2, cursor:'pointer', fontSize:T_FS.sm }
+const confirmOkBtn = { padding:'0.35rem 0.9rem', borderRadius:T_R.md, border:`1px solid ${T_C.danger}`, background:T_C.dangerBg, color:T_C.danger, cursor:'pointer', fontSize:T_FS.sm, fontWeight:T_FW.bold }
 const canvasBtnStyle = { padding:'0.45rem 0.85rem', borderRadius:7, border:'1px solid #2d3a6a', background:'#12122a', color:'#5b6af0', cursor:'pointer', fontSize:'0.82rem', fontWeight:600, boxShadow:'0 2px 12px rgba(0,0,0,0.4)' }
 const sideToolBtnStyle = { padding:'0.3rem 0.6rem', borderRadius:7, border:'1px solid #2a3358', background:'transparent', color:'#8a97cc', cursor:'pointer', fontSize:'0.76rem', fontWeight:600, whiteSpace:'nowrap' }
 // Uniform tool-strip button: fixed height, centered icon+label, consistent skin (grid cells share width).
