@@ -3301,9 +3301,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       //   ← / →   siblings (arcs out through the sibling group, then into the target)
       //   ↑ parent · ↓ first child · Ctrl/Cmd+↑ jump to root
       //   Shift+↓/↑ zoom depth · + / − (or [ / ]) closeness
-      if (!e.altKey && (
-            e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
-            e.key === '[' || e.key === ']' || e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_')) {
+      const _isArrowKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'
+      const _isZoomKey = e.key === '[' || e.key === ']' || e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_'
+      // TEMPORARY: arrow tree-nav requires Ctrl/Cmd (or Shift for depth) so PLAIN arrows stay free and
+      // never clash with presentation controls. +/−/[ ] closeness keys keep their bindings.
+      if (!e.altKey && ((_isArrowKey && (e.ctrlKey || e.metaKey || e.shiftKey)) || _isZoomKey)) {
         // Resolve the current nav node: last nav focus, else the current selection, else nearest to centre.
         let cur = (navFocusRef.current && visibleNodeIds.has(navFocusRef.current)) ? navFocusRef.current
           : (selected?.type === 'node' && visibleNodeIds.has(selected.id)) ? selected.id : null
@@ -3335,19 +3337,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           zoomNavRef.current?.(cur, navDepthRef.current); showNavHud(navDepthRef.current)
           return
         }
-        if (e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
           e.preventDefault()
           navDepthRef.current = Math.max(0, Math.min(8, navDepthRef.current + (e.key === 'ArrowDown' ? 1 : -1)))
           zoomNavRef.current?.(cur, navDepthRef.current); showNavHud(navDepthRef.current)
           return
         }
-        if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'ArrowUp') {   // Ctrl+Shift+↑ → jump to root
           e.preventDefault()
           let r = cur, guard = new Set()
           while (!guard.has(r)) { guard.add(r); const pe = storeEdges.find(ed => ed.target === r); if (!pe) break; r = pe.source }
           goTo(r); return
         }
-        if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {   // Ctrl/Cmd + arrows → parent / child / siblings
           if (e.key === 'ArrowUp') {
             e.preventDefault()
             const pe = storeEdges.find(ed => ed.target === cur)
@@ -6639,7 +6641,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               return (
                 <YTSlideshowNode key={'ytss' + n.id} node={n} ytss={nd.ytss}
                   currentIdx={ytssIdxMap[n.id] || 0} active={active} playing={active || inspecting}
-                  ended={ytssEndedId === n.id} editing={inspecting}
+                  ended={ytssEndedId === n.id} editing={inspecting} presenting={isPresenting}
                   selected={selected?.type === 'node' && selected.id === n.id}
                   isDropTarget={dragHoverNodeId === n.id}
                   onHeaderDown={e => handleNodeMouseDown(e, n.id)}
@@ -7918,7 +7920,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         if (!clips.length) return null
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
-          <YTFullscreenPlayer clips={clips} startIndex={start} transition={yn?.ytss?.transition || 'fade'} fadeMs={yn?.ytss?.fadeMs ?? 1000}
+          <YTFullscreenPlayer clips={clips} startIndex={start} transition={yn?.ytss?.transition || 'fade'} fadeMs={yn?.ytss?.fadeMs ?? 1000} presenting={isPresenting}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)

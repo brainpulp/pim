@@ -1084,7 +1084,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, captions = false, transition = 'fade', fadeMs = 1000, onExit, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onReplayDone }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
@@ -1169,21 +1169,23 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
           <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
         </div>}
       </div>
-      {ended && (
+      {ended && !presenting && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
           <button onClick={() => goto(0, true)} title="Replay" style={{ width: 76, height: 76, borderRadius: '50%', background: 'rgba(18,18,42,0.85)', border: '2px solid #5b6af0', color: '#dbe2ff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="replay" size={34} /></button>
           <div style={{ color: '#aab4dd', fontSize: 13 }}>End of slideshow — replay, or press → to return</div>
         </div>
       )}
-      {/* Controls: prev / next / exit */}
-      <div style={{ position: 'absolute', bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 12, alignItems: 'center' }}>
-        <IconBtn name="prev" title="Previous" size={40} onClick={() => { const i = idxRef.current; if (i > 0) goto(i - 1, true) }} />
-        <div style={{ color: '#c5d0ff', fontSize: 13, minWidth: 54, textAlign: 'center', fontFamily: '-apple-system, sans-serif' }}>{idx + 1} / {clips.length}</div>
-        <IconBtn name="next" title="Next" size={40} onClick={() => { const i = idxRef.current; if (i < clips.length - 1) goto(i + 1, true); else if (!endedRef.current) { setEnded(true); handleRef.current?.pause?.() } else onExit?.() }} />
-      </div>
-      <div style={{ position: 'absolute', top: 18, right: 18 }}>
-        <IconBtn name="close" title="Exit fullscreen (Esc)" size={40} onClick={() => onExit?.()} />
-      </div>
+      {/* Controls: prev / next / exit (hidden during a presentation — smooth, no chrome; Esc still exits) */}
+      {!presenting && (<>
+        <div style={{ position: 'absolute', bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 12, alignItems: 'center' }}>
+          <IconBtn name="prev" title="Previous" size={40} onClick={() => { const i = idxRef.current; if (i > 0) goto(i - 1, true) }} />
+          <div style={{ color: '#c5d0ff', fontSize: 13, minWidth: 54, textAlign: 'center', fontFamily: '-apple-system, sans-serif' }}>{idx + 1} / {clips.length}</div>
+          <IconBtn name="next" title="Next" size={40} onClick={() => { const i = idxRef.current; if (i < clips.length - 1) goto(i + 1, true); else if (!endedRef.current) { setEnded(true); handleRef.current?.pause?.() } else onExit?.() }} />
+        </div>
+        <div style={{ position: 'absolute', top: 18, right: 18 }}>
+          <IconBtn name="close" title="Exit fullscreen (Esc)" size={40} onClick={() => onExit?.()} />
+        </div>
+      </>)}
     </div>
   )
 }
@@ -1191,7 +1193,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 // ── On-canvas node: a clean player showing the current clip ───────────────────
 // `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
 // arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
-export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, editing = false, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename, onSetScale, zoomK = 1 }) {
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, editing = false, presenting = false, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename, onSetScale, zoomK = 1 }) {
   const [editingTitle, setEditingTitle] = useState(false)
   const clips = ytss?.clips || []
   const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
@@ -1276,16 +1278,17 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
               <Icon name="add" size={16} /> Add to slideshow
             </div>
           )}
-          {/* End-of-slideshow: last frame + replay (arrow-nav ladder handles what → does next) */}
-          {ended && active && (
+          {/* End-of-slideshow: last frame + replay. Hidden while PRESENTING — there we just freeze the
+              last frame (no replay chrome); going back to the slide replays it. */}
+          {ended && active && !presenting && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, background: 'rgba(6,6,16,0.5)', fontFamily: '-apple-system, sans-serif' }}>
               <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onReplay?.() }} title="Replay"
                 style={{ width: 54, height: 54, borderRadius: '50%', background: 'rgba(18,18,42,0.85)', border: '2px solid #5b6af0', color: '#dbe2ff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="replay" size={26} /></button>
               <div style={{ color: '#aab4dd', fontSize: 11 }}>End — replay, or → to return</div>
             </div>
           )}
-          {/* Hint bar while active */}
-          {active && !ended && (
+          {/* Hint bar while active (never during a presentation) */}
+          {active && !ended && !presenting && (
             <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '4px 8px', background: 'rgba(10,10,24,0.82)', color: '#aab4dd', fontSize: 10.5, textAlign: 'center', fontFamily: '-apple-system, sans-serif', pointerEvents: 'none' }}>
               ← → clips · space play/pause · shift+←/→ ∓10s · esc exit
             </div>
