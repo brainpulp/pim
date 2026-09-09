@@ -34,6 +34,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 [data-tcell] li { line-height: 1.4; }
 [data-tcell] input.tc-chk { width: 13px; height: 13px; margin: 0 5px 0 0; vertical-align: -2px; accent-color: #5b6af0; cursor: pointer; }
 
+/* Rich text boxes: the global `* { padding:0 }` reset removes list indentation, which clips the bullet /
+   number markers so they never show. Restore indentation + explicit markers inside a text box. */
+[data-richtext] ul, [data-richtext] ol { margin: 2px 0; padding-left: 22px; }
+[data-richtext] ul { list-style: disc outside; }
+[data-richtext] ol { list-style: decimal outside; }
+[data-richtext] li { line-height: 1.35; }
+
 /* ─── Shared design system (Figma/Linear-style clean skin) ─────────────────── */
 /* Ghost button: transparent, subtle hover, quiet by default. */
 .pim-btn {

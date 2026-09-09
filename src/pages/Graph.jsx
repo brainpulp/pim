@@ -5713,12 +5713,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const dx = wx - pivW.x, dy = wy - pivW.y
         const lx = cos * dx + sin * dy, ly = -sin * dx + cos * dy   // cursor in the box's local frame, from pivot
         if (mode === 'textscale') {
+          // Scale the TEXT proportionally, keeping the current wrap: grow width AND font by the same factor
+          // (so the same characters fit per line → line breaks unchanged). Height is left to auto-grow.
           const base = w0 * w0 + h0 * h0
           let s = (lx * w0 + ly * h0) / base
-          const minS = Math.max(40 / w0, 24 / h0, 0.15)
+          const minS = Math.max(40 / w0, 0.15)
           if (s < minS) s = minS
-          const nw = Math.round(w0 * s), nh = Math.round(h0 * s)
-          updateImage(imageId, { width: nw, height: nh, fontScale: +(fs0 * s).toFixed(3), x: pivW.x + cos * (nw / 2) - sin * (nh / 2), y: pivW.y + sin * (nw / 2) + cos * (nh / 2) })
+          const nw = Math.round(w0 * s)
+          updateImage(imageId, { width: nw, fontScale: +(fs0 * s).toFixed(3), x: pivW.x + cos * (nw / 2) - sin * (h0 / 2), y: pivW.y + sin * (nw / 2) + cos * (h0 / 2) })
         } else if (mode === 'textwidth') {
           const nw = Math.max(40, Math.round(lx))
           updateImage(imageId, { width: nw, x: pivW.x + cos * (nw / 2), y: pivW.y + sin * (nw / 2) })
@@ -5813,6 +5815,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         onToggleMedia={prop => updateImage(img.id, { [prop]: !img[prop] })}
         onEditVideo={() => setVideoEdit({ kind: 'image', id: img.id })}
         onTextChange={html => updateImage(img.id, { html })}
+        onTextAutoHeight={h => {
+          // Grow the text box downward to fit its content: keep the TOP edge pinned, extend the bottom.
+          const h0 = img.height; if (!h || Math.abs(h - h0) < 2) return
+          const th = ((img.rotation || 0) * Math.PI) / 180, cos = Math.cos(th), sin = Math.sin(th)
+          const px = img.x + sin * (h0 / 2), py = img.y - cos * (h0 / 2)   // world pos of the top-center
+          updateImage(img.id, { height: h, x: px - sin * (h / 2), y: py + cos * (h / 2) })
+        }}
         zoomK={T.k}
         previewing={videoEdit?.kind === 'image' && videoEdit.id === img.id}
         onPlayerReady={setVideoPreviewHandle}
@@ -10443,13 +10452,22 @@ function VideoEmbed({ img, play, previewing, onReady }) {
 
 // contentEditable rich-text surface for a canvas Text element. Sets innerHTML from `html` on mount and
 // when it changes externally (never while focused, so the caret isn't disturbed); saves on input.
-function RichTextBox({ html, editable, selected, bgColor, borderColor, textShadow, halo, fontScale = 1, valign = 'top', zoomK = 1, onChange, onResize }) {
+function RichTextBox({ html, editable, selected, bgColor, borderColor, textShadow, halo, fontScale = 1, valign = 'top', zoomK = 1, boxW, boxH, onChange, onResize, onAutoHeight }) {
   const ref = useRef(null)
   useEffect(() => {
     const el = ref.current; if (!el) return
     if (document.activeElement !== el && el.innerHTML !== (html || '')) el.innerHTML = html || ''
   }, [html])
   useEffect(() => { if (editable) requestAnimationFrame(() => ref.current?.focus()) }, [editable])
+  // Auto-height: the box grows DOWNWARD to fit its content (no manual height handle). Measure the content's
+  // natural height and report it up; the parent keeps the top edge pinned. Runs on type and whenever the
+  // wrap width / font scale / html changes (all of which re-wrap and change the height).
+  const measure = () => {
+    const el = ref.current; if (!el || !onAutoHeight) return
+    const h = el.scrollHeight   // full content height incl. padding, even when clipped (SVG user units)
+    if (h && boxH != null && Math.abs(h - boxH) > 2) onAutoHeight(h)
+  }
+  useLayoutEffect(() => { measure() })   // after every render (cheap; only fires onAutoHeight past a 2u threshold)
   const shadows = []
   if (halo) { const c = typeof halo === 'string' ? halo : 'rgba(0,0,0,0.9)'; shadows.push(`0 0 2px ${c}`, `0 0 2px ${c}`, `0 0 5px ${c}`) }
   if (textShadow) shadows.push('2px 2px 4px rgba(0,0,0,0.55)')
@@ -10463,23 +10481,20 @@ function RichTextBox({ html, editable, selected, bgColor, borderColor, textShado
     <div style={{ position: 'relative', width: '100%', height: '100%', boxSizing: 'border-box', background: bgColor || 'transparent',
       border: borderColor ? `1.5px solid ${borderColor}` : 'none', outline: editable ? '1px solid #5b6af0' : 'none', borderRadius: 4, overflow: 'visible' }}>
       <div ref={ref} data-richtext="true" contentEditable={editable} suppressContentEditableWarning
-        onInput={() => onChange?.(ref.current?.innerHTML || '')}
+        onInput={() => { onChange?.(ref.current?.innerHTML || ''); measure() }}
         onMouseDown={e => { if (editable) e.stopPropagation() }}
         onKeyDown={e => e.stopPropagation()}
-        onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t) }}
-        style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', padding: '6px 8px',
+        onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t); measure() }}
+        style={{ position: 'absolute', left: 0, right: 0, top: 0, boxSizing: 'border-box', padding: '6px 8px',
           display: 'flex', flexDirection: 'column', justifyContent: justify,
           color: '#e8ecff', fontFamily: '-apple-system, sans-serif', fontSize: Math.max(6, 15 * (fontScale || 1)), lineHeight: 1.35, textShadow: shadows.join(', ') || 'none',
-          overflow: 'hidden', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+          overflow: 'visible', cursor: editable ? 'text' : 'move', pointerEvents: editable ? 'auto' : 'none', userSelect: editable ? 'text' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
       {selected && onResize && (<>
-        {/* Right edge — reflow width only (no font change) */}
-        <div title="Drag to set width" onMouseDown={e => onResize('textwidth', e)}
+        {/* Right edge (the "right segment") — changes the line length; text rewraps, height auto-adjusts. */}
+        <div title="Drag to change line length" onMouseDown={e => onResize('textwidth', e)}
           style={{ position: 'absolute', top: 8, bottom: 8, right: -edgeThick / 2, width: edgeThick, cursor: 'ew-resize', zIndex: 5 }} />
-        {/* Bottom edge — reflow height only */}
-        <div title="Drag to set height" onMouseDown={e => onResize('textheight', e)}
-          style={{ position: 'absolute', left: 8, right: 8, bottom: -edgeThick / 2, height: edgeThick, cursor: 'ns-resize', zIndex: 5 }} />
-        {/* Bottom-right square — scale box + text together */}
-        <div title="Drag to scale box and text" onMouseDown={e => onResize('textscale', e)}
+        {/* The ONE handle — bottom-right square (same style as an image handle): scales the text, keeping wrap. */}
+        <div title="Drag to scale the text" onMouseDown={e => onResize('textscale', e)}
           style={handle({ right: -hzHalf, bottom: -hzHalf, width: hz, height: hz, cursor: 'nwse-resize' })} />
       </>)}
     </div>
@@ -10502,8 +10517,27 @@ const TEXT_FONTS = [
   { label: 'JetBrains Mono', exec: '"JetBrains Mono", monospace' },
   { label: 'Courier', exec: '"Courier New", monospace' },
   { label: 'Bebas Neue', exec: '"Bebas Neue", sans-serif' },
+  { label: 'Oswald', exec: 'Oswald, sans-serif' },
+  { label: 'Raleway', exec: 'Raleway, sans-serif' },
+  { label: 'Nunito', exec: 'Nunito, sans-serif' },
+  { label: 'DM Sans', exec: '"DM Sans", sans-serif' },
+  { label: 'Space Grotesk', exec: '"Space Grotesk", sans-serif' },
+  { label: 'Comfortaa', exec: 'Comfortaa, sans-serif' },
+  { label: 'Archivo Black', exec: '"Archivo Black", sans-serif' },
+  { label: 'Anton', exec: 'Anton, sans-serif' },
+  { label: 'Righteous', exec: 'Righteous, sans-serif' },
+  { label: 'Abril Fatface', exec: '"Abril Fatface", serif' },
+  { label: 'Bitter', exec: 'Bitter, serif' },
+  { label: 'PT Serif', exec: '"PT Serif", serif' },
+  { label: 'Source Code Pro', exec: '"Source Code Pro", monospace' },
+  { label: 'Fira Code', exec: '"Fira Code", monospace' },
   { label: 'Pacifico', exec: 'Pacifico, cursive' },
   { label: 'Caveat', exec: 'Caveat, cursive' },
+  { label: 'Dancing Script', exec: '"Dancing Script", cursive' },
+  { label: 'Lobster', exec: 'Lobster, cursive' },
+  { label: 'Satisfy', exec: 'Satisfy, cursive' },
+  { label: 'Permanent Marker', exec: '"Permanent Marker", cursive' },
+  { label: 'Shadows Into Light', exec: '"Shadows Into Light", cursive' },
 ]
 function TextFormatToolbar({ left, top, box, onBoxStyle }) {
   const savedRange = useRef(null)
@@ -10589,7 +10623,7 @@ function TextFormatToolbar({ left, top, box, onBoxStyle }) {
   )
 }
 
-function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange, zoomK = 1 }) {
+function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaPlay, onToggleMedia, onMediaTitle, onEditVideo, previewing, onPlayerReady, onTextChange, onTextAutoHeight, zoomK = 1 }) {
   const { id, src, x, y, width, height, rotation, bgColor } = img
   const isVideo = img.type === 'video'
   const isAudio = img.type === 'audio'
@@ -10768,8 +10802,9 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
         <foreignObject x={-hw} y={-hh} width={width} height={height} style={{ overflow: 'visible' }}>
           <RichTextBox html={img.html} editable={textEditing} selected={isSelected} bgColor={bgColor}
             borderColor={img.borderColor} textShadow={img.textShadow} halo={img.halo} fontScale={img.fontScale}
-            valign={img.valign} zoomK={zoomK}
-            onChange={html => onTextChange?.(html)} onResize={(mode, e) => onMouseDown(e, id, mode)} />
+            valign={img.valign} zoomK={zoomK} boxW={width} boxH={height}
+            onChange={html => onTextChange?.(html)} onResize={(mode, e) => onMouseDown(e, id, mode)}
+            onAutoHeight={h => onTextAutoHeight?.(h)} />
         </foreignObject>
       ) : (isVideo && ytPosterMode) ? (
         // YouTube poster frame — our OWN image (default: the video thumbnail; overridable via the
