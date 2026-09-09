@@ -7,6 +7,7 @@
 // graph's arrow-key control just calls the same player handle exposed here via `onReady`.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { driveEmbedUrl, driveThumbUrl } from '../lib/gdrive'
+import { fsArrowAction } from '../lib/slideshowNav'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 export const parseYoutubeId = (str) => {
@@ -1154,11 +1155,15 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, sound = true, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, sound = true, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onDeckNext, onDeckPrev, onReplayDone }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
   const [ended, setEnded] = useState(false)
+  // Latest callbacks/flags in a ref — the keydown effect binds once (deps: clips.length) but must always
+  // call the current onExit/onDeckNext/onDeckPrev and see the live `presenting` flag.
+  const cbRef = useRef({})
+  cbRef.current = { onExit, onDeckNext, onDeckPrev, presenting }
   const idxRef = useRef(startIndex); idxRef.current = idx
   const endedRef = useRef(false); endedRef.current = ended
   const advTimer = useRef(null)
@@ -1223,13 +1228,22 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       if (e.key === 'ArrowRight') {
         e.preventDefault()
         if (handleRef.current?.isWaiting?.()) { handleRef.current.resume(); fsPlaying.current = true; return }   // resume from a stop marker
-        const i = idxRef.current
-        if (i < clips.length - 1) goto(i + 1)
-        else if (!endedRef.current) { setEnded(true); handleRef.current?.pause?.() }   // to last frame + replay
-        else onExit?.()   // already at the end → leave fullscreen, back to the node
+        const cb = cbRef.current
+        const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
+        if (act === 'clip-next') goto(idxRef.current + 1)
+        else if (act === 'deck-next') cb.onDeckNext?.()               // presenting → next slide/build (stays fullscreen)
+        else if (act === 'freeze-end') { setEnded(true); handleRef.current?.pause?.() }
+        else if (act === 'exit') cb.onExit?.()
         return
       }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); const i = idxRef.current; if (i > 0) goto(i - 1); return }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        const cb = cbRef.current
+        const act = fsArrowAction('left', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
+        if (act === 'clip-prev') goto(idxRef.current - 1)
+        else if (act === 'deck-prev') cb.onDeckPrev?.()               // presenting, first clip → previous slide
+        return
+      }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
