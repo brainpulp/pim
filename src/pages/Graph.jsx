@@ -1201,6 +1201,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const prevFrameCountRef = useRef(0)
   const [presentingSlideIdx, setPresentingSlideIdx] = useState(null)
   const presentingSlideIdxRef = useRef(null)
+  // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
+  // Declared here — before any early return — so the hooks order never changes (React #310).
+  const exitPresentationRef = useRef(null)
+  useEffect(() => {
+    const onFs = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement && presentingSlideIdxRef.current !== null) exitPresentationRef.current?.() }
+    document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs)
+    return () => { document.removeEventListener('fullscreenchange', onFs); document.removeEventListener('webkitfullscreenchange', onFs) }
+  }, [])
   const slideNavFocusRef = useRef(false)   // true when the slide sidebar was the last thing clicked → arrows scrub slides
   const slideCursorRef = useRef(0)         // which slide the arrow-scrub cursor is on (edit mode, not presenting)
   const presentStageIdxRef = useRef(0)     // which build/stage of the current slide is showing while presenting
@@ -6011,13 +6019,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const jumpSlide = (dir) => presentSlide((presentingSlideIdxRef.current ?? 0) + dir, dir > 0 ? 'fwd' : 'back')
 
   const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
-  // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
-  const exitPresentationRef = useRef(null); exitPresentationRef.current = exitPresentation
-  useEffect(() => {
-    const onFs = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement && presentingSlideIdxRef.current !== null) exitPresentationRef.current?.() }
-    document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs)
-    return () => { document.removeEventListener('fullscreenchange', onFs); document.removeEventListener('webkitfullscreenchange', onFs) }
-  }, [])
+  // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
+  exitPresentationRef.current = exitPresentation
 
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
