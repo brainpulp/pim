@@ -8223,7 +8223,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         <YTFullscreenPlayer clips={[videoFullscreen.youtubeId
           ? { id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }
           : { id: 'one', kind: 'video', src: videoFullscreen.src, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
-          startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} onExit={() => setVideoFullscreen(null)} />
+          startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} presenting={isPresenting} onExit={() => setVideoFullscreen(null)} />
       )}
       {RC_DEBUG && (
         <div style={{ position: 'fixed', left: 8, bottom: 8, zIndex: 99999, maxWidth: 460, background: 'rgba(0,0,0,0.9)', color: '#7CFC00', font: '12px ui-monospace, monospace', padding: '8px 10px', borderRadius: 6, border: '1px solid #2f6a48', whiteSpace: 'pre-wrap', pointerEvents: 'none' }}>

@@ -1180,7 +1180,11 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
 
   // Enter real fullscreen on mount; exit on unmount. If the user leaves fullscreen (Esc via browser),
   // treat it as exit.
+  // While PRESENTING, the deck already holds real fullscreen and this overlay (fixed, zIndex 4000) covers
+  // it — so we must NOT request/exit fullscreen ourselves. Doing so would switch the fullscreen element and,
+  // on exit, drop the whole deck out of fullscreen (the "abandon fullscreen" flicker). Leave it untouched.
   useEffect(() => {
+    if (presenting) return
     const el = wrapRef.current
     el?.requestFullscreen?.().catch(() => {})
     const onFsChange = () => { if (!document.fullscreenElement) onExit?.() }
