@@ -28,6 +28,18 @@ import { plog, presLog } from '../lib/presDebug'
 // multi-select modifier and the physical right button opens menus. Gesture handlers branch on this.
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '')
 
+// ── Presentation session log (per project, in localStorage) ───────────────────────────────────
+const PRESENT_LOG_KEY = (pid) => `pim_present_log_${pid || 'default'}`
+function loadPresentLog(pid) { try { return JSON.parse(localStorage.getItem(PRESENT_LOG_KEY(pid)) || '[]') } catch { return [] } }
+function savePresentLog(pid, sessions) { try { localStorage.setItem(PRESENT_LOG_KEY(pid), JSON.stringify((sessions || []).slice(0, 60))) } catch { /* ignore */ } }
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000))
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
+  if (h) return `${h}h ${m}m`
+  if (m) return `${m}m ${sec}s`
+  return `${sec}s`
+}
+
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
 // Channels the parent can map a property to (label + the view prop each writes).
 const STYLE_CHANNELS = [
@@ -1224,6 +1236,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const remoteActionsRef = useRef({})
   const [blackScreen, setBlackScreen] = useState(false)
   const [fsVeil, setFsVeil] = useState(false)   // black veil covering the canvas during a fullscreen→fullscreen hand-off (no flash)
+  // Presentation session log: each Present run records the slides visited and time on each.
+  const presentSessionRef = useRef(null)
+  const [presentLogOpen, setPresentLogOpen] = useState(false)
+  const [presentLog, setPresentLog] = useState([])
+  const [presentElapsed, setPresentElapsed] = useState(0)   // live elapsed ms during a run (for the nav-bar timer)
   const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
   const setShowDraw = useGraphStore(s => s.setShowDraw)
   const showViews = useGraphStore(s => s.showViews)
@@ -1276,6 +1293,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const iv = setInterval(() => setDbgTick(t => t + 1), 250)
     return () => clearInterval(iv)
   }, [presentingSlideIdx, PRES_DEBUG])
+  // Load this project's saved presentation sessions.
+  useEffect(() => { setPresentLog(loadPresentLog(projectId)) }, [projectId])
+  // Live elapsed timer while presenting (drives the nav-bar clock).
+  useEffect(() => {
+    if (presentingSlideIdx === null) return
+    const iv = setInterval(() => { const s = presentSessionRef.current; if (s) setPresentElapsed(Date.now() - s.startedAt) }, 1000)
+    return () => clearInterval(iv)
+  }, [presentingSlideIdx])
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
   // Declared here — before any early return — so the hooks order never changes (React #310).
   const exitPresentationRef = useRef(null)
@@ -6166,10 +6191,36 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
   }
 
+  // ── Session-log tracking ──
+  const beginPresentSession = () => {
+    presentSessionRef.current = { id: (crypto.randomUUID?.() || String(Date.now())), startedAt: Date.now(), visits: [] }
+    setPresentElapsed(0)
+  }
+  const recordSlideEnter = (slideId, label) => {
+    const s = presentSessionRef.current; if (!s) return
+    const now = Date.now()
+    const last = s.visits[s.visits.length - 1]
+    if (last && last.ms == null) last.ms = now - last.enteredAt
+    s.visits.push({ slideId, label: label || 'Slide', enteredAt: now, ms: null })
+  }
+  const endPresentSession = () => {
+    const s = presentSessionRef.current; if (!s) return
+    presentSessionRef.current = null
+    const now = Date.now()
+    const last = s.visits[s.visits.length - 1]
+    if (last && last.ms == null) last.ms = now - last.enteredAt
+    s.endedAt = now; s.totalMs = now - s.startedAt
+    if (!s.visits.length) return   // never actually showed a slide
+    const arr = [s, ...loadPresentLog(projectId)].slice(0, 60)
+    savePresentLog(projectId, arr); setPresentLog(arr)
+  }
+
   const presentSlide = (idx, direction) => {
     if (idx < 0 || idx >= slideSimNodes.length) { plog(`presentSlide OUT-OF-RANGE ${idx} (len ${slideSimNodes.length})`); return }
     plog(`presentSlide ${idx} dir=${direction}`)
     const entering = presentingSlideIdxRef.current === null   // first slide of the show → go true-fullscreen
+    if (entering) beginPresentSession()
+    recordSlideEnter(slideSimNodes[idx]?.id, slideSimNodes[idx]?.label)
     if (entering) enterDeviceFullscreen()
     restoreOverlayInstant()   // return the slide we're leaving to its authored arrangement
     setPresentingSlideIdx(idx)
@@ -6325,7 +6376,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     presentSlide(idx ?? 0, 'fwd')
   }
 
-  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setFsVeil(false); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  const exitPresentation = () => { endPresentSession(); if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setFsVeil(false); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
   exitPresentationRef.current = exitPresentation
 
@@ -6347,12 +6398,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     black: () => { if (presentingSlideIdxRef.current !== null) setBlackScreen(b => !b) },
   }
   const curSlideNode = presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx] : null
+  // Current slideshow step (ytss clip) on this slide, if a slideshow is active/fullscreen — shown on the phone.
+  const activeShowId = ytssFullscreenId || ytssActiveId
+  let showStep = 0, showSteps = 0
+  if (activeShowId) {
+    const yn = storeNodes.find(n => n.id === activeShowId)
+    const clips = yn?.ytss?.clips || []
+    showSteps = clips.length
+    showStep = Math.max(0, Math.min((ytssIdxMap[activeShowId] ?? 0), clips.length - 1))
+  }
   const remoteState = {
     presenting: presentingSlideIdx !== null,
     idx: presentingSlideIdx ?? 0,
     total: slideSimNodes.length,
     stage: presentStageIdx,
     stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
+    step: showStep, steps: showSteps,
     title: curSlideNode?.label || '',
   }
 
@@ -8049,6 +8110,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               <span style={{ color:'#c5d0ff', fontSize:'0.88rem', minWidth:66, textAlign:'center', lineHeight:1.25 }}>
                 <div>Slide {(presentingSlideIdx ?? 0) + 1} / {slideSimNodes.length}</div>
                 {(() => { const st = slideSimNodes[presentingSlideIdx ?? 0]; const ns = st ? (getVP(st.id).stages || []).length : 0; return ns > 1 ? <div style={{ fontSize:'0.68rem', color:'#7c8cff' }}>build {presentStageIdx + 1} / {ns}</div> : null })()}
+                {remoteState.steps > 1 && <div style={{ fontSize:'0.68rem', color:'#6ee7a8' }}>step {remoteState.step + 1} / {remoteState.steps}</div>}
+                <div style={{ fontSize:'0.66rem', color:'#8090b8', fontVariantNumeric:'tabular-nums' }}>⏱ {fmtDur(presentElapsed)}</div>
               </span>
               <button style={{ ...navBtn, background:'linear-gradient(180deg,#5b6af0,#4652d6)', border:'none', color:'#fff' }} onClick={() => remoteKey('ArrowRight')} title="Next (→ / Space)">Next ›</button>
               <button style={{ ...navBtn, minWidth:0, padding:'12px 14px', color:'#f9b4b4', background:'#241318', border:'1px solid #5a2a2a' }} onClick={() => exitPresentation()} title="Exit (Esc)">✕</button>
@@ -8085,6 +8148,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onPresent={(idx) => presentSlide(idx, 'fwd')}
           onOpenGrid={() => setShowSlideGrid(true)}
           onOpenRemote={() => { setRemoteOn(true); setShowRemote(true) }}
+          onOpenLog={() => setPresentLogOpen(true)}
           onSelectSlideIdx={(i) => { selectedSlideIdxRef.current = i }}
           remoteOn={remoteOn}
           removeSlide={removeSlide}
@@ -8126,6 +8190,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onJump={(idx) => { setShowSlideGrid(false); zoomToFrame(slideSimNodes[idx]) }}
           onClose={() => setShowSlideGrid(false)}
         />
+      )}
+
+      {/* Presentation session log (times per slide, per run). */}
+      {presentLogOpen && (
+        <PresentLogPanel sessions={presentLog}
+          onDelete={id => { const arr = presentLog.filter(s => s.id !== id); setPresentLog(arr); savePresentLog(projectId, arr) }}
+          onClear={() => { if (window.confirm('Clear all logged presentation sessions?')) { setPresentLog([]); savePresentLog(projectId, []) } }}
+          onClose={() => setPresentLogOpen(false)} />
       )}
 
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
@@ -8709,8 +8781,64 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
   )
 }
 
+// ─── PresentLogPanel — review/manage past presentation sessions (times per slide) ──────────────
+function PresentLogPanel({ sessions = [], onDelete, onClear, onClose }) {
+  const [openId, setOpenId] = useState(null)
+  const rowBtn = { background:'transparent', border:'none', color:'#9aa8d8', cursor:'pointer', fontSize:13, padding:'0 4px' }
+  return (
+    <div onMouseDown={onClose} style={{ position:'fixed', inset:0, zIndex:6000, background:'rgba(6,6,14,0.72)', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+      <div onMouseDown={e => e.stopPropagation()}
+        style={{ background:'#111527', border:'1px solid #2a3358', borderRadius:16, width:520, maxWidth:'94vw', maxHeight:'82vh', display:'flex', flexDirection:'column', boxShadow:'0 24px 60px rgba(0,0,0,0.6)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'14px 18px', borderBottom:'1px solid #1e1e2e' }}>
+          <span style={{ fontSize:'1rem', fontWeight:700, color:'#e6ebff' }}>⏱ Presentation log</span>
+          <span style={{ fontSize:'0.74rem', color:'#7080a0' }}>{sessions.length} session{sessions.length === 1 ? '' : 's'}</span>
+          <div style={{ flex:1 }} />
+          {sessions.length > 0 && <button onClick={onClear} style={{ ...rowBtn, color:'#f9b4b4' }}>Clear all</button>}
+          <button onClick={onClose} style={{ background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:8, padding:'5px 12px', cursor:'pointer', fontSize:'0.8rem' }}>Done</button>
+        </div>
+        <div style={{ overflowY:'auto', padding:'8px 10px 14px' }}>
+          {sessions.length === 0 && <div style={{ color:'#7080a0', fontSize:'0.85rem', padding:20, textAlign:'center' }}>No sessions yet. Hit <b>Present</b> and they'll be logged here.</div>}
+          {sessions.map(s => {
+            // Aggregate visits per frame, in first-visit order.
+            const agg = [], map = {}
+            ;(s.visits || []).forEach(v => { if (!map[v.slideId]) { map[v.slideId] = { label: v.label, ms: 0, count: 0 }; agg.push(map[v.slideId]) } map[v.slideId].ms += v.ms || 0; map[v.slideId].count += 1 })
+            const open = openId === s.id
+            const when = new Date(s.startedAt)
+            const dateStr = when.toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })
+            return (
+              <div key={s.id} style={{ border:'1px solid #232a45', borderRadius:10, marginBottom:8, overflow:'hidden' }}>
+                <div onClick={() => setOpenId(open ? null : s.id)}
+                  style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', cursor:'pointer', background: open ? '#171d38' : 'transparent' }}>
+                  <span style={{ width:12, color:'#8fa0d8', fontSize:11 }}>{open ? '▾' : '▸'}</span>
+                  <span style={{ flex:1, fontSize:'0.82rem', color:'#c5d0ff' }}>{dateStr}</span>
+                  <span style={{ fontSize:'0.76rem', color:'#8090b8' }}>{agg.length} slide{agg.length === 1 ? '' : 's'}</span>
+                  <span style={{ fontSize:'0.82rem', color:'#6ee7a8', fontVariantNumeric:'tabular-nums', minWidth:56, textAlign:'right' }}>{fmtDur(s.totalMs)}</span>
+                  <button onClick={e => { e.stopPropagation(); onDelete(s.id) }} title="Delete session"
+                    style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:14, padding:'0 2px' }}>×</button>
+                </div>
+                {open && (
+                  <div style={{ padding:'2px 12px 10px 34px', borderTop:'1px solid #1e2440' }}>
+                    {agg.map((f, i) => (
+                      <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'3px 0', fontSize:'0.8rem' }}>
+                        <span style={{ flex:1, color:'#a9b6e8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                          {i + 1}. {f.label}{f.count > 1 ? <span style={{ color:'#7080a0' }}> ×{f.count}</span> : null}
+                        </span>
+                        <span style={{ color:'#8fa0d8', fontVariantNumeric:'tabular-nums' }}>{fmtDur(f.ms)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -8828,6 +8956,9 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
           <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+          <button onClick={() => onOpenLog?.()} title="Presentation log — times per slide, past runs"
+            style={{ display:'flex', alignItems:'center', gap:4, background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff',
+              borderRadius:6, padding:'2px 7px', cursor:'pointer', fontSize:'0.66rem', fontWeight:600 }}>⏱ Log</button>
           <button onClick={() => onOpenRemote?.()} title="Control the presentation from your phone"
             style={{ display:'flex', alignItems:'center', gap:4, background: remoteOn ? '#17301f' : 'transparent', border:`1px solid ${remoteOn ? '#2f7a4a' : '#2a3358'}`, color: remoteOn ? '#7ee6a6' : '#c5d0ff',
               borderRadius:6, padding:'2px 7px', cursor:'pointer', fontSize:'0.66rem', fontWeight:600 }}>📱 Remote{remoteOn ? ' ●' : ''}</button>

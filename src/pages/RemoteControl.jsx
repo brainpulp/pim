@@ -72,6 +72,11 @@ export default function RemoteControl({ code }) {
         <span style={{ flex: 1, fontSize: '1.0rem', fontWeight: 600, color: '#e6ebff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {presenting ? (state?.title || 'Slide') : 'Ready'}
         </span>
+        {presenting && (state?.steps ?? 0) > 1 && (
+          <span style={{ fontSize: '0.72rem', color: '#6ee7a8', background: '#12291d', borderRadius: 10, padding: '2px 9px' }}>
+            step {(state.step ?? 0) + 1} / {state.steps}
+          </span>
+        )}
         {presenting && (state?.stages ?? 0) > 1 && (
           <span style={{ fontSize: '0.72rem', color: '#7c8cff', background: '#171d38', borderRadius: 10, padding: '2px 9px' }}>
             build {(state.stage ?? 0) + 1} / {state.stages}
