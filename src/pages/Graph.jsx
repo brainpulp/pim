@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { createPortal } from 'react-dom'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { Rnd } from 'react-rnd'
 import Node3DViewer from '../components/Node3DViewer'
 import * as d3 from 'd3'
@@ -6483,6 +6484,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     slideMs: Math.round(slideMs / 1000) * 1000,
   }
 
+  // Phone canvas preview: the current + next slide rendered to a compact SVG string, plus the currently
+  // playing clip's name (so uploaded videos — which have no still frame — are still identifiable). Sent on
+  // a SEPARATE 'thumb' broadcast that only changes on a slide/clip change, never on the 1 Hz timer tick.
+  const remoteThumb = useMemo(() => {
+    if (presentingSlideIdx === null) return null
+    const toSvg = fn => fn ? renderToStaticMarkup(
+      <SlideThumbSVG fn={fn} getVP={getVP} viewImages={activeView?.images || []} allSimNodes={simNodesRef.current}
+        storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={220} />) : null
+    let clip = null
+    if (activeShowId) {
+      const yn = storeNodes.find(n => n.id === activeShowId)
+      const clips = yn?.ytss?.clips || []
+      const ci = Math.max(0, Math.min(ytssIdxMap[activeShowId] ?? 0, clips.length - 1))
+      const c = clips[ci]
+      if (c) clip = { label: c.label || c.title || `${clipKind(c) === 'youtube' ? 'YouTube' : clipKind(c)} ${ci + 1}`, n: ci + 1, of: clips.length }
+    }
+    const cur = slideSimNodes[presentingSlideIdx], nxt = slideSimNodes[presentingSlideIdx + 1]
+    return { cur: toSvg(cur), next: toSvg(nxt), curLabel: cur?.label || '', nextLabel: nxt?.label || '', clip }
+  }, [presentingSlideIdx, activeShowId, showStep, slideSimNodes.length]) // eslint-disable-line -- recompute on slide/clip change only
+
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
   ;(activeView?.images || []).forEach(img => {
@@ -8258,7 +8279,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       )}
 
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
-      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} onPhoneConnect={() => setShowRemote(false)} />}
+      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} thumb={remoteThumb} onPhoneConnect={() => setShowRemote(false)} />}
 
       {/* Fullscreen hand-off veil: black cover between one fullscreen overlay closing and the next opening,
           so the canvas never flashes through. Below the overlays (4000), above the canvas. */}

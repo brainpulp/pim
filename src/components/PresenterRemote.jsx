@@ -5,11 +5,14 @@ import { supabase } from '../lib/supabase'
 // Subscribes to `pim-remote-<code>`, routes incoming commands to actionsRef.current[action], and
 // broadcasts the current `state` so the phone shows the live position. Answers a phone 'hello' with state.
 // Auto-reconnects if the realtime channel drops (network blip, laptop sleep) so control isn't silently lost.
-export default function PresenterRemote({ code, actionsRef, state, onPhoneConnect }) {
+export default function PresenterRemote({ code, actionsRef, state, thumb, onPhoneConnect }) {
   const chanRef = useRef(null)
   const stateRef = useRef(state)
   stateRef.current = state
+  const thumbRef = useRef(thumb)
+  thumbRef.current = thumb
   const lastSentRef = useRef('')
+  const lastThumbRef = useRef('')
   const onConnectRef = useRef(onPhoneConnect)   // kept in a ref so the channel effect never re-subscribes
   onConnectRef.current = onPhoneConnect
 
@@ -22,6 +25,11 @@ export default function PresenterRemote({ code, actionsRef, state, onPhoneConnec
       lastSentRef.current = JSON.stringify(stateRef.current)
       try { ch.send({ type: 'broadcast', event: 'state', payload: stateRef.current }) } catch { /* ignore */ }
     }
+    const pushThumb = () => {
+      const ch = chanRef.current; if (!ch) return
+      lastThumbRef.current = JSON.stringify(thumbRef.current)
+      try { ch.send({ type: 'broadcast', event: 'thumb', payload: thumbRef.current }) } catch { /* ignore */ }
+    }
     const setup = () => {
       if (closed) return
       const chan = supabase.channel(`pim-remote-${code}`, { config: { broadcast: { self: false } } })
@@ -31,9 +39,9 @@ export default function PresenterRemote({ code, actionsRef, state, onPhoneConnec
         if (fn) fn()
         setTimeout(pushState, 80)   // reflect the result back to the phone
       })
-      chan.on('broadcast', { event: 'hello' }, () => { pushState(); try { onConnectRef.current?.() } catch { /* ignore */ } })
+      chan.on('broadcast', { event: 'hello' }, () => { pushState(); pushThumb(); try { onConnectRef.current?.() } catch { /* ignore */ } })
       chan.subscribe(s => {
-        if (s === 'SUBSCRIBED') pushState()
+        if (s === 'SUBSCRIBED') { pushState(); pushThumb() }
         else if ((s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') && !closed) {
           // Channel died — rebuild it shortly. The client's socket also auto-reconnects underneath.
           try { supabase.removeChannel(chan) } catch { /* ignore */ }
@@ -53,6 +61,14 @@ export default function PresenterRemote({ code, actionsRef, state, onPhoneConnec
     lastSentRef.current = json
     try { chanRef.current.send({ type: 'broadcast', event: 'state', payload: state }) } catch { /* ignore */ }
   }, [json]) // eslint-disable-line
+
+  // Push the slide preview only when it actually changes (slide/clip change), never on the timer tick.
+  const thumbJson = JSON.stringify(thumb)
+  useEffect(() => {
+    if (!chanRef.current || thumbJson === lastThumbRef.current) return
+    lastThumbRef.current = thumbJson
+    try { chanRef.current.send({ type: 'broadcast', event: 'thumb', payload: thumb }) } catch { /* ignore */ }
+  }, [thumbJson]) // eslint-disable-line
 
   return null
 }

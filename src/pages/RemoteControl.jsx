@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 export default function RemoteControl({ code }) {
   const [status, setStatus] = useState('connecting')   // connecting | live | offline
   const [state, setState] = useState(null)             // { presenting, idx, total, stage, stages, title }
+  const [thumb, setThumb] = useState(null)             // { cur, next (SVG strings), curLabel, nextLabel, clip }
   const chanRef = useRef(null)
   const seenRef = useRef(false)
 
@@ -20,6 +21,7 @@ export default function RemoteControl({ code }) {
       const chan = supabase.channel(`pim-remote-${code}`, { config: { broadcast: { self: false } } })
       chanRef.current = chan
       chan.on('broadcast', { event: 'state' }, ({ payload }) => { seenRef.current = true; setStatus('live'); setState(payload) })
+      chan.on('broadcast', { event: 'thumb' }, ({ payload }) => setThumb(payload))
       chan.subscribe(s => {
         if (s === 'SUBSCRIBED') { hello(); setStatus(prev => (seenRef.current ? 'live' : 'connecting')) }
         else if ((s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') && !closed) {
@@ -98,6 +100,34 @@ export default function RemoteControl({ code }) {
           </span>
         )}
       </div>
+
+      {/* Canvas preview — current + next slide thumbnails, for pacing while you practice. */}
+      {presenting && thumb && (thumb.cur || thumb.next) && (
+        <div style={{ flexShrink: 0, padding: '0 12px 6px', display: 'flex', gap: 8, alignItems: 'stretch' }}>
+          <style>{`.pim-rthumb svg{width:100%;height:auto;display:block;border-radius:8px}`}</style>
+          <div style={{ flex: 2, minWidth: 0 }}>
+            <div style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 3 }}>On screen</div>
+            <div className="pim-rthumb" style={{ position: 'relative', border: '1px solid #2a3358', borderRadius: 9, overflow: 'hidden', background: '#0d0d1a' }}>
+              {thumb.cur ? <div dangerouslySetInnerHTML={{ __html: thumb.cur }} /> : <div style={{ padding: 18, textAlign: 'center', color: '#6b7699' }}>—</div>}
+              {thumb.clip && (
+                <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: 'linear-gradient(transparent,rgba(6,6,16,0.9))', color: '#e6ebff', fontSize: '0.66rem', padding: '10px 7px 4px', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                  <span style={{ color: '#6ee7a8' }}>▶</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{thumb.clip.label}</span>
+                  {thumb.clip.of > 1 && <span style={{ color: '#8090b8', flexShrink: 0 }}>{thumb.clip.n}/{thumb.clip.of}</span>}
+                </div>
+              )}
+            </div>
+          </div>
+          {thumb.next && (
+            <div style={{ flex: 1, minWidth: 0, opacity: 0.72 }}>
+              <div style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 3 }}>Next</div>
+              <div className="pim-rthumb" style={{ border: '1px solid #23283f', borderRadius: 9, overflow: 'hidden', background: '#0d0d1a' }}
+                dangerouslySetInnerHTML={{ __html: thumb.next }} />
+              {thumb.nextLabel && <div style={{ fontSize: '0.62rem', color: '#8fa0d8', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{thumb.nextLabel}</div>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Big Prev / Next — the primary controls, split for thumb reach */}
       <div style={{ flex: 1, display: 'flex', gap: 12, padding: 12, minHeight: 0 }}>
