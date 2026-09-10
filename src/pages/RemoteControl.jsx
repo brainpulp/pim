@@ -162,50 +162,32 @@ export default function RemoteControl({ code }) {
         )}
       </div>
 
-      {/* Canvas preview — current + next slide thumbnails, for pacing while you practice. */}
-      {presenting && thumb && (thumb.cur || thumb.next) && (
-        <div style={{ flexShrink: 0, padding: '0 12px 6px', display: 'flex', gap: 8, alignItems: 'stretch' }}>
-          <style>{`.pim-rthumb svg{width:100%;height:auto;display:block;border-radius:8px}`}</style>
-          <div style={{ flex: 2, minWidth: 0 }}>
-            <div style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 3 }}>On screen</div>
-            <div className="pim-rthumb" style={{ position: 'relative', border: '1px solid #2a3358', borderRadius: 9, overflow: 'hidden', background: '#0d0d1a' }}>
-              {thumb.cur ? <div dangerouslySetInnerHTML={{ __html: thumb.cur }} /> : <div style={{ padding: 18, textAlign: 'center', color: '#6b7699' }}>—</div>}
-              {thumb.clip && (
-                <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: 'linear-gradient(transparent,rgba(6,6,16,0.9))', color: '#e6ebff', fontSize: '0.66rem', padding: '10px 7px 4px', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-                  <span style={{ color: '#6ee7a8' }}>▶</span>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{thumb.clip.label}</span>
-                  {thumb.clip.of > 1 && <span style={{ color: '#8090b8', flexShrink: 0 }}>{thumb.clip.n}/{thumb.clip.of}</span>}
-                </div>
-              )}
-            </div>
-          </div>
-          {thumb.next && (
-            <div style={{ flex: 1, minWidth: 0, opacity: 0.72 }}>
-              <div style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 3 }}>Next</div>
-              <div className="pim-rthumb" style={{ border: '1px solid #23283f', borderRadius: 9, overflow: 'hidden', background: '#0d0d1a' }}
-                dangerouslySetInnerHTML={{ __html: thumb.next }} />
-              {thumb.nextLabel && <div style={{ fontSize: '0.62rem', color: '#8fa0d8', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{thumb.nextLabel}</div>}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Slideshow contents — a thumbnail per clip, current one highlighted. */}
-      {presenting && thumb?.clipThumbs && thumb.clipThumbs.length > 1 && (
-        <div style={{ flexShrink: 0, display: 'flex', gap: 6, padding: '0 12px 8px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          {thumb.clipThumbs.map((src, i) => {
-            const on = i === (state?.step ?? 0)
-            return (
-              <div key={i} style={{ position: 'relative', flexShrink: 0, width: 62, height: 40, borderRadius: 6, overflow: 'hidden',
-                border: on ? '2px solid #6ee7a8' : '1px solid #2a3358', background: src ? `#000 center/cover no-repeat url("${src}")` : '#12162c',
-                boxShadow: on ? '0 0 8px rgba(110,231,168,0.5)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {!src && <span style={{ color: '#6b7699', fontSize: 13 }}>▶</span>}
-                <span style={{ position: 'absolute', top: 1, left: 3, fontSize: '0.56rem', fontWeight: 700, color: '#fff', textShadow: '0 1px 2px #000' }}>{i + 1}</span>
+      {/* Coming up — ONE small thumbnail of what the next press brings (next slideshow clip, else next slide). */}
+      {presenting && (() => {
+        const nClips = thumb?.clipThumbs?.length || 0
+        const nextClip = (state?.steps ?? 0) > 1 && nClips ? (state.step ?? 0) + 1 : -1
+        const showClip = nextClip >= 0 && nextClip < nClips
+        const clipSrc = showClip ? thumb.clipThumbs[nextClip] : null
+        if (!showClip && !thumb?.next) return null
+        return (
+          <div style={{ flexShrink: 0, padding: '2px 14px 8px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <style>{`.pim-rthumb svg{width:100%;height:auto;display:block}`}</style>
+            <span style={{ fontSize: '0.6rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', flexShrink: 0 }}>Coming</span>
+            {showClip ? (
+              <div style={{ width: 92, height: 56, flexShrink: 0, borderRadius: 8, overflow: 'hidden', border: '1px solid #2a3358',
+                background: clipSrc ? `#000 center/cover no-repeat url("${clipSrc}")` : '#12162c', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {!clipSrc && <span style={{ color: '#6b7699', fontSize: 15 }}>▶</span>}
               </div>
-            )
-          })}
-        </div>
-      )}
+            ) : (
+              <div className="pim-rthumb" style={{ width: 92, flexShrink: 0, borderRadius: 8, overflow: 'hidden', border: '1px solid #2a3358', background: '#0d0d1a' }}
+                dangerouslySetInnerHTML={{ __html: thumb.next }} />
+            )}
+            <span style={{ fontSize: '0.8rem', color: '#8fa0d8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {showClip ? `clip ${nextClip + 1} / ${state.steps}` : (state?.nextTitle || thumb?.nextLabel || 'Next slide')}
+            </span>
+          </div>
+        )
+      })()}
 
       {/* Eyes-free tap zones: the top half of the screen advances (right) / goes back (left), so you can
           drive the deck without looking. Sit above the display area but below the header (mute) and the

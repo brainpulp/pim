@@ -8611,6 +8611,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const start = Math.max(0, Math.min(ytssIdxMapRef.current[ytssFullscreenId] || 0, clips.length - 1))
         return (
           <YTFullscreenPlayer clips={clips} startIndex={start} sound={yn?.ytss?.sound !== false} transition={yn?.ytss?.transition || 'fade'} fadeMs={yn?.ytss?.fadeMs ?? 1000} presenting={isPresenting}
+            onIndex={i => setYtssIdxMap(m => (m[ytssFullscreenId] === i ? m : { ...m, [ytssFullscreenId]: i }))}
             onExit={() => {
               const id = ytssFullscreenId
               setYtssFullscreenId(null)

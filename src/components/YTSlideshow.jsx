@@ -1170,7 +1170,7 @@ export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscre
 
 // ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
 // Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
-export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, sound = true, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onDeckNext, onDeckPrev, onReplayDone }) {
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, sound = true, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onDeckNext, onDeckPrev, onReplayDone, onIndex }) {
   const wrapRef = useRef(null)
   const handleRef = useRef(null)
   const [idx, setIdx] = useState(startIndex)
@@ -1178,8 +1178,10 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
   // Latest callbacks/flags in a ref — the keydown effect binds once (deps: clips.length) but must always
   // call the current onExit/onDeckNext/onDeckPrev and see the live `presenting` flag.
   const cbRef = useRef({})
-  cbRef.current = { onExit, onDeckNext, onDeckPrev, presenting }
+  cbRef.current = { onExit, onDeckNext, onDeckPrev, presenting, onIndex }
   const idxRef = useRef(startIndex); idxRef.current = idx
+  // Report the active clip up so the app's step counter / phone remote / advance beep track sub-slides here.
+  useEffect(() => { cbRef.current.onIndex?.(idx) }, [idx])
   const endedRef = useRef(false); endedRef.current = ended
   const advTimer = useRef(null)
   const cur = clips[idx] || null
