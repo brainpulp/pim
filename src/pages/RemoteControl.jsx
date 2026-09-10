@@ -67,6 +67,21 @@ export default function RemoteControl({ code }) {
         )}
       </div>
 
+      {/* Live timers: time on current slide + total elapsed */}
+      {presenting && (
+        <div style={{ flexShrink: 0, padding: '8px 18px 0', display: 'flex', alignItems: 'center', gap: 14, justifyContent: 'center' }}>
+          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
+            <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.slideMs)}</span>
+            <span style={{ fontSize: '0.62rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>this slide</span>
+          </span>
+          <span style={{ width: 1, height: 30, background: '#232a4a' }} />
+          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
+            <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
+            <span style={{ fontSize: '0.62rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>total</span>
+          </span>
+        </div>
+      )}
+
       {/* Current slide title + build indicator */}
       <div style={{ flexShrink: 0, padding: '10px 18px', minHeight: 44, display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ flex: 1, fontSize: '1.0rem', fontWeight: 600, color: '#e6ebff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -115,6 +130,14 @@ export default function RemoteControl({ code }) {
       </div>
     </div>
   )
+}
+
+// mm:ss (or h:mm:ss past an hour) for the live presentation timers.
+function fmtClock(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000))
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
+  const pad = n => String(n).padStart(2, '0')
+  return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`
 }
 
 const bigBtn = (bg) => ({

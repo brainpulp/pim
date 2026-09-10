@@ -6407,6 +6407,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     showSteps = clips.length
     showStep = Math.max(0, Math.min((ytssIdxMap[activeShowId] ?? 0), clips.length - 1))
   }
+  // Live timers for the phone: total elapsed (session) + time on the current slide. presentElapsed ticks
+  // once/sec while presenting (see the interval effect), so these re-broadcast at 1 Hz.
+  const _curVisit = presentSessionRef.current?.visits?.[presentSessionRef.current.visits.length - 1]
+  const slideMs = (presentingSlideIdx !== null && _curVisit) ? Math.max(0, Date.now() - _curVisit.enteredAt) : 0
   const remoteState = {
     presenting: presentingSlideIdx !== null,
     idx: presentingSlideIdx ?? 0,
@@ -6415,6 +6419,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
     step: showStep, steps: showSteps,
     title: curSlideNode?.label || '',
+    totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
+    slideMs: Math.round(slideMs / 1000) * 1000,
   }
 
   // Group bounding boxes for selected groups
