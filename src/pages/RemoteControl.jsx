@@ -39,8 +39,18 @@ export default function RemoteControl({ code }) {
   }
   const fmtNote = cmd => { document.execCommand(cmd, false, null); noteRef.current?.focus(); sendNote() }
   // Seed the editor when entering edit mode or when the target slide changes while not actively typing.
+  // Also focus it and drop the caret at the end so the cursor is visible immediately (iOS won't show a
+  // caret on a contentEditable inside a user-select:none tree unless it's actually focused).
+  const focusNoteEnd = () => {
+    const el = noteRef.current; if (!el) return
+    try {
+      el.focus()
+      const r = document.createRange(); r.selectNodeContents(el); r.collapse(false)
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r)
+    } catch { /* ignore */ }
+  }
   useEffect(() => {
-    if (editNotes && !noteFocusRef.current) seedNote()
+    if (editNotes && !noteFocusRef.current) { seedNote(); requestAnimationFrame(focusNoteEnd) }
   }, [editNotes, state?.noteId, state?.note]) // eslint-disable-line
 
   // Short confirmation beep so you can HEAR that a press registered and the deck actually advanced (a ghost
@@ -159,9 +169,11 @@ export default function RemoteControl({ code }) {
             <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '0 13px 12px' }}>
               {editNotes
                 ? <div ref={noteRef} contentEditable suppressContentEditableWarning
+                    inputMode="text" autoCorrect="on" autoCapitalize="sentences"
                     onInput={sendNote} onFocus={() => { noteFocusRef.current = true }} onBlur={() => { noteFocusRef.current = false; sendNote() }}
                     style={{ minHeight: '100%', fontSize: '1.12rem', lineHeight: 1.5, color: '#eaf0ff', wordBreak: 'break-word',
-                      outline: 'none', border: '1px solid #2a3358', borderRadius: 8, padding: '8px 10px', background: '#0b0f1e', WebkitUserSelect: 'text' }} />
+                      outline: 'none', border: '1px solid #3a7d5a', borderRadius: 8, padding: '8px 10px', background: '#0b0f1e',
+                      userSelect: 'text', WebkitUserSelect: 'text', WebkitUserModify: 'read-write', caretColor: '#6ee7a8', cursor: 'text' }} />
                 : (state?.note
                     ? (/[<][a-z/]/i.test(state.note)
                         ? <div style={{ fontSize: '1.12rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
