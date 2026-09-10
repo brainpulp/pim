@@ -7979,7 +7979,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         {searchOpen && (() => {
           const q = searchQuery.trim().toLowerCase()
           const results = storeNodes
-            .filter(n => !q || (n.label || '').toLowerCase().includes(q))
+            .filter(n => {
+              if (!q) return true
+              if ((n.label || '').toLowerCase().includes(q)) return true
+              // Also search speaker notes + node notes (HTML stripped) so you can find a slide by its notes.
+              const notesText = ((n.speakerNotes || '') + ' ' + (n.notes || '')).replace(/<[^>]*>/g, ' ').toLowerCase()
+              return notesText.includes(q)
+            })
             .slice(0, 50)
           const idx = Math.min(searchIdx, Math.max(0, results.length - 1))
           return (

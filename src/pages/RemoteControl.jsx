@@ -16,6 +16,11 @@ export default function RemoteControl({ code }) {
   const toggleMute = () => setMuted(m => { const nm = !m; try { localStorage.setItem('pim_remote_mute', nm ? '1' : '0') } catch { /* ignore */ } return nm })
   const mutedRef = useRef(muted); mutedRef.current = muted
 
+  // Notes display mode: 'full' (whole text — for practice) or 'highlights' (only bolded words — for the
+  // day-of). Persisted so it survives reloads. Toggled from the phone; never touches the deck.
+  const [notesMode, setNotesMode] = useState(() => { try { return localStorage.getItem('pim_remote_notes_mode') === 'highlights' ? 'highlights' : 'full' } catch { return 'full' } })
+  const toggleNotesMode = () => setNotesMode(m => { const nm = m === 'full' ? 'highlights' : 'full'; try { localStorage.setItem('pim_remote_notes_mode', nm) } catch { /* ignore */ } return nm })
+
   // Editing speaker notes from the phone (for practice — never navigates or interrupts the show).
   const [editNotes, setEditNotes] = useState(false)
   const noteRef = useRef(null)          // the contentEditable div
@@ -161,13 +166,30 @@ export default function RemoteControl({ code }) {
               <button key={cmd} onMouseDown={e => { e.preventDefault(); fmtNote(cmd) }} onTouchStart={e => { e.preventDefault(); fmtNote(cmd) }}
                 style={{ minWidth: 30, height: 30, borderRadius: 8, border: '1px solid #2a3358', background: '#171d38', color: '#c5d0ff', fontSize: '0.95rem', lineHeight: 1 }}>{gl}</button>
             ))}
-            <button onClick={() => { const n = !editNotes; setEditNotes(n); if (!n) sendNote() }}
-              style={{ minWidth: 34, height: 30, borderRadius: 8, border: `1px solid ${editNotes ? '#3a7d5a' : '#2a3358'}`, background: editNotes ? '#123524' : '#171d38', color: editNotes ? '#6ee7a8' : '#9aa8d8', fontSize: '0.9rem', lineHeight: 1 }}
-              title={editNotes ? 'Done editing' : 'Edit notes'}>{editNotes ? '✓' : '✎'}</button>
+            {/* Full ⇄ Highlights toggle. Highlights = only the bolded words (day-of); Full = everything (practice). */}
+            {!editNotes && (
+              <button onClick={() => { setEditNotes(false); toggleNotesMode() }}
+                style={{ height: 30, borderRadius: 8, padding: '0 10px', border: `1px solid ${notesMode === 'highlights' ? '#8a6d2f' : '#2a3358'}`, background: notesMode === 'highlights' ? '#2a220e' : '#171d38', color: notesMode === 'highlights' ? '#f6c453' : '#9aa8d8', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1 }}
+                title={notesMode === 'highlights' ? 'Showing highlights (bold only) — tap for full notes' : 'Showing full notes — tap for highlights only'}>
+                {notesMode === 'highlights' ? '★ Marks' : '≡ Full'}
+              </button>
+            )}
+            {notesMode === 'full' && (
+              <button onClick={() => { const n = !editNotes; setEditNotes(n); if (!n) sendNote() }}
+                style={{ minWidth: 34, height: 30, borderRadius: 8, border: `1px solid ${editNotes ? '#3a7d5a' : '#2a3358'}`, background: editNotes ? '#123524' : '#171d38', color: editNotes ? '#6ee7a8' : '#9aa8d8', fontSize: '0.9rem', lineHeight: 1 }}
+                title={editNotes ? 'Done editing' : 'Edit notes'}>{editNotes ? '✓' : '✎'}</button>
+            )}
           </div>
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '0 13px 12px' }}>
-              {editNotes
+              {notesMode === 'highlights'
+                ? (() => {
+                    const hi = rcHighlights(state?.note)
+                    return hi
+                      ? <div style={{ fontSize: '1.5rem', fontWeight: 800, lineHeight: 1.55, color: '#f6e6b8', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: hi }} />
+                      : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No highlights — bold words in your notes to see them here.</div>
+                  })()
+                : editNotes
                 ? <div ref={noteRef} contentEditable suppressContentEditableWarning data-richtext="1"
                     inputMode="text" autoCorrect="on" autoCapitalize="sentences"
                     onPaste={e => { e.preventDefault(); const cd = e.clipboardData; const h = cd?.getData?.('text/html'); document.execCommand('insertHTML', false, h ? rcSanitizeHtml(h) : rcSanitizePlain(cd?.getData?.('text/plain') || '')); sendNote() }}
@@ -281,6 +303,29 @@ function rcSanitizeHtml(html) {
 }
 function rcSanitizePlain(text) {
   return (text || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>')
+}
+const rcEsc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+// Highlights = only the bolded words, one run per line. Drops all non-bold text; keeps line breaks so
+// distinct bold phrases stay on separate lines. Returns escaped HTML (<br>-joined) or '' if nothing bold.
+function rcHighlights(html) {
+  if (!html || !/[<][a-z/]/i.test(html)) return ''   // plain-text legacy notes carry no bold info
+  const root = document.createElement('div'); root.innerHTML = html
+  const lines = []; let cur = ''
+  const flush = () => { const t = cur.replace(/\s+/g, ' ').trim(); if (t) lines.push(t); cur = '' }
+  const walk = (node, bold) => {
+    node.childNodes.forEach(ch => {
+      if (ch.nodeType === 3) { if (bold) cur += ch.nodeValue || ''; else if ((ch.nodeValue || '').trim()) flush(); return }
+      if (ch.nodeType !== 1) return
+      const tag = ch.tagName
+      if (tag === 'BR') { flush(); return }
+      let b = bold; const sb = rcBold(ch)
+      if (sb === true) b = true; else if (sb === false) b = false; else if (tag === 'B' || tag === 'STRONG') b = true
+      walk(ch, b)
+      if (tag === 'P' || tag === 'DIV' || tag === 'LI' || /^H[1-6]$/.test(tag)) flush()
+    })
+  }
+  walk(root, false); flush()
+  return lines.map(rcEsc).join('<br>')
 }
 
 // mm:ss (or h:mm:ss past an hour) for the live presentation timers.
