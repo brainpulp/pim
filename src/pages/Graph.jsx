@@ -6565,6 +6565,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
     step: showStep, steps: showSteps,
     title: curSlideNode?.label || '',
+    noteId: curSlideNode?.id || null,   // target node id so the phone can edit this slide's notes
     note: (curSlideNode ? (storeNodeById[curSlideNode.id]?.speakerNotes || '') : '').slice(0, 4000),
     nextTitle: (presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx + 1]?.label : '') || '',
     totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
@@ -8449,7 +8450,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       ))}
 
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
-      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} thumb={remoteThumb} onPhoneConnect={() => setShowRemote(false)} />}
+      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} thumb={remoteThumb} onPhoneConnect={() => setShowRemote(false)} onSetNote={(id, html) => setSpeakerNotes(id, html)} />}
 
       {/* Fullscreen hand-off veil: black cover between one fullscreen overlay closing and the next opening,
           so the canvas never flashes through. Below the overlays (4000), above the canvas. */}

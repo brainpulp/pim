@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase'
 // Subscribes to `pim-remote-<code>`, routes incoming commands to actionsRef.current[action], and
 // broadcasts the current `state` so the phone shows the live position. Answers a phone 'hello' with state.
 // Auto-reconnects if the realtime channel drops (network blip, laptop sleep) so control isn't silently lost.
-export default function PresenterRemote({ code, actionsRef, state, thumb, onPhoneConnect }) {
+export default function PresenterRemote({ code, actionsRef, state, thumb, onPhoneConnect, onSetNote }) {
   const chanRef = useRef(null)
   const stateRef = useRef(state)
   stateRef.current = state
@@ -15,6 +15,8 @@ export default function PresenterRemote({ code, actionsRef, state, thumb, onPhon
   const lastThumbRef = useRef('')
   const onConnectRef = useRef(onPhoneConnect)   // kept in a ref so the channel effect never re-subscribes
   onConnectRef.current = onPhoneConnect
+  const onSetNoteRef = useRef(onSetNote)
+  onSetNoteRef.current = onSetNote
 
   useEffect(() => {
     if (!code) return
@@ -40,6 +42,10 @@ export default function PresenterRemote({ code, actionsRef, state, thumb, onPhon
         setTimeout(pushState, 80)   // reflect the result back to the phone
       })
       chan.on('broadcast', { event: 'hello' }, () => { pushState(); pushThumb(); try { onConnectRef.current?.() } catch { /* ignore */ } })
+      // Phone edited the speaker notes for a slide — apply to that node. Never navigates or interrupts.
+      chan.on('broadcast', { event: 'note' }, ({ payload }) => {
+        if (payload?.id) { try { onSetNoteRef.current?.(payload.id, payload.html || '') } catch { /* ignore */ } }
+      })
       chan.subscribe(s => {
         if (s === 'SUBSCRIBED') { pushState(); pushThumb() }
         else if ((s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') && !closed) {

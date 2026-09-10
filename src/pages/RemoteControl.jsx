@@ -16,6 +16,33 @@ export default function RemoteControl({ code }) {
   const toggleMute = () => setMuted(m => { const nm = !m; try { localStorage.setItem('pim_remote_mute', nm ? '1' : '0') } catch { /* ignore */ } return nm })
   const mutedRef = useRef(muted); mutedRef.current = muted
 
+  // Editing speaker notes from the phone (for practice — never navigates or interrupts the show).
+  const [editNotes, setEditNotes] = useState(false)
+  const noteRef = useRef(null)          // the contentEditable div
+  const noteFocusRef = useRef(false)    // don't re-seed while typing (would jump the caret)
+  const noteDebRef = useRef(null)       // debounce timer for outgoing edits
+  const stateRef = useRef(state); stateRef.current = state
+  const noteIsHtml = s => /<[a-z/][^>]*>/i.test(s || '')
+  const seedNote = () => {
+    const el = noteRef.current; if (!el) return
+    const v = stateRef.current?.note || ''
+    el.innerHTML = noteIsHtml(v) ? v : v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+  }
+  const sendNote = () => {
+    const el = noteRef.current, id = stateRef.current?.noteId
+    if (!el || !id || !chanRef.current) return
+    const html = el.innerHTML
+    clearTimeout(noteDebRef.current)
+    noteDebRef.current = setTimeout(() => {
+      try { chanRef.current?.send({ type: 'broadcast', event: 'note', payload: { id, html } }) } catch { /* ignore */ }
+    }, 350)
+  }
+  const fmtNote = cmd => { document.execCommand(cmd, false, null); noteRef.current?.focus(); sendNote() }
+  // Seed the editor when entering edit mode or when the target slide changes while not actively typing.
+  useEffect(() => {
+    if (editNotes && !noteFocusRef.current) seedNote()
+  }, [editNotes, state?.noteId, state?.note]) // eslint-disable-line
+
   // Short confirmation beep so you can HEAR that a press registered and the deck actually advanced (a ghost
   // click that doesn't advance makes no sound). Web Audio needs a user gesture to start — unlocked on tap.
   const ensureAudio = () => { try { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; if (!audioRef.current) audioRef.current = new AC(); if (audioRef.current.state === 'suspended') audioRef.current.resume() } catch { /* ignore */ } }
@@ -116,16 +143,37 @@ export default function RemoteControl({ code }) {
       )}
 
       {/* Speaker notes — the reading area. Fills the space above the buttons and scrolls. zIndex over the
-          edge tap-zones so you can scroll/read the centre without triggering navigation. */}
+          edge tap-zones so you can scroll/read the centre without triggering navigation. A pencil toggles
+          edit mode so you can tweak notes from the phone during practice — this never advances the deck. */}
       {presenting && (
         <div style={{ flex: 1, minHeight: 0, margin: '8px 12px 0', padding: '10px 13px', borderRadius: 12, background: '#0f1424', border: '1px solid #23283f',
-          overflowY: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative', zIndex: 6 }}>
-          <div style={{ fontSize: '1.0rem', fontWeight: 700, color: '#c5d0ff', marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</div>
-          {state?.note
-            ? (/[<][a-z/]/i.test(state.note)
-                ? <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
-                : <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>)
-            : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>}
+          overflowY: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative', zIndex: 6, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ flex: 1, fontSize: '1.0rem', fontWeight: 700, color: '#c5d0ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</span>
+            {editNotes && (
+              <span style={{ display: 'flex', gap: 4 }}>
+                {[['bold', <b key="b">B</b>], ['italic', <i key="i">I</i>], ['underline', <u key="u">U</u>]].map(([cmd, gl]) => (
+                  <button key={cmd} onMouseDown={e => { e.preventDefault(); fmtNote(cmd) }} onTouchStart={e => { e.preventDefault(); fmtNote(cmd) }}
+                    style={{ minWidth: 30, height: 30, borderRadius: 8, border: '1px solid #2a3358', background: '#171d38', color: '#c5d0ff', fontSize: '0.95rem', lineHeight: 1 }}>{gl}</button>
+                ))}
+              </span>
+            )}
+            <button onClick={() => { const n = !editNotes; setEditNotes(n); if (!n) sendNote() }}
+              style={{ minWidth: 34, height: 30, borderRadius: 8, border: `1px solid ${editNotes ? '#3a7d5a' : '#2a3358'}`, background: editNotes ? '#123524' : '#171d38', color: editNotes ? '#6ee7a8' : '#9aa8d8', fontSize: '0.9rem', lineHeight: 1 }}
+              title={editNotes ? 'Done editing' : 'Edit notes'}>{editNotes ? '✓' : '✎'}</button>
+          </div>
+          {editNotes
+            ? <div ref={noteRef} contentEditable suppressContentEditableWarning
+                onInput={sendNote}
+                onFocus={() => { noteFocusRef.current = true }}
+                onBlur={() => { noteFocusRef.current = false; sendNote() }}
+                style={{ flex: 1, minHeight: 80, fontSize: '1.08rem', lineHeight: 1.5, color: '#eaf0ff', wordBreak: 'break-word',
+                  outline: 'none', border: '1px solid #2a3358', borderRadius: 8, padding: '8px 10px', background: '#0b0f1e', WebkitUserSelect: 'text' }} />
+            : (state?.note
+                ? (/[<][a-z/]/i.test(state.note)
+                    ? <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
+                    : <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>)
+                : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>)}
         </div>
       )}
 
