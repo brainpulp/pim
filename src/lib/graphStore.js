@@ -193,6 +193,11 @@ const useGraphStore = create((set, get) => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, notes } : n),
   })),
 
+  // Presenter speaker notes for a slide (frame node) — view-independent, shown on the phone remote.
+  setSpeakerNotes: (id, speakerNotes) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, speakerNotes } : n),
+  })),
+
   addNode: (label = 'New node', parentId = null, x = null, y = null) => {
     const id = uid()
     set(s => {

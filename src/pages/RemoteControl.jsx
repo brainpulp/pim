@@ -99,68 +99,33 @@ export default function RemoteControl({ code }) {
         )}
       </div>
 
-      {/* Live timers: time on current slide + total elapsed */}
+      {/* Compact status line: slide / sub-slide / build (pulses on advance) + timers, all in one row. */}
       {presenting && (
-        <div style={{ flexShrink: 0, padding: '8px 18px 0', display: 'flex', alignItems: 'center', gap: 14, justifyContent: 'center' }}>
-          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
-            <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.slideMs)}</span>
-            <span style={{ fontSize: '0.62rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>this slide</span>
+        <div key={posSig} style={{ flexShrink: 0, margin: '8px 12px 0', padding: '7px 11px', borderRadius: 12, background: '#12162c', border: '1px solid #2a3358',
+          display: 'flex', alignItems: 'baseline', gap: 8, animation: 'pim-posflash 0.35s ease' }}>
+          <style>{`@keyframes pim-posflash{0%{background:#22345c}100%{background:#12162c}}`}</style>
+          <span style={{ fontSize: '1.2rem', fontWeight: 800, color: '#e6ebff', fontVariantNumeric: 'tabular-nums' }}>
+            {(state?.idx ?? 0) + 1}<span style={{ fontSize: '0.78rem', color: '#8090b8', fontWeight: 600 }}>/{state?.total ?? '?'}</span>
           </span>
-          <span style={{ width: 1, height: 30, background: '#232a4a' }} />
-          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
-            <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
-            <span style={{ fontSize: '0.62rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>total</span>
-          </span>
+          {(state?.steps ?? 0) > 1 && <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#6ee7a8' }}>· {(state.step ?? 0) + 1}/{state.steps} <span style={{ fontSize: '0.56rem', color: '#8090b8' }}>SUB</span></span>}
+          {(state?.stages ?? 0) > 1 && <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#7c8cff' }}>· {(state.stage ?? 0) + 1}/{state.stages} <span style={{ fontSize: '0.56rem', color: '#8090b8' }}>BUILD</span></span>}
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: '0.92rem', color: '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>⏱ {fmtClock(state?.slideMs)}</span>
+          <span style={{ fontSize: '0.8rem', color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
         </div>
       )}
 
-      {/* Prominent position readout — pulses on every advance so you can SEE a press register (and hear the
-          beep). Shows slide, sub-slide (slideshow clip) and build stage; a ghost click won't change it. */}
+      {/* Speaker notes — the reading area. Fills the space above the buttons and scrolls. zIndex over the
+          edge tap-zones so you can scroll/read the centre without triggering navigation. */}
       {presenting && (
-        <div key={posSig} style={{ flexShrink: 0, margin: '10px 18px 0', padding: '8px 10px', borderRadius: 12, background: '#12162c', border: '1px solid #2a3358',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, animation: 'pim-posflash 0.35s ease' }}>
-          <style>{`@keyframes pim-posflash{0%{background:#1c2c4e;transform:scale(1.015)}100%{background:#12162c;transform:scale(1)}}`}</style>
-          <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#e6ebff', fontVariantNumeric: 'tabular-nums' }}>
-            {(state?.idx ?? 0) + 1}<span style={{ fontSize: '0.9rem', color: '#8090b8', fontWeight: 600 }}> / {state?.total ?? '?'}</span>
-          </span>
-          {(state?.steps ?? 0) > 1 && (
-            <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
-              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{(state.step ?? 0) + 1}/{state.steps}</span>
-              <span style={{ fontSize: '0.56rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>sub-slide</span>
-            </span>
-          )}
-          {(state?.stages ?? 0) > 1 && (
-            <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
-              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#7c8cff', fontVariantNumeric: 'tabular-nums' }}>{(state.stage ?? 0) + 1}/{state.stages}</span>
-              <span style={{ fontSize: '0.56rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>build</span>
-            </span>
-          )}
+        <div style={{ flex: 1, minHeight: 0, margin: '8px 12px 0', padding: '10px 13px', borderRadius: 12, background: '#0f1424', border: '1px solid #23283f',
+          overflowY: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative', zIndex: 6 }}>
+          <div style={{ fontSize: '1.0rem', fontWeight: 700, color: '#c5d0ff', marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</div>
+          {state?.note
+            ? <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>
+            : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>}
         </div>
       )}
-
-      {/* Current slide title (+ next slide name) + build indicator */}
-      <div style={{ flexShrink: 0, padding: '10px 18px', minHeight: 44, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#e6ebff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {presenting ? (state?.title || 'Slide') : 'Ready'}
-          </span>
-          {presenting && state?.nextTitle && (
-            <span style={{ fontSize: '0.72rem', color: '#8fa0d8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              Next: {state.nextTitle}
-            </span>
-          )}
-        </span>
-        {presenting && (state?.steps ?? 0) > 1 && (
-          <span style={{ fontSize: '0.72rem', color: '#6ee7a8', background: '#12291d', borderRadius: 10, padding: '2px 9px' }}>
-            step {(state.step ?? 0) + 1} / {state.steps}
-          </span>
-        )}
-        {presenting && (state?.stages ?? 0) > 1 && (
-          <span style={{ fontSize: '0.72rem', color: '#7c8cff', background: '#171d38', borderRadius: 10, padding: '2px 9px' }}>
-            build {(state.stage ?? 0) + 1} / {state.stages}
-          </span>
-        )}
-      </div>
 
       {/* Coming up — ONE small thumbnail of what the next press brings (next slideshow clip, else next slide). */}
       {presenting && (() => {
@@ -189,20 +154,19 @@ export default function RemoteControl({ code }) {
         )
       })()}
 
-      {/* Eyes-free tap zones: the top half of the screen advances (right) / goes back (left), so you can
-          drive the deck without looking. Sit above the display area but below the header (mute) and the
-          bottom buttons. Faint ‹ › hint at the edges. */}
+      {/* Eyes-free EDGE tap-zones: slim strips down the far left/right advance the deck, so you can drive
+          without looking — while the notes centre (higher zIndex) stays readable/scrollable. */}
       {presenting && (<>
         <div onPointerDown={() => send('prev')} aria-label="Previous"
-          style={{ position: 'fixed', left: 0, top: 52, width: '50%', height: '40vh', zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
-            paddingLeft: 14, color: 'rgba(143,160,216,0.25)', fontSize: '2.6rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>‹</div>
+          style={{ position: 'fixed', left: 0, top: 54, bottom: 190, width: 40, zIndex: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'rgba(143,160,216,0.3)', fontSize: '2rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>‹</div>
         <div onPointerDown={() => send('next')} aria-label="Next"
-          style={{ position: 'fixed', right: 0, top: 52, width: '50%', height: '40vh', zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-            paddingRight: 14, color: 'rgba(143,160,216,0.25)', fontSize: '2.6rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>›</div>
+          style={{ position: 'fixed', right: 0, top: 54, bottom: 190, width: 40, zIndex: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'rgba(143,160,216,0.3)', fontSize: '2rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>›</div>
       </>)}
 
-      {/* Big Prev / Next — the primary controls, split for thumb reach */}
-      <div style={{ flex: 1, display: 'flex', gap: 12, padding: 12, minHeight: 0 }}>
+      {/* Big Prev / Next — the primary controls, split for thumb reach (fixed height so notes get the space) */}
+      <div style={{ flexShrink: 0, display: 'flex', gap: 12, padding: 12, height: 116 }}>
         <button onPointerDown={() => send('prev')} aria-label="Previous"
           style={bigBtn('#161a34')}>
           <span style={{ fontSize: '3.2rem', lineHeight: 1 }}>‹</span>

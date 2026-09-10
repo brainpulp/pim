@@ -148,6 +148,17 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
     pause: () => { try { p.pauseVideo() } catch { /* */ } },
     isWaiting: () => waitingRef.current,                                   // paused at a stop marker?
     resume: () => { waitingRef.current = false; try { p.playVideo() } catch { /* */ } },   // → continue to the next marker/end
+    // While rolling, jump to the next STOP marker and keep playing (consume it so it doesn't pause there);
+    // returns false if there's no marker ahead → the caller advances the clip/slide instead.
+    skipToNextStop: () => {
+      const now = p.getCurrentTime?.() || 0
+      let best = null
+      for (const m of resolveMarkers(clipRef.current)) { if (!m.stop) continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
+      if (!best) return false
+      consumedRef.current.add(best.id); waitingRef.current = false
+      try { p.seekTo(Math.max(0, best.s), true); p.playVideo() } catch { /* */ }
+      return true
+    },
     seekBy: (d) => { try { p.seekTo(Math.max(0, (p.getCurrentTime?.() || 0) + d), true) } catch { /* */ } },
     seekTo: (t) => { if (t <= (clipRef.current?.start || 0) + 0.5) consumedRef.current.clear(); try { p.seekTo(Math.max(0, t), true) } catch { /* */ } },
     mute: () => { try { p.mute() } catch { /* */ } },
@@ -319,6 +330,17 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
       play: () => { waiting = false; el.play().catch(() => {}) }, pause: () => el.pause(),
       isWaiting: () => waiting,                                        // paused at a stop marker?
       resume: () => { waiting = false; el.play().catch(() => {}) },    // → continue to the next marker/end
+      // While rolling, jump to the next STOP marker and keep playing (consume it so it doesn't pause there).
+      skipToNextStop: () => {
+        const now = el.currentTime || 0
+        let best = null
+        for (const m of resolveMarkers(clipRef.current)) { if (!m.stop) continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
+        if (!best) return false
+        consumed.add(best.id); waiting = false
+        try { el.currentTime = best.s } catch { /* */ }
+        el.play().catch(() => {})
+        return true
+      },
       seekBy: (d) => { try { el.currentTime = Math.max(start, (el.currentTime || 0) + d) } catch { /* */ } },
       seekTo: (t) => { if (t <= start + 0.5) consumed.clear(); try { el.currentTime = Math.max(0, t) } catch { /* */ } },
       mute: () => { el.muted = true }, unMute: () => { el.muted = false },
@@ -1251,6 +1273,8 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
     const repeat = lr.idx === idxRef.current && (now - lr.t < 1500)   // pressed Next again on the same clip → escape
     lastRightRef.current = { t: now, idx: idxRef.current }
     if (!repeat && handleRef.current?.isWaiting?.()) { plog('  FSgoRight → resume (stop marker)'); handleRef.current.resume(); fsPlaying.current = true; return }
+    // Rolling with markers ahead → jump to the next marker and keep playing (not advance the clip).
+    if (!repeat && handleRef.current?.skipToNextStop?.()) { plog('  FSgoRight → skip to next marker'); fsPlaying.current = true; return }
     const cb = cbRef.current
     const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
     plog(`  FSgoRight idx=${idxRef.current}/${clips.length} kind=${clipKind(clips[idxRef.current])} wait=${handleRef.current?.isWaiting?.() ? 1 : 0} act=${act}`)

@@ -1467,6 +1467,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addAudio        = useGraphStore(s => s.addAudio)
   const addYtssNode     = useGraphStore(s => s.addYtssNode)
   const setYtssClips    = useGraphStore(s => s.setYtssClips)
+  const setSpeakerNotes = useGraphStore(s => s.setSpeakerNotes)
   const setYtssProp     = useGraphStore(s => s.setYtssProp)
   const addLink         = useGraphStore(s => s.addLink)
   const duplicateNodeAt = useGraphStore(s => s.duplicateNodeAt)
@@ -6564,6 +6565,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
     step: showStep, steps: showSteps,
     title: curSlideNode?.label || '',
+    note: (curSlideNode ? (storeNodeById[curSlideNode.id]?.speakerNotes || '') : '').slice(0, 4000),
     nextTitle: (presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx + 1]?.label : '') || '',
     totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
     slideMs: Math.round(slideMs / 1000) * 1000,
@@ -8334,6 +8336,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {!isPresenting && showSlideSidebar && (frameSimNodes.length > 0 || slideSimNodes.length > 0) && (
         <SlideSidebar
           slideSimNodes={slideSimNodes}
+          setSpeakerNotes={setSpeakerNotes}
           selectedSlideId={selected?.type === 'node' ? selected.id : null}
           allSimNodes={simNodesRef.current}
           frameSimNodes={frameSimNodes}
@@ -9115,7 +9118,7 @@ function PresentLogPanel({ sessions = [], onDelete, onClear, onClose }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, selectedSlideId = null, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -9297,6 +9300,23 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, allSimNodes, fram
           title="Resize the current slide to match the current view"
           style={T_BTN('ghost', { flex:1, padding:`${T_SP[3]}px ${T_SP[3]}px`, fontSize:T_FS.sm, ...(slideSimNodes[activeIdx] ? {} : { opacity:0.5, cursor:'not-allowed' }) })}>⟳ Update</button>
       </div>
+
+      {/* Speaker notes for the selected/current slide — shown on the phone remote while presenting. */}
+      {(() => {
+        const nid = (selectedSlideId && slideSimNodes.some(n => n.id === selectedSlideId)) ? selectedSlideId : slideSimNodes[activeIdx]?.id
+        if (!nid) return null
+        const label = (slideSimNodes.find(n => n.id === nid)?.label) || 'slide'
+        return (
+          <div style={{ display:'flex', flexDirection:'column', gap:T_SP[2] }}>
+            <span style={{ fontSize:T_FS.xs, color:T_C.tx3, letterSpacing:'0.06em', fontWeight:T_FW.bold }}>SPEAKER NOTES</span>
+            <textarea key={nid} defaultValue={storeNodeById[nid]?.speakerNotes || ''}
+              onChange={e => setSpeakerNotes?.(nid, e.target.value)}
+              onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+              placeholder={`Notes for “${label}” (show on your phone)…`} rows={4}
+              style={T_INPUT({ width:'100%', boxSizing:'border-box', resize:'vertical', minHeight:64, lineHeight:1.4, fontFamily:'inherit' })} />
+          </div>
+        )
+      })()}
 
       {/* Interim slide status: the designated bounce-to frame (often not a deck slide). ⤾ toggles per gap. */}
       {interimSlideId && (() => {
