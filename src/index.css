@@ -99,3 +99,6 @@ body.pim-dragging video,    body.pim-drag-nomedia video,
 body.pim-dragging audio,    body.pim-drag-nomedia audio,
 body.pim-dragging embed,    body.pim-drag-nomedia embed,
 body.pim-dragging object,   body.pim-drag-nomedia object { pointer-events: none !important; }
+
+/* Hide the text-box formatting toolbar while dragging an element (it's distracting mid-move). */
+body.pim-dragging .pim-textbar { display: none !important; }

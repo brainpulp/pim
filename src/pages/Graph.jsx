@@ -198,6 +198,11 @@ function elementToSlide(o, label) {
   if (o.videoKind === 'youtube' && o.youtubeId) return { kind: 'youtube', youtubeId: o.youtubeId, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, cuts: o.cuts, trigger: 'click' }
   if (t === 'audio') return { kind: 'audio', src: o.src, title, start: o.start || 0, end: o.end || 0, cuts: o.cuts, trigger: 'click' }
   if (t === 'video' || o.videoKind === 'file') return { kind: 'video', src: o.src, title, start: o.start || 0, end: o.end || 0, speed: o.speed || 1, loop: !!o.loop, cuts: o.cuts, trigger: 'click' }
+  // A text box → text slide: flatten its HTML to text, keep its background/colour.
+  if (t === 'text' || o.html != null) {
+    const text = String(o.html || '').replace(/<\/(div|p)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim()
+    return { kind: 'text', text, title: title || 'Text', bg: o.bg || o.bgColor || '#0c0c1a', color: o.textColor || o.color || '#e8ecff', fontSize: 9, align: o.align || 'center', trigger: 'click', duration: 5 }
+  }
   // Free image → image slide: keep its look (blur, edge/contour blur, colour tint, opacity) AND its
   // dimensions/rotation, so it presents the same in the slideshow and comes back out unchanged.
   if (o.src) return { kind: 'image', src: o.src, title, trigger: 'auto', duration: 5, blur: o.blur || 0, edgeBlur: o.edgeBlur || 0, tint: o.tint || null, opacity: o.opacity == null ? 1 : o.opacity, width: o.width, height: o.height, rotation: o.rotation || 0 }
@@ -3809,7 +3814,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const _dragShape = (viewNodePropsRef.current[nodeId] || {}).shape
     const isFrame = _dragShape === 'frame' || _dragShape === 'container'   // both drag their contained nodes along
     // A YouTube video node can be dropped INTO a YouTube slideshow — enable that hover target while dragging one.
-    const _dragMedia = useGraphStore.getState().nodes.find(n => n.id === nodeId)?.media
+    const _dragNodeObj = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+    const _dragMedia = _dragNodeObj?.media
+    // Card nodes (slideshow/table/media/kanban/list/strategy) are a separate hierarchy — dragging one must
+    // never reparent it onto a node (that would create a parent/child edge to a card).
+    const _dragCard = !!(_dragNodeObj && (_dragNodeObj.ytss || _dragNodeObj.table || _dragNodeObj.media || _dragNodeObj.kanban || _dragNodeObj.list || _dragNodeObj.strategy))
     // Any media node (youtube/video/audio/image) can be dropped INTO a slideshow.
     const isDragMedia = !!_dragMedia && (!!_dragMedia.youtubeId || !!_dragMedia.src)
 
@@ -4006,12 +4015,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return
         }
 
-        // Reparent: if dropped on another regular node, make it a child.
-        if (!isFrame && !multiDrag && dragHoverNodeIdRef.current === null) {
+        // Reparent: if dropped on another regular node, make it a child. Never for a card/frame source, and
+        // never ONTO a card/frame target — those are a separate visual hierarchy, not the edge graph.
+        const _cardTargets = new Set(useGraphStore.getState().nodes.filter(n => n.ytss || n.table || n.media || n.kanban || n.list || n.strategy).map(n => n.id))
+        if (!isFrame && !_dragCard && !multiDrag && dragHoverNodeIdRef.current === null) {
           // re-check at drop position since the hover ref was just cleared
           let dropTarget = null
           for (const n of simNodesRef.current) {
-            if (n.id === nodeId) continue
+            if (n.id === nodeId || _cardTargets.has(n.id)) continue
             const nvp = viewNodePropsRef.current[n.id] || {}
             if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.shape === 'container' || nvp.visible === false || !visibleNodeIdsRef.current.has(n.id)) continue
             const nr = NODE_R * (nvp.scale || 1)
@@ -12067,7 +12078,7 @@ function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
   const sep = <span style={{ width: 1, height: 18, background: '#2d3a6a', margin: '0 3px' }} />
   const keep = e => e.preventDefault()   // buttons keep the editable focused
   return (
-    <div style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 40, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', maxWidth: 480,
+    <div className="pim-textbar" style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 40, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', maxWidth: 480,
       background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 8, padding: '4px 6px', boxShadow: '0 8px 24px rgba(0,0,0,0.6)', fontFamily: '-apple-system, sans-serif' }}>
       <button style={{ ...btn, fontWeight: 800 }} onMouseDown={keep} title="Bold" onClick={() => exec('bold')}>B</button>
       <button style={{ ...btn, fontStyle: 'italic' }} onMouseDown={keep} title="Italic" onClick={() => exec('italic')}>I</button>
@@ -12153,10 +12164,10 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
   // YouTube iframe otherwise swallows the scroll wheel so the canvas can't zoom over it (Miro-style).
   const [videoActive, setVideoActive] = useState(false)
   useEffect(() => { if (!isSelected) setVideoActive(false) }, [isSelected])
-  // Text boxes edit on DOUBLE-click (like a photo captions on double-click), not on select — so a single
-  // click just selects and the whole box drags (no "drag to move" bar needed). Reset on deselect.
+  // Text boxes go straight into edit mode when selected, so you can start typing on the first click (no
+  // double-click). Dragging still works from the box border / resize handles. Reset on deselect.
   const [textEditing, setTextEditing] = useState(false)
-  useEffect(() => { if (!isSelected) setTextEditing(false) }, [isSelected])
+  useEffect(() => { setTextEditing(isSelected) }, [isSelected])
   // YouTube videos show a clean, user-pickable POSTER frame (no YouTube chrome) until played — we
   // only mount the iframe on demand. `playing` is set by the play button / double-click / autoplay.
   const isYT = isVideo && img.videoKind === 'youtube'
