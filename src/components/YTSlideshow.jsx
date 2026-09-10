@@ -246,6 +246,17 @@ export const clipKind = (c) => c?.kind || (c?.driveId ? 'gdrive' : (c?.youtubeId
 // gdrive embeds are dumb iframes with no JS player API, so they're NOT time-controllable (no trim/markers).
 export const isTimeMedia = (c) => { const k = clipKind(c); return k === 'youtube' || k === 'video' || k === 'audio' }
 
+// Compact trim readout for a slideshow chip: the kept length (end−start) when trimmed to an end,
+// or the start offset alone if only the head is trimmed. null when the clip isn't time-media or
+// has no trim set (its full duration isn't known here for an unselected clip).
+export const chipTrimLabel = (c) => {
+  if (!isTimeMedia(c)) return null
+  const s = c.start || 0, e = c.end || 0
+  if (e > s) return fmtTime(e - s)
+  if (s > 0) return fmtTime(s) + '→'
+  return null
+}
+
 // Inverse trim ("snips"): `cuts` = [{s,e}] time ranges to SKIP. During playback, if the playhead lands
 // inside a cut, jump to its end. Returns the skip target time, or null if the playhead is not in a cut.
 export function cutSkipTarget(t, cuts) {
@@ -1049,8 +1060,18 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                     : ck === 'text'
                     ? <div style={{ width: 108, height: 40, background: c.bg || '#0c0c1a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.color || '#e8ecff', fontSize: 10, fontWeight: 600, padding: '0 5px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{(c.text || 'Text').split('\n')[0].slice(0, 22) || 'Text'}</div>
                     : <div style={{ width: 108, height: 40, background: '#0e0e1c', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d84a4', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 }}>{ck === 'audio' ? 'Audio' : 'Video'}</div>}
+                  {/* Trimmed-time badge: the kept length (end−start) or, if only a start is trimmed, that offset. */}
+                  {(() => { const tl = chipTrimLabel(c); return tl ? (
+                    <span style={{ position: 'absolute', top: 25, right: 3, background: 'rgba(6,8,20,0.82)', color: '#c5d0ff', fontSize: 9.5, fontWeight: 600, padding: '1px 4px', borderRadius: 4, lineHeight: 1.25, pointerEvents: 'none', fontVariantNumeric: 'tabular-nums' }}>{tl}</span>
+                  ) : null })()}
                   <div style={{ padding: '2px 5px' }}>
                     <div style={{ color: '#c5d0ff', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i + 1}. {c.title || (ck === 'youtube' ? c.youtubeId : ck)}</div>
+                    {/* Advance mode: quick click⇄auto toggle right on the chip. Delay is still set in the panel. */}
+                    <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); patch(i, { trigger: (c.trigger || 'click') === 'auto' ? 'click' : 'auto' }) }}
+                      title="Advance: on click/key ⇄ automatically (delay is set below)"
+                      style={{ width: '100%', marginTop: 2, background: (c.trigger || 'click') === 'click' ? 'transparent' : '#20305a', border: '1px solid #2d3a6a', color: (c.trigger || 'click') === 'click' ? '#8fa0d8' : '#aeb8ff', borderRadius: 4, padding: '1px 4px', cursor: 'pointer', fontSize: 9.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {(c.trigger || 'click') === 'click' ? '☝ On click' : c.trigger === 'delay' ? '⏱ Delay' : '▶ Auto'}
+                    </button>
                     <div style={{ display: 'flex', gap: 1, marginTop: 1 }}>
                       <IconBtn name="copy" title="Duplicate" size={18} tone="ghost" onClick={() => dup(i)} />
                       {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={18} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}

@@ -270,6 +270,11 @@ export default function RemoteControl({ code }) {
             <button onPointerDown={() => send('black')} style={smallBtn}>◼ Black</button>
             <button onPointerDown={() => send('nextSlide')} style={smallBtn}>Next slide ⤓</button>
           </div>
+          {/* Panic mute — instantly silence a blaring clip from the phone. Reflects the live mute state. */}
+          <button onPointerDown={() => send('mute')} style={{ ...smallBtn, flex: '0 0 auto', padding: '9px 8px',
+            ...(state?.muted ? { color: '#fff', borderColor: '#7a2a2a', background: '#4a1520', fontWeight: 700 } : { color: '#c5d0ff' }) }}>
+            {state?.muted ? '🔇 Sound muted — tap to unmute' : '🔊 Mute all sound'}
+          </button>
           <button onPointerDown={() => send('exit')} style={{ ...smallBtn, flex: '0 0 auto', color: '#f9b4b4', borderColor: '#5a2a2a', background: '#241318', padding: '9px 8px' }}>■ End presentation</button>
         </div>
       ) : (

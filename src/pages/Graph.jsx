@@ -1285,6 +1285,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const prevFrameCountRef = useRef(0)
   const [presentingSlideIdx, setPresentingSlideIdx] = useState(null)
   const presentingSlideIdxRef = useRef(null)
+  const [presMuted, setPresMuted] = useState(false)   // phone "panic mute": silence all media during a talk
+  const presMuteTimerRef = useRef(null)
+  // When the presentation ends, never leave the panic-mute loop running (it would keep silencing canvas
+  // media). Stop the loop, clear the flag, and unmute in one sweep.
+  useEffect(() => {
+    if (presentingSlideIdx === null && (presMuteTimerRef.current || presMuted)) {
+      if (presMuteTimerRef.current) { clearInterval(presMuteTimerRef.current); presMuteTimerRef.current = null }
+      setPresMuted(false)
+      try { document.querySelectorAll('video,audio').forEach(el => { el.muted = false }) } catch { /* */ }
+    }
+  }, [presentingSlideIdx]) // eslint-disable-line
   const [revealCounts, setRevealCounts] = useState({})   // unfolding text boxes: {[imgId]: shown line count}
   const revealCountsRef = useRef({})
   useEffect(() => { revealCountsRef.current = revealCounts }, [revealCounts])
@@ -1492,6 +1503,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const addCustomEmoji  = useGraphStore(s => s.addCustomEmoji)
   const removeCustomEmoji = useGraphStore(s => s.removeCustomEmoji)
   const addSlide            = useGraphStore(s => s.addSlide)
+  const replaceSlide        = useGraphStore(s => s.replaceSlide)
   const removeSlide         = useGraphStore(s => s.removeSlide)
   const reorderSlides       = useGraphStore(s => s.reorderSlides)
   const groupSlides         = useGraphStore(s => s.groupSlides)
@@ -3974,6 +3986,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (slide) {
             pushUndo()
             addSlideToYtss(hoveredAtDrop, slide)
+            replaceSlide(nodeId, hoveredAtDrop)   // if the node was a slide, the slideshow inherits its slot
             deleteNode(nodeId)
             if (selectedRef.current?.id === nodeId) setSelected(null)
             playDrop()
@@ -4114,6 +4127,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           } else {
             if (newContainerId !== curContainer) { pushUndo(); if (newContainerId) playDrop() }
             setContainedIn(nodeId, newContainerId)
+            // Dropped a slide-element into a FRAME → the frame inherits its slide slot (the element now
+            // lives inside the frame, so it stops being a standalone slide). Frames are the slide-able container.
+            if (newContainerId && newContainerId !== curContainer && (viewNodePropsRef.current[newContainerId]?.shape === 'frame')) {
+              replaceSlide(nodeId, newContainerId)
+            }
             // Dropped INTO a container → release its anchor so the container's centre-gravity drives it
             // (an anchored node is skipped by the bounding force and would just sit where it landed).
             const newCvp = newContainerId ? (viewNodePropsRef.current[newContainerId] || {}) : null
@@ -6024,7 +6042,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             const img = (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).find(i => i.id === imageId)
             const slide = elementToSlide(img, img?.title)
             if (slide) {
-              pushUndo(); addSlideToYtss(ytssHit, slide); deleteImage(imageId)
+              pushUndo(); addSlideToYtss(ytssHit, slide); replaceSlide(imageId, ytssHit); deleteImage(imageId)
               setSelectedImageIds(new Set()); playDrop()
               if (dragHoverNodeIdRef.current !== null) { dragHoverNodeIdRef.current = null; setDragHoverNodeId(null) }
               return
@@ -6609,6 +6627,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     present: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent() },
     exit: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) exitPresentation() },
     black: () => { if (presentingSlideIdxRef.current !== null) setBlackScreen(b => !b) },
+    // Panic mute: silence every playing video/audio (and YouTube iframe) from the phone, and keep new
+    // clips muted via a light re-apply loop until toggled back on. A blunt DOM sweep so it works no
+    // matter which player owns the sound. Auto-cleared when the presentation exits (effect below).
+    mute: () => {
+      setPresMuted(prev => {
+        const on = !prev
+        const sweep = () => {
+          try { document.querySelectorAll('video,audio').forEach(el => { el.muted = on }) } catch { /* */ }
+          try { document.querySelectorAll('iframe').forEach(f => { try { f.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: on ? 'mute' : 'unMute', args: [] }), '*') } catch { /* */ } }) } catch { /* */ }
+        }
+        sweep()
+        if (presMuteTimerRef.current) { clearInterval(presMuteTimerRef.current); presMuteTimerRef.current = null }
+        if (on) presMuteTimerRef.current = setInterval(sweep, 300)
+        return on
+      })
+    },
   }
   const curSlideNode = presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx] : null
   // Current slideshow step (ytss clip) on this slide, if a slideshow is active/fullscreen — shown on the phone.
@@ -6637,6 +6671,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     nextTitle: (presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx + 1]?.label : '') || '',
     totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
     slideMs: Math.round(slideMs / 1000) * 1000,
+    muted: presMuted,
   }
 
   // Phone canvas preview: the current + next slide rendered to a compact SVG string (plus the currently

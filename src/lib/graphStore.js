@@ -554,25 +554,59 @@ const useGraphStore = create((set, get) => ({
 
   // â”€â”€ Slide ops (operate on the active slideshow of the active view) â”€â”€â”€â”€
   addSlide: (frameId) => set(s => ({
-    views: s.views.map(v => v.id !== s.activeViewId ? v : {
-      ...v,
-      slideshows: (v.slideshows || []).map(ss => ss.id !== v.activeSlideshowId ? ss : {
-        ...ss, slides: ss.slides.includes(frameId) ? ss.slides : [...ss.slides, frameId],
-      }),
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const shows = v.slideshows && v.slideshows.length ? v.slideshows : [{ id: 'ss-default', name: 'Default', slides: [] }]
+      // The render layer falls back to the FIRST slideshow when activeSlideshowId is unset/stale, so the
+      // sidebar shows that show's slides. The store MUST resolve the same target — otherwise addSlide
+      // matches no slideshow, silently adds nothing, and the new frame shows up under "NOT IN SLIDESHOW".
+      const targetId = shows.some(ss => ss.id === v.activeSlideshowId) ? v.activeSlideshowId : shows[0].id
+      return {
+        ...v,
+        activeSlideshowId: targetId,   // self-heal so every later slide op (remove/reorder/group) matches too
+        slideshows: shows.map(ss => ss.id !== targetId ? ss : {
+          ...ss, slides: ss.slides.includes(frameId) ? ss.slides : [...ss.slides, frameId],
+        }),
+      }
     }),
   })),
 
   removeSlide: (frameId) => set(s => ({
+    views: s.views.map(v => {
+      if (v.id !== s.activeViewId) return v
+      const shows = v.slideshows || []
+      const targetId = shows.some(ss => ss.id === v.activeSlideshowId) ? v.activeSlideshowId : shows[0]?.id
+      return {
+        ...v,
+        slideshows: shows.map(ss => {
+          if (ss.id !== targetId) return ss
+          const slideGroup = { ...(ss.slideGroup || {}) }; delete slideGroup[frameId]
+          const usedGroups = new Set(Object.values(slideGroup))
+          return {
+            ...ss, slides: ss.slides.filter(id => id !== frameId), slideGroup,
+            groups: (ss.groups || []).filter(g => usedGroups.has(g.id)),   // drop now-empty groups
+          }
+        }),
+      }
+    }),
+  })),
+
+  // Transfer slide status from one element to another IN PLACE (same position), keeping order and any
+  // group tag. Used when a slide-element is absorbed into a container: dropping it into a slideshow or a
+  // frame makes THAT container take over its slide slot. No-op if oldId wasn't a slide; de-dupes if newId
+  // was already a slide (the container simply keeps its single slot).
+  replaceSlide: (oldId, newId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v,
+      slides: (v.slides || []).map(id => id === oldId ? newId : id).filter((id, i, a) => a.indexOf(id) === i),
       slideshows: (v.slideshows || []).map(ss => {
-        if (ss.id !== v.activeSlideshowId) return ss
-        const slideGroup = { ...(ss.slideGroup || {}) }; delete slideGroup[frameId]
-        const usedGroups = new Set(Object.values(slideGroup))
-        return {
-          ...ss, slides: ss.slides.filter(id => id !== frameId), slideGroup,
-          groups: (ss.groups || []).filter(g => usedGroups.has(g.id)),   // drop now-empty groups
-        }
+        if (!ss.slides.includes(oldId)) return ss
+        const seen = new Set()
+        const slides = ss.slides.map(id => id === oldId ? newId : id).filter(id => (seen.has(id) ? false : (seen.add(id), true)))
+        const slideGroup = { ...(ss.slideGroup || {}) }
+        if (slideGroup[oldId] != null && slideGroup[newId] == null) slideGroup[newId] = slideGroup[oldId]
+        delete slideGroup[oldId]
+        return { ...ss, slides, slideGroup }
       }),
     }),
   })),
@@ -841,6 +875,10 @@ const useGraphStore = create((set, get) => ({
   deleteImage: (imageId) => set(s => ({
     views: s.views.map(v => v.id !== s.activeViewId ? v : {
       ...v, images: (v.images || []).filter(img => img.id !== imageId),
+      // An image can also be an element-slide (e.g. before being tossed into a slideshow). Strip its
+      // slide membership too, or it dangles in the slide list (resolveSlide → null → silently dropped).
+      slides: (v.slides || []).filter(sid => sid !== imageId),
+      slideshows: (v.slideshows || []).map(ss => ({ ...ss, slides: ss.slides.filter(sid => sid !== imageId) })),
     }),
   })),
 
@@ -927,6 +965,9 @@ const useGraphStore = create((set, get) => ({
           ...v, images: remaining.map(img =>
             img.groupId && groupCounts[img.groupId] === 1 ? { ...img, groupId: null } : img
           ),
+          // Drop any deleted image's slide membership so it doesn't dangle in the slide list.
+          slides: (v.slides || []).filter(sid => !idSet.has(sid)),
+          slideshows: (v.slideshows || []).map(ss => ({ ...ss, slides: ss.slides.filter(sid => !idSet.has(sid)) })),
         }
       }),
     }))
