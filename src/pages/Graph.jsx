@@ -4399,8 +4399,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const out = {}
     frameImageIds(frameId).forEach(id => {
       const im = byId.get(id); if (!im) return
-      out[id] = { x: im.x, y: im.y, w: im.width, h: im.height, v: im.visible !== false,
-        o: im.opacity == null ? 1 : im.opacity, tc: im.tint?.color, ta: im.tint?.amount || 0 }
+      // Record the CURRENTLY DISPLAYED state: while editing a stage the image is shown via a view-only
+      // overlay, so read size/pos/opacity/tint from the overlay when present (else the doc). Otherwise a
+      // resize done on a posed stage would be masked and never captured.
+      const ov = imageStageOverlayRef.current?.[id]
+      const tint = ov ? ov.tint : im.tint
+      out[id] = { x: ov?.x ?? im.x, y: ov?.y ?? im.y, w: ov?.width ?? im.width, h: ov?.height ?? im.height,
+        v: im.visible !== false, o: ov ? (ov.opacity ?? 1) : (im.opacity == null ? 1 : im.opacity),
+        tc: tint?.color, ta: tint?.amount || 0 }
     })
     return out
   }, [frameImageIds])
@@ -5828,12 +5834,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (s < 0.1) s = 0.1
           groupSel.forEach(i => {
             const st = gStart[i.id]
-            updateImage(i.id, {
-              x: pivX + (st.x - pivX) * s,
-              y: pivY + (st.y - pivY) * s,
-              width: Math.max(20, Math.round(st.w * s)),
-              height: Math.max(10, Math.round(st.h * s)),
-            })
+            const gp = { x: pivX + (st.x - pivX) * s, y: pivY + (st.y - pivY) * s, width: Math.max(20, Math.round(st.w * s)), height: Math.max(10, Math.round(st.h * s)) }
+            updateImage(i.id, gp)
+            if (imageStageOverlayRef.current?.[i.id]) setImageStageOverlay(prev => (prev?.[i.id] ? { ...prev, [i.id]: { ...prev[i.id], ...gp } } : prev))
           })
         }
         const onUpG = () => { document.removeEventListener('mousemove', onMoveG); document.removeEventListener('mouseup', onUpG); hideDragShield() }
@@ -5873,11 +5876,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const npLx = pivLx * s, npLy = pivLy * s
         const ncx = pivWx - (cos * npLx - sin * npLy)
         const ncy = pivWy - (sin * npLx + cos * npLy)
-        updateImage(imageId, {
-          width: Math.max(20, Math.round(w0 * s)),
-          height: Math.max(10, Math.round(h0 * s)),
-          x: ncx, y: ncy,
-        })
+        const nw = Math.max(20, Math.round(w0 * s)), nh = Math.max(10, Math.round(h0 * s))
+        updateImage(imageId, { width: nw, height: nh, x: ncx, y: ncy })
+        // If a stage overlay is currently posing this image, keep it in sync so the resize holds on screen
+        // (the overlay renders over the doc) and is recorded, instead of snapping back to the posed size.
+        if (imageStageOverlayRef.current?.[imageId]) setImageStageOverlay(prev => (prev?.[imageId] ? { ...prev, [imageId]: { ...prev[imageId], width: nw, height: nh, x: ncx, y: ncy } } : prev))
       }
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); hideDragShield() }
       showDragShield('nwse-resize')
