@@ -7725,7 +7725,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetBorderFxAmp={v => setNodeViewProp(hn.id, 'borderFxAmp', v)}
               onSetBorderFxCount={v => setNodeViewProp(hn.id, 'borderFxCount', v)}
               onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
-              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none') }}
+              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none'); if (s === 'frame') addSlide(hn.id) }}
               onDuplicate={() => { pushUndo(); handleDuplicateNode(hn.id); close() }}
               tags={hs.meta?.tags || []}
               allTags={allProjectTags}
@@ -8401,11 +8401,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       )}
 
       {/* Canvas speaker-notes inspector — floating VERTICAL panel (phone-shaped) at the bottom-right when a
-          single slide node is selected. Same notes that show on the phone; rich text (B/I/U). */}
-      {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node' && slideIds.includes(selected.id) && (() => {
+          single FRAME is selected (whether or not it's in the slideshow). Rich text (B/I/U); shows on phone. */}
+      {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node'
+        && (frameSimNodes.some(n => n.id === selected.id) || slideIds.includes(selected.id)) && (() => {
         const sn = storeNodeById[selected.id] || {}
-        const label = sn.label || selectedNode?.label || 'Slide'
-        const slideNo = slideIds.indexOf(selected.id) + 1
+        const label = sn.label || selectedNode?.label || 'Frame'
+        const slideNo = slideIds.indexOf(selected.id) + 1   // 0 when the frame isn't in the slideshow
         return (
           <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
             style={{ position:'fixed', right:T_SP[5], bottom:T_SP[5], zIndex:60, ...T_PANEL(),
@@ -8413,7 +8414,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               display:'flex', flexDirection:'column', gap:T_SP[3] }}>
             <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
               <div style={{ display:'flex', alignItems:'center', gap:T_SP[2] }}>
-                <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>SPEAKER NOTES · SLIDE {slideNo}</span>
+                <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
+                  SPEAKER NOTES{slideNo > 0 ? ` · SLIDE ${slideNo}` : ''}
+                </span>
                 <div style={{ flex:1 }} />
                 <span style={{ fontSize:'0.62rem', color:T_C.tx3 }}>on your phone</span>
               </div>
@@ -8422,6 +8425,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             <RichNotes key={selected.id} html={sn.speakerNotes || ''} flex
               onChange={v => setSpeakerNotes?.(selected.id, v)}
               placeholder={`Notes for “${label}”…`} minHeight={140} />
+            {slideNo === 0 && (
+              <button onClick={() => addSlide(selected.id)}
+                style={T_BTN('subtle', { padding:`${T_SP[2]}px ${T_SP[3]}px`, fontSize:T_FS.sm, color:T_C.tx2 })}>+ Add to slideshow</button>
+            )}
           </div>
         )
       })()}
@@ -8959,14 +8966,20 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
 const NOTES_IS_HTML = s => /<[a-z/][^>]*>/i.test(s || '')
 function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex = false }) {
   const ref = useRef(null)
+  const focusedRef = useRef(false)
   const [empty, setEmpty] = useState(true)
-  useEffect(() => {
+  const seed = val => {
     const el = ref.current; if (!el) return
-    el.innerHTML = NOTES_IS_HTML(html)
-      ? html
-      : (html || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    const next = NOTES_IS_HTML(val)
+      ? (val || '')
+      : (val || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    if (el.innerHTML !== next) el.innerHTML = next
     setEmpty(!el.textContent.trim())
-  }, [])   // seed once; component is keyed by slide id upstream
+  }
+  // Seed on mount AND whenever the incoming notes change while this editor is NOT being typed in.
+  // Guarding on focus keeps the caret from jumping during a live edit, while re-seeding on prop change
+  // keeps every editor showing the RIGHT slide's notes (no stale text bleeding between slides).
+  useEffect(() => { if (!focusedRef.current) seed(html) }, [html])
   const sync = () => { const el = ref.current; if (!el) return; setEmpty(!el.textContent.trim()); onChange?.(el.innerHTML) }
   const exec = cmd => { document.execCommand(cmd, false, null); ref.current?.focus(); sync() }
   const fmtBtn = (cmd, glyph) => (
@@ -8981,6 +8994,8 @@ function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex
       <div style={{ position:'relative', ...(flex ? { flex:1, minHeight:0, display:'flex' } : {}) }}>
         <div ref={ref} contentEditable suppressContentEditableWarning
           onInput={sync} onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+          onFocus={() => { focusedRef.current = true }}
+          onBlur={() => { focusedRef.current = false; sync() }}
           style={T_INPUT({ width:'100%', minHeight, boxSizing:'border-box', overflowY:'auto', resize:'none',
             lineHeight:1.5, fontFamily:'inherit', fontSize:T_FS.md, textAlign:'left', cursor:'text',
             ...(flex ? { flex:1 } : {}) })} />
