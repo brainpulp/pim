@@ -6579,6 +6579,31 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
   }
 
+  // Prefetch: while presenting, quietly buffer the NEXT slide's uploaded video(s) so arriving on a
+  // video-heavy slide starts instantly instead of black. Plain value (no hook — after the loading guard);
+  // rendered below as tiny hidden <video preload="auto"> so the bytes are cached before the real player mounts.
+  let prefetchVideoUrls = []
+  if (presentingSlideIdx !== null) {
+    const nxt = slideSimNodes[presentingSlideIdx + 1]
+    if (nxt && !nxt.__elementSlide) {
+      const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(nxt.id) || {}) }
+      const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
+      const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
+      const inside = (x, y) => Math.abs((x || 0) - (nxt.x || 0)) <= hw && Math.abs((y || 0) - (nxt.y || 0)) <= hh
+      const urls = []
+      for (const n of simNodesRef.current) {
+        const sn = storeNodeById[n.id]; if (!sn?.ytss) continue
+        if (!(viewNodePropsRef.current[n.id]?.containedIn === nxt.id || inside(n.x, n.y))) continue
+        const vc = (sn.ytss.clips || []).find(c => (c.kind === 'video' || (!c.youtubeId && !c.driveId && c.src)) && /^https?:/.test(c.src || ''))
+        if (vc) urls.push(vc.src)
+      }
+      for (const im of (activeView?.images || [])) {
+        if (im.type === 'video' && /^https?:/.test(im.src || '') && im.visible !== false && inside(im.x, im.y)) urls.push(im.src)
+      }
+      prefetchVideoUrls = [...new Set(urls)].slice(0, 2)
+    }
+  }
+
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
   ;(activeView?.images || []).forEach(img => {
@@ -8354,6 +8379,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onClear={() => { if (window.confirm('Clear all logged presentation sessions?')) { setPresentLog([]); savePresentLog(projectId, []) } }}
           onClose={() => setPresentLogOpen(false)} />
       )}
+
+      {/* Prefetch the next slide's uploaded video(s) — hidden, muted, buffer-only; the real player reuses
+          these cached bytes so a video-heavy next slide opens instantly instead of black. */}
+      {isPresenting && prefetchVideoUrls.map(u => (
+        <video key={u} src={u} preload="auto" muted playsInline aria-hidden="true"
+          style={{ position: 'fixed', width: 2, height: 2, left: -10, top: -10, opacity: 0, pointerEvents: 'none' }} />
+      ))}
 
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
       {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} thumb={remoteThumb} onPhoneConnect={() => setShowRemote(false)} />}
