@@ -111,73 +111,77 @@ export default function RemoteControl({ code }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#0a0a14', color: '#e6ebff', display: 'flex', flexDirection: 'column',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'manipulation', overflow: 'hidden' }}>
-      {/* Status / position header */}
-      <div style={{ flexShrink: 0, padding: '14px 18px', borderBottom: '1px solid #1e1e2e', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ width: 10, height: 10, borderRadius: '50%', background: dot, boxShadow: `0 0 8px ${dot}` }} />
-        <span style={{ fontSize: '0.82rem', color: '#a9b6e8' }}>{statusText}</span>
-        <div style={{ flex: 1 }} />
+
+      {/* ── ONE compact status line (≈part of the top 20%): dot · slide N/total · SUB · BUILD · timers · mute.
+             Slide number lives here and NOWHERE else. Pulses on advance. */}
+      <div key={posSig} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+        borderBottom: '1px solid #1e1e2e', animation: presenting ? 'pim-posflash 0.35s ease' : 'none' }}>
+        <style>{`@keyframes pim-posflash{0%{background:#22345c}100%{background:transparent}}`}</style>
+        <span style={{ width: 9, height: 9, borderRadius: '50%', background: dot, boxShadow: `0 0 8px ${dot}`, flexShrink: 0 }} />
+        {presenting ? (
+          <>
+            <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#e6ebff', fontVariantNumeric: 'tabular-nums' }}>
+              {(state?.idx ?? 0) + 1}<span style={{ fontSize: '0.72rem', color: '#8090b8', fontWeight: 600 }}>/{state?.total ?? '?'}</span>
+            </span>
+            {(state?.steps ?? 0) > 1 && <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#6ee7a8' }}>·{(state.step ?? 0) + 1}/{state.steps}<span style={{ fontSize: '0.52rem', color: '#8090b8' }}> SUB</span></span>}
+            {(state?.stages ?? 0) > 1 && <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#7c8cff' }}>·{(state.stage ?? 0) + 1}/{state.stages}<span style={{ fontSize: '0.52rem', color: '#8090b8' }}> BUILD</span></span>}
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: '0.9rem', color: '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>⏱ {fmtClock(state?.slideMs)}</span>
+            <span style={{ fontSize: '0.78rem', color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
+          </>
+        ) : (
+          <>
+            <span style={{ fontSize: '0.85rem', color: '#a9b6e8' }}>{statusText}{status === 'live' ? ' · not presenting' : ''}</span>
+            <div style={{ flex: 1 }} />
+          </>
+        )}
         <button onClick={toggleMute} title={muted ? 'Unmute beep' : 'Mute beep'}
           style={{ background: muted ? 'transparent' : '#12291d', border: `1px solid ${muted ? '#2a3358' : '#2f7a4a'}`, color: muted ? '#8090b8' : '#6ee7a8',
-            borderRadius: 8, padding: '4px 10px', fontSize: '0.82rem', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>{muted ? '🔇' : '🔔'}</button>
-        {state && (
-          <span style={{ fontSize: '0.82rem', color: '#c5d0ff', fontWeight: 600 }}>
-            {presenting ? `Slide ${(state.idx ?? 0) + 1} / ${state.total ?? '?'}` : 'Not presenting'}
-          </span>
-        )}
+            borderRadius: 8, padding: '4px 9px', fontSize: '0.82rem', cursor: 'pointer', WebkitTapHighlightColor: 'transparent', flexShrink: 0 }}>{muted ? '🔇' : '🔔'}</button>
       </div>
 
-      {/* Compact status line: slide / sub-slide / build (pulses on advance) + timers, all in one row. */}
+      {/* ── NOTES (≈40%). The star of the screen. Header (title + edit) is fixed; the body scrolls; slim
+             edge strips over the body's far left/right advance the deck eyes-free (hidden while editing). */}
       {presenting && (
-        <div key={posSig} style={{ flexShrink: 0, margin: '8px 12px 0', padding: '7px 11px', borderRadius: 12, background: '#12162c', border: '1px solid #2a3358',
-          display: 'flex', alignItems: 'baseline', gap: 8, animation: 'pim-posflash 0.35s ease' }}>
-          <style>{`@keyframes pim-posflash{0%{background:#22345c}100%{background:#12162c}}`}</style>
-          <span style={{ fontSize: '1.2rem', fontWeight: 800, color: '#e6ebff', fontVariantNumeric: 'tabular-nums' }}>
-            {(state?.idx ?? 0) + 1}<span style={{ fontSize: '0.78rem', color: '#8090b8', fontWeight: 600 }}>/{state?.total ?? '?'}</span>
-          </span>
-          {(state?.steps ?? 0) > 1 && <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#6ee7a8' }}>· {(state.step ?? 0) + 1}/{state.steps} <span style={{ fontSize: '0.56rem', color: '#8090b8' }}>SUB</span></span>}
-          {(state?.stages ?? 0) > 1 && <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#7c8cff' }}>· {(state.stage ?? 0) + 1}/{state.stages} <span style={{ fontSize: '0.56rem', color: '#8090b8' }}>BUILD</span></span>}
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: '0.92rem', color: '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>⏱ {fmtClock(state?.slideMs)}</span>
-          <span style={{ fontSize: '0.8rem', color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
-        </div>
-      )}
-
-      {/* Speaker notes — the reading area. Fills the space above the buttons and scrolls. zIndex over the
-          edge tap-zones so you can scroll/read the centre without triggering navigation. A pencil toggles
-          edit mode so you can tweak notes from the phone during practice — this never advances the deck. */}
-      {presenting && (
-        <div style={{ flex: 1, minHeight: 0, margin: '8px 12px 0', padding: '10px 13px', borderRadius: 12, background: '#0f1424', border: '1px solid #23283f',
-          overflowY: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative', zIndex: 6, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <span style={{ flex: 1, fontSize: '1.0rem', fontWeight: 700, color: '#c5d0ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</span>
-            {editNotes && (
-              <span style={{ display: 'flex', gap: 4 }}>
-                {[['bold', <b key="b">B</b>], ['italic', <i key="i">I</i>], ['underline', <u key="u">U</u>]].map(([cmd, gl]) => (
-                  <button key={cmd} onMouseDown={e => { e.preventDefault(); fmtNote(cmd) }} onTouchStart={e => { e.preventDefault(); fmtNote(cmd) }}
-                    style={{ minWidth: 30, height: 30, borderRadius: 8, border: '1px solid #2a3358', background: '#171d38', color: '#c5d0ff', fontSize: '0.95rem', lineHeight: 1 }}>{gl}</button>
-                ))}
-              </span>
-            )}
+        <div style={{ flex: 2, minHeight: 0, margin: '8px 10px 0', borderRadius: 12, background: '#0f1424', border: '1px solid #23283f',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px 5px' }}>
+            <span style={{ flex: 1, fontSize: '0.98rem', fontWeight: 700, color: '#c5d0ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</span>
+            {editNotes && [['bold', <b key="b">B</b>], ['italic', <i key="i">I</i>], ['underline', <u key="u">U</u>]].map(([cmd, gl]) => (
+              <button key={cmd} onMouseDown={e => { e.preventDefault(); fmtNote(cmd) }} onTouchStart={e => { e.preventDefault(); fmtNote(cmd) }}
+                style={{ minWidth: 30, height: 30, borderRadius: 8, border: '1px solid #2a3358', background: '#171d38', color: '#c5d0ff', fontSize: '0.95rem', lineHeight: 1 }}>{gl}</button>
+            ))}
             <button onClick={() => { const n = !editNotes; setEditNotes(n); if (!n) sendNote() }}
               style={{ minWidth: 34, height: 30, borderRadius: 8, border: `1px solid ${editNotes ? '#3a7d5a' : '#2a3358'}`, background: editNotes ? '#123524' : '#171d38', color: editNotes ? '#6ee7a8' : '#9aa8d8', fontSize: '0.9rem', lineHeight: 1 }}
               title={editNotes ? 'Done editing' : 'Edit notes'}>{editNotes ? '✓' : '✎'}</button>
           </div>
-          {editNotes
-            ? <div ref={noteRef} contentEditable suppressContentEditableWarning
-                onInput={sendNote}
-                onFocus={() => { noteFocusRef.current = true }}
-                onBlur={() => { noteFocusRef.current = false; sendNote() }}
-                style={{ flex: 1, minHeight: 80, fontSize: '1.08rem', lineHeight: 1.5, color: '#eaf0ff', wordBreak: 'break-word',
-                  outline: 'none', border: '1px solid #2a3358', borderRadius: 8, padding: '8px 10px', background: '#0b0f1e', WebkitUserSelect: 'text' }} />
-            : (state?.note
-                ? (/[<][a-z/]/i.test(state.note)
-                    ? <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
-                    : <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>)
-                : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>)}
+          <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+            <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '0 13px 12px' }}>
+              {editNotes
+                ? <div ref={noteRef} contentEditable suppressContentEditableWarning
+                    onInput={sendNote} onFocus={() => { noteFocusRef.current = true }} onBlur={() => { noteFocusRef.current = false; sendNote() }}
+                    style={{ minHeight: '100%', fontSize: '1.12rem', lineHeight: 1.5, color: '#eaf0ff', wordBreak: 'break-word',
+                      outline: 'none', border: '1px solid #2a3358', borderRadius: 8, padding: '8px 10px', background: '#0b0f1e', WebkitUserSelect: 'text' }} />
+                : (state?.note
+                    ? (/[<][a-z/]/i.test(state.note)
+                        ? <div style={{ fontSize: '1.12rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
+                        : <div style={{ fontSize: '1.12rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>)
+                    : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>)}
+            </div>
+            {/* eyes-free edge strips — bounded to the notes body, so they never fight the buttons below */}
+            {!editNotes && (<>
+              <div onPointerDown={() => send('prev')} aria-label="Previous"
+                style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'rgba(143,160,216,0.28)', fontSize: '1.7rem', WebkitTapHighlightColor: 'transparent' }}>‹</div>
+              <div onPointerDown={() => send('next')} aria-label="Next"
+                style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'rgba(143,160,216,0.28)', fontSize: '1.7rem', WebkitTapHighlightColor: 'transparent' }}>›</div>
+            </>)}
+          </div>
         </div>
       )}
 
-      {/* Coming up — ONE small thumbnail of what the next press brings (next slideshow clip, else next slide). */}
+      {/* ── COMING (≈part of the top/bottom 20%): one small thumbnail of what the next press brings. */}
       {presenting && (() => {
         const nClips = thumb?.clipThumbs?.length || 0
         const nextClip = (state?.steps ?? 0) > 1 && nClips ? (state.step ?? 0) + 1 : -1
@@ -185,65 +189,50 @@ export default function RemoteControl({ code }) {
         const clipSrc = showClip ? thumb.clipThumbs[nextClip] : null
         if (!showClip && !thumb?.next) return null
         return (
-          <div style={{ flexShrink: 0, padding: '2px 14px 8px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flexShrink: 0, padding: '6px 14px 2px', display: 'flex', alignItems: 'center', gap: 10 }}>
             <style>{`.pim-rthumb svg{width:100%;height:auto;display:block}`}</style>
-            <span style={{ fontSize: '0.6rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', flexShrink: 0 }}>Coming</span>
+            <span style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', flexShrink: 0 }}>Next</span>
             {showClip ? (
-              <div style={{ width: 92, height: 56, flexShrink: 0, borderRadius: 8, overflow: 'hidden', border: '1px solid #2a3358',
+              <div style={{ width: 78, height: 46, flexShrink: 0, borderRadius: 7, overflow: 'hidden', border: '1px solid #2a3358',
                 background: clipSrc ? `#000 center/cover no-repeat url("${clipSrc}")` : '#12162c', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {!clipSrc && <span style={{ color: '#6b7699', fontSize: 15 }}>▶</span>}
+                {!clipSrc && <span style={{ color: '#6b7699', fontSize: 14 }}>▶</span>}
               </div>
             ) : (
-              <div className="pim-rthumb" style={{ width: 92, flexShrink: 0, borderRadius: 8, overflow: 'hidden', border: '1px solid #2a3358', background: '#0d0d1a' }}
+              <div className="pim-rthumb" style={{ width: 78, flexShrink: 0, borderRadius: 7, overflow: 'hidden', border: '1px solid #2a3358', background: '#0d0d1a' }}
                 dangerouslySetInnerHTML={{ __html: thumb.next }} />
             )}
-            <span style={{ fontSize: '0.8rem', color: '#8fa0d8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: '0.82rem', color: '#8fa0d8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {showClip ? `clip ${nextClip + 1} / ${state.steps}` : (state?.nextTitle || thumb?.nextLabel || 'Next slide')}
             </span>
           </div>
         )
       })()}
 
-      {/* Eyes-free EDGE tap-zones: slim strips down the far left/right advance the deck, so you can drive
-          without looking — while the notes centre (higher zIndex) stays readable/scrollable. */}
-      {presenting && (<>
-        <div onPointerDown={() => send('prev')} aria-label="Previous"
-          style={{ position: 'fixed', left: 0, top: 54, bottom: 190, width: 40, zIndex: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'rgba(143,160,216,0.3)', fontSize: '2rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>‹</div>
-        <div onPointerDown={() => send('next')} aria-label="Next"
-          style={{ position: 'fixed', right: 0, top: 54, bottom: 190, width: 40, zIndex: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'rgba(143,160,216,0.3)', fontSize: '2rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>›</div>
-      </>)}
-
-      {/* Big Prev / Next — the primary controls, split for thumb reach (fixed height so notes get the space) */}
-      <div style={{ flexShrink: 0, display: 'flex', gap: 12, padding: 12, height: 116 }}>
-        <button onPointerDown={() => send('prev')} aria-label="Previous"
-          style={bigBtn('#161a34')}>
-          <span style={{ fontSize: '3.2rem', lineHeight: 1 }}>‹</span>
-          <span style={{ fontSize: '0.9rem', color: '#8fa0d8', marginTop: 6 }}>Back</span>
-        </button>
-        <button onPointerDown={() => send('next')} aria-label="Next"
-          style={bigBtn('linear-gradient(180deg,#2f3a6e,#232a52)')}>
-          <span style={{ fontSize: '3.6rem', lineHeight: 1 }}>›</span>
-          <span style={{ fontSize: '0.9rem', color: '#c5d0ff', marginTop: 6 }}>Next</span>
-        </button>
-      </div>
-
-      {/* Secondary row: slide jumps (skip whole slides) + black screen */}
-      <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '0 12px 10px' }}>
-        <button onPointerDown={() => send('prevSlide')} style={smallBtn}>⤒ Prev slide</button>
-        <button onPointerDown={() => send('black')} style={smallBtn}>◼ Black</button>
-        <button onPointerDown={() => send('nextSlide')} style={smallBtn}>Next slide ⤓</button>
-      </div>
-
-      {/* Present / End */}
-      <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '0 12px 16px' }}>
-        {presenting ? (
-          <button onPointerDown={() => send('exit')} style={{ ...smallBtn, flex: 1, color: '#f9b4b4', borderColor: '#5a2a2a', background: '#241318' }}>■ End presentation</button>
-        ) : (
-          <button onPointerDown={() => send('present')} style={{ ...smallBtn, flex: 1, color: '#fff', border: 'none', background: 'linear-gradient(180deg,#5b6af0,#4652d6)', fontWeight: 700, fontSize: '1rem', padding: '14px' }}>▶ Start presentation</button>
-        )}
-      </div>
+      {/* ── BUTTONS (≈40%). Big Back/Next fill the block; a slim secondary row + End sit beneath. */}
+      {presenting ? (
+        <div style={{ flex: 2, minHeight: 150, maxHeight: '42vh', display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 12px 14px' }}>
+          <div style={{ flex: 1, minHeight: 92, display: 'flex', gap: 12 }}>
+            <button onPointerDown={() => send('prev')} aria-label="Previous" style={bigBtn('#161a34')}>
+              <span style={{ fontSize: '3.2rem', lineHeight: 1 }}>‹</span>
+              <span style={{ fontSize: '0.9rem', color: '#8fa0d8', marginTop: 4 }}>Back</span>
+            </button>
+            <button onPointerDown={() => send('next')} aria-label="Next" style={bigBtn('linear-gradient(180deg,#2f3a6e,#232a52)')}>
+              <span style={{ fontSize: '3.6rem', lineHeight: 1 }}>›</span>
+              <span style={{ fontSize: '0.9rem', color: '#c5d0ff', marginTop: 4 }}>Next</span>
+            </button>
+          </div>
+          <div style={{ flexShrink: 0, display: 'flex', gap: 10 }}>
+            <button onPointerDown={() => send('prevSlide')} style={smallBtn}>⤒ Prev slide</button>
+            <button onPointerDown={() => send('black')} style={smallBtn}>◼ Black</button>
+            <button onPointerDown={() => send('nextSlide')} style={smallBtn}>Next slide ⤓</button>
+          </div>
+          <button onPointerDown={() => send('exit')} style={{ ...smallBtn, flex: '0 0 auto', color: '#f9b4b4', borderColor: '#5a2a2a', background: '#241318', padding: '9px 8px' }}>■ End presentation</button>
+        </div>
+      ) : (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 12px 16px' }}>
+          <button onPointerDown={() => send('present')} style={{ ...smallBtn, color: '#fff', border: 'none', background: 'linear-gradient(180deg,#5b6af0,#4652d6)', fontWeight: 700, fontSize: '1rem', padding: '16px 22px' }}>▶ Start presentation</button>
+        </div>
+      )}
     </div>
   )
 }
