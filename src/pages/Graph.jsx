@@ -17,7 +17,8 @@ import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
-import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget } from '../components/YTSlideshow'
+import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget, clipKind, ytThumb } from '../components/YTSlideshow'
+import { driveThumbUrl } from '../lib/gdrive'
 import { playDrop } from '../lib/sound'
 import PresenterRemote from '../components/PresenterRemote'
 import QRCode from '../components/QRCode'
@@ -8563,6 +8564,19 @@ function ThreeDWrapper({ children, onFocus }) {
   return <div ref={ref} data-3d-canvas="true" style={{ width:'100%', height:'100%', borderRadius:12, overflow:'hidden' }}>{children}</div>
 }
 
+// A static image URL suitable for an SVG <image> poster, or null. Videos/audio have NO still image, and an
+// <image href="…mp4"> paints decode-noise (the "garbage thumbnail" bug), so those return null → the caller
+// draws a clean ▶ placeholder instead. YouTube/Drive clips use their thumbnail; image clips use their src.
+const IMG_URL_RE = /^data:image\/|^blob:|\.(png|jpe?g|gif|webp|avif|svg)(\?|#|$)/i
+function clipPoster(c) {
+  if (!c) return null
+  const k = clipKind(c)
+  if (k === 'youtube') return c.youtubeId ? ytThumb(c.youtubeId) : null
+  if (k === 'gdrive') return c.driveId ? driveThumbUrl(c.driveId) : null
+  if (k === 'image') return c.src || null
+  return c.poster && IMG_URL_RE.test(c.poster) ? c.poster : null   // uploaded video/audio: poster image only
+}
+
 // ─── SlideThumbSVG — the miniature render of one slide (frame), shared by the sidebar and the grid ──
 // Draws the frame's contents (free images/text/video posters, contained nodes, slideshow/table/media
 // minis) into a fixed-width SVG. `TW` sets the pixel width; height follows the frame's aspect ratio.
@@ -8588,7 +8602,10 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
         const relY = (img.y || 0) - (fn.y || 0)
         const w = img.width || 60, h = img.height || 40
         if (Math.abs(relX) > halfW + w / 2 || Math.abs(relY) > halfH + h / 2) return null
-        const poster = img.src || (img.youtubeId ? `https://img.youtube.com/vi/${img.youtubeId}/hqdefault.jpg` : img.poster) || null
+        const isAV = img.type === 'video' || img.type === 'audio'
+        const poster = isAV
+          ? clipPoster(img)   // video/audio: a still poster only, never the media file URL (renders as noise)
+          : (img.src || (img.youtubeId ? ytThumb(img.youtubeId) : img.poster) || null)
         const plainText = img.type === 'text' ? String(img.html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').trim() : ''
         return (
           <g key={img.id} transform={`translate(${relX},${relY}) rotate(${img.rotation || 0})`}>
@@ -8622,8 +8639,7 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
           const clips = sn.ytss.clips || []
           const clip = clips[Math.max(0, Math.min(ytssIdxMap[n.id] || 0, clips.length - 1))]
           const sc = nvp.ytssScale || 1, w = 480 * sc * 0.5, h = 270 * sc * 0.5
-          const yid = clip?.youtubeId
-          const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (clip?.src || null)
+          const poster = clipPoster(clip)
           return (
             <g key={n.id} transform={`translate(${dx},${dy})`}>
               <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
@@ -8645,8 +8661,7 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
         }
         if (sn.media) {
           const w = (nvp.mediaW || 260), h = (nvp.mediaH || 150)
-          const yid = sn.media.youtubeId
-          const poster = yid ? `https://img.youtube.com/vi/${yid}/hqdefault.jpg` : (sn.media.poster || sn.media.src || null)
+          const poster = clipPoster(sn.media)
           return (
             <g key={n.id} transform={`translate(${dx},${dy})`}>
               <rect x={-w/2} y={-h/2} width={w} height={h} rx={4} fill="#000" stroke="#2d3a6a" strokeWidth={1} />
