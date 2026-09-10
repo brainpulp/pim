@@ -147,25 +147,46 @@ const youtubeEmbedUrl = (img) => {
 // visual wrapping. Inline formatting (bold/colour/size spans) is preserved within each line.
 function splitTextLines(html) {
   if (!html) return ['']
+  // contentEditable stores each visual line as a block (<div>/<p>), a <br>, or a list item (<li>). Turn
+  // every line boundary into \x01; mark list items with a leading \x02 so they can be re-wrapped in a list
+  // (keeping their bullets/numbers) when only the first N lines are shown. (Lists were the unfold bug: the
+  // whole <ul> counted as one line, so a bulleted box appeared fully unfolded on the first reveal.)
+  const OL = /<ol[^>]*>/i.test(String(html))
   const s = String(html)
-    .replace(/<div[^>]*>/gi, '')
-    .replace(/<\/div>/gi, '')
-    .replace(/<p[^>]*>/gi, '')
-    .replace(/<\/p>/gi, '')
-    .replace(/<br\s*\/?>/gi, '')
-  const parts = s.split('')
-  // Drop a single trailing empty produced by a closing block; keep intentional blank lines otherwise.
-  if (parts.length > 1 && parts[parts.length - 1].replace(/<[^>]+>/g, '').trim() === '') parts.pop()
+    .replace(/<\/(div|p)>/gi, '\x01')
+    .replace(/<(div|p)[^>]*>/gi, '\x01')   // opening block also starts a line (handles a bare first line)
+    .replace(/<br\s*\/?>/gi, '\x01')
+    .replace(/<li[^>]*>/gi, OL ? '\x03' : '\x02')   // \x02 = bullet item, \x03 = numbered item
+    .replace(/<\/li>/gi, '\x01')
+    .replace(/<\/?[uo]l[^>]*>/gi, '')
+    .replace(/\x01{2,}/g, '\x01')         // collapse the doubled delimiters block nesting creates
+    .replace(/^\x01+/, '')               // drop leading blank lines (but keep a leading list-item marker)
+  const parts = s.split('\x01')
+  // Drop trailing empties produced by nested closing blocks (e.g. </li></ul></div>); keep interior blanks.
+  while (parts.length > 1 && parts[parts.length - 1].replace(/<[^>]+>/g, '').replace(/[\x02\x03]/g, '').trim() === '') parts.pop()
   const lines = parts.length ? parts : ['']
   return lines
 }
-// Render the first `n` lines, wrapping the newest revealed line for an optional fade-in.
+// Render the first `n` lines, wrapping the newest revealed line for an optional fade-in. List items keep
+// their <li> (inside a rebuilt <ul>/<ol>) so bullets/numbers survive the reveal; other lines become <div>.
 function joinTextLines(lines, n, fade) {
   const shown = lines.slice(0, Math.max(0, n))
-  return shown.map((ln, i) => {
-    const block = `<div>${ln === '' ? '<br>' : ln}</div>`
-    return (fade && i === shown.length - 1 && n > 0) ? `<div class="pim-line-fade">${ln === '' ? '<br>' : ln}</div>` : block
-  }).join('')
+  let out = '', listTag = null
+  shown.forEach((raw, i) => {
+    const li = raw[0] === '\x02' ? 'ul' : raw[0] === '\x03' ? 'ol' : null
+    const ln = raw.replace(/[\x02\x03]/g, '')
+    const cls = (fade && i === shown.length - 1 && n > 0) ? ' class="pim-line-fade"' : ''
+    const body = ln === '' ? '<br>' : ln
+    if (li) {
+      if (listTag !== li) { if (listTag) out += `</${listTag}>`; out += `<${li}>`; listTag = li }
+      out += `<li${cls}>${body}</li>`
+    } else {
+      if (listTag) { out += `</${listTag}>`; listTag = null }
+      out += `<div${cls}>${body}</div>`
+    }
+  })
+  if (listTag) out += `</${listTag}>`
+  return out
 }
 
 // Convert a canvas media element (a node's `media`, or a free `view.images` entry) into a slideshow
