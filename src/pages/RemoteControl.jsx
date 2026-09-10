@@ -168,7 +168,7 @@ export default function RemoteControl({ code }) {
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '0 13px 12px' }}>
               {editNotes
-                ? <div ref={noteRef} contentEditable suppressContentEditableWarning
+                ? <div ref={noteRef} contentEditable suppressContentEditableWarning data-richtext="1"
                     inputMode="text" autoCorrect="on" autoCapitalize="sentences"
                     onPaste={e => { e.preventDefault(); const cd = e.clipboardData; const h = cd?.getData?.('text/html'); document.execCommand('insertHTML', false, h ? rcSanitizeHtml(h) : rcSanitizePlain(cd?.getData?.('text/plain') || '')); sendNote() }}
                     onInput={sendNote} onFocus={() => { noteFocusRef.current = true }} onBlur={() => { noteFocusRef.current = false; sendNote() }}
@@ -177,7 +177,7 @@ export default function RemoteControl({ code }) {
                       userSelect: 'text', WebkitUserSelect: 'text', WebkitUserModify: 'read-write', caretColor: '#6ee7a8', cursor: 'text' }} />
                 : (state?.note
                     ? (/[<][a-z/]/i.test(state.note)
-                        ? <div style={{ fontSize: '1.12rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
+                        ? <div data-richtext="1" style={{ fontSize: '1.12rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
                         : <div style={{ fontSize: '1.12rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>)
                     : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>)}
             </div>

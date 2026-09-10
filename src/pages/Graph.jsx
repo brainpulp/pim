@@ -9072,7 +9072,7 @@ function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex
         {fmtBtn('bold', <b>B</b>)}{fmtBtn('italic', <i>I</i>)}{fmtBtn('underline', <u>U</u>)}
       </div>
       <div style={{ position:'relative', ...(flex ? { flex:1, minHeight:0, display:'flex' } : {}) }}>
-        <div ref={ref} contentEditable suppressContentEditableWarning
+        <div ref={ref} contentEditable suppressContentEditableWarning data-richtext="1"
           onInput={sync} onPaste={onPaste} onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
           onFocus={() => { focusedRef.current = true }}
           onBlur={() => { focusedRef.current = false; sync() }}
