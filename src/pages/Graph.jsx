@@ -5366,8 +5366,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const addImageFileAt = useCallback((sx, sy) => {
     const input = document.createElement('input')
-    input.type = 'file'; input.accept = 'image/*'
-    input.onchange = () => addImageFile(input.files?.[0], sx, sy)
+    input.type = 'file'; input.accept = 'image/*'; input.multiple = true
+    input.onchange = () => [...(input.files || [])].forEach((f, i) => addImageFile(f, sx + i * 24, sy + i * 24))
     input.click()
   }, [addImageFile])
 
@@ -5406,8 +5406,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   const addVideoFileAt = useCallback((sx, sy) => {
     const input = document.createElement('input')
-    input.type = 'file'; input.accept = 'video/*'
-    input.onchange = () => addVideoFile(input.files?.[0], sx, sy)
+    input.type = 'file'; input.accept = 'video/*'; input.multiple = true
+    input.onchange = () => [...(input.files || [])].forEach((f, i) => addVideoFile(f, sx + i * 24, sy + i * 24))
     input.click()
   }, [addVideoFile])
 
