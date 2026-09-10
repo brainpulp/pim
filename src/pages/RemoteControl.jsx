@@ -9,6 +9,7 @@ export default function RemoteControl({ code }) {
   const [state, setState] = useState(null)             // { presenting, idx, total, stage, stages, title }
   const [thumb, setThumb] = useState(null)             // { cur, next (SVG strings), curLabel, nextLabel, clip }
   const chanRef = useRef(null)
+  const setupRef = useRef(null)   // lets send() rebuild the channel if it silently dropped
   const seenRef = useRef(false)
   const audioRef = useRef(null)
   const prevPosRef = useRef(null)
@@ -92,6 +93,7 @@ export default function RemoteControl({ code }) {
         }
       })
     }
+    setupRef.current = setup
     setup()
     // Phone woke from lock / tab refocused → re-say hello (and rebuild if the channel is gone).
     const onVis = () => { if (document.visibilityState === 'visible') { if (!chanRef.current) setup(); else hello() } }
@@ -111,13 +113,20 @@ export default function RemoteControl({ code }) {
     if (posSig !== prevPosRef.current) { prevPosRef.current = posSig; if (!mutedRef.current) beep() }
   }, [posSig, presenting]) // eslint-disable-line
 
+  const sendNow = (action) => {
+    const ch = chanRef.current; if (!ch) return false
+    try { ch.send({ type: 'broadcast', event: 'cmd', payload: { action } }); return true } catch { return false }
+  }
   const send = (action) => {
     ensureAudio()   // first tap unlocks the phone's audio so the confirmation beep can play
     if (navigator.vibrate) { try { navigator.vibrate(12) } catch { /* ignore */ } }
-    // Single send only — a command like Next must never fire twice (that would skip two). If the channel is
-    // gone, rebuild it (the visibility/keep-alive paths also do this) and drop this press rather than double it.
-    if (!chanRef.current) return
-    try { chanRef.current.send({ type: 'broadcast', event: 'cmd', payload: { action } }) } catch { /* ignore */ }
+    // SELF-HEALING: if the channel silently dropped (send fails / no channel), rebuild it and retry once.
+    // The retry ONLY fires when the first send definitely failed, so a command can never double-fire.
+    if (sendNow(action)) return
+    try { if (chanRef.current) supabase.removeChannel(chanRef.current) } catch { /* ignore */ }
+    chanRef.current = null
+    setupRef.current?.()                       // rebuild immediately
+    setTimeout(() => { if (!sendNow(action)) setTimeout(() => sendNow(action), 500) }, 350)   // retry after it subscribes
   }
 
   const dot = status === 'live' ? '#22e06a' : status === 'offline' ? '#f87171' : '#f6ad55'
