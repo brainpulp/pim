@@ -5346,64 +5346,84 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
   }, [addDrawing])
 
+  // Drop an actual image File onto the canvas at sim coords (shared by the file picker and OS drag-drop).
+  const addImageFile = useCallback((file, sx, sy) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const el = new window.Image()
+      el.onload = () => {
+        const MAX = 220
+        const ar = el.naturalWidth / el.naturalHeight || 1
+        const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
+        const imgId = addImage(reader.result, sx, sy, w, h, { z: 'front' })
+        uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId, { src: url }) })
+      }
+      el.src = reader.result
+    }
+    reader.readAsDataURL(file)
+  }, [addImage, updateImage, projectId])
+
   const addImageFileAt = useCallback((sx, sy) => {
     const input = document.createElement('input')
     input.type = 'file'; input.accept = 'image/*'
-    input.onchange = () => {
-      const file = input.files?.[0]; if (!file) return
-      const reader = new FileReader()
-      reader.onload = () => {
-        const el = new window.Image()
-        el.onload = () => {
-          const MAX = 220
-          const ar = el.naturalWidth / el.naturalHeight || 1
-          const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
-          const imgId = addImage(reader.result, sx, sy, w, h, { z: 'front' })
-          uploadImageDataUrl(reader.result, projectId).then(url => { if (url && url !== reader.result) updateImage(imgId, { src: url }) })
-        }
-        el.src = reader.result
-      }
-      reader.readAsDataURL(file)
-    }
+    input.onchange = () => addImageFile(input.files?.[0], sx, sy)
     input.click()
-  }, [addImage, updateImage, projectId])
+  }, [addImageFile])
 
   // Add a video from a local file: read it, size the box to the video's aspect ratio, then offload
   // the file to Storage (same bucket as images) and swap the inline data URL for the public URL.
+  // Drop an actual video File onto the canvas at sim coords (shared by the file picker and OS drag-drop).
+  const addVideoFile = useCallback((file, sx, sy) => {
+    if (!file) return
+    // Storage bucket caps files at 50 MB; a bigger upload fails silently and leaves a temporary
+    // blob URL that dies on reload. Refuse up front so the video never "works then breaks".
+    if (file.size > 45 * 1024 * 1024) {
+      alert(`That video is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the 45 MB upload limit, so it wouldn’t be saved (it would break on reload). Upload a shorter/smaller clip, or paste a YouTube link instead.`)
+      return
+    }
+    // Preview instantly from a local blob URL (a tiny string — never the whole file in state);
+    // upload the file to Storage in the background, then swap to the durable public URL.
+    const blobUrl = URL.createObjectURL(file)
+    const el = document.createElement('video')
+    const finish = (ar, playable) => {
+      const MAX = 320
+      const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
+      const title = file.name.replace(/\.[^/.]+$/, '')   // filename → title (for the outliner when made a child)
+      const vid = addVideo({ videoKind: 'file', src: blobUrl, title }, sx, sy, w, h)
+      uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(vid, { src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+      if (!playable) {
+        const ext = (file.name.split('.').pop() || '').toUpperCase()
+        alert(`Heads up: browsers can’t play ${ext ? '.' + ext : 'this'} video files (only MP4/H.264, WebM, or Ogg). It uploaded, but it won’t play here — re-export or convert it to MP4 and add that instead.`)
+      }
+    }
+    // The browser actually tries to decode: loadedmetadata = playable; error = unsupported (e.g. AVI/WMV/MKV).
+    el.onloadedmetadata = () => finish((el.videoWidth / el.videoHeight) || (16 / 9), true)
+    el.onerror = () => finish(16 / 9, false)
+    el.preload = 'metadata'
+    el.src = blobUrl
+  }, [addVideo, updateImage, projectId])
+
   const addVideoFileAt = useCallback((sx, sy) => {
     const input = document.createElement('input')
     input.type = 'file'; input.accept = 'video/*'
-    input.onchange = () => {
-      const file = input.files?.[0]; if (!file) return
-      // Storage bucket caps files at 50 MB; a bigger upload fails silently and leaves a temporary
-      // blob URL that dies on reload. Refuse up front so the video never "works then breaks".
-      if (file.size > 45 * 1024 * 1024) {
-        alert(`That video is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the 45 MB upload limit, so it wouldn’t be saved (it would break on reload). Upload a shorter/smaller clip, or paste a YouTube link instead.`)
-        return
-      }
-      // Preview instantly from a local blob URL (a tiny string — never the whole file in state);
-      // upload the file to Storage in the background, then swap to the durable public URL.
-      const blobUrl = URL.createObjectURL(file)
-      const el = document.createElement('video')
-      const finish = (ar, playable) => {
-        const MAX = 320
-        const w = ar >= 1 ? MAX : MAX * ar, h = ar >= 1 ? MAX / ar : MAX
-        const title = file.name.replace(/\.[^/.]+$/, '')   // filename → title (for the outliner when made a child)
-        const vid = addVideo({ videoKind: 'file', src: blobUrl, title }, sx, sy, w, h)
-        uploadMediaFile(file, projectId).then(url => { if (url) { updateImage(vid, { src: url }); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
-        if (!playable) {
-          const ext = (file.name.split('.').pop() || '').toUpperCase()
-          alert(`Heads up: browsers can’t play ${ext ? '.' + ext : 'this'} video files (only MP4/H.264, WebM, or Ogg). It uploaded, but it won’t play here — re-export or convert it to MP4 and add that instead.`)
-        }
-      }
-      // The browser actually tries to decode: loadedmetadata = playable; error = unsupported (e.g. AVI/WMV/MKV).
-      el.onloadedmetadata = () => finish((el.videoWidth / el.videoHeight) || (16 / 9), true)
-      el.onerror = () => finish(16 / 9, false)
-      el.preload = 'metadata'
-      el.src = blobUrl
-    }
+    input.onchange = () => addVideoFile(input.files?.[0], sx, sy)
     input.click()
-  }, [addVideo, updateImage, projectId])
+  }, [addVideoFile])
+
+  // Drag an image or video file from the OS (Windows Explorer / Finder) onto the canvas → drop it there.
+  const handleCanvasFileDrop = useCallback((e) => {
+    const files = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'))
+    if (!files.length) return
+    e.preventDefault()
+    if (readOnly) return
+    const [sx, sy] = clientToSim(e.clientX, e.clientY)
+    files.forEach((f, i) => {
+      const ox = i * 24   // fan out multiple files so they don't stack exactly
+      if (f.type.startsWith('video/')) addVideoFile(f, sx + ox, sy + ox)
+      else addImageFile(f, sx + ox, sy + ox)
+    })
+  }, [clientToSim, addVideoFile, addImageFile, readOnly])
 
   // Audio card size, and a filename/URL → title helper.
   const AUDIO_W = 260, AUDIO_H = 96
@@ -6469,6 +6489,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         )}
         <svg ref={svgRef}
           style={{ width: '100%', height: '100%', background: effectiveBg, display: 'block', cursor: 'default' }}
+          onDragOver={e => { if ([...(e.dataTransfer?.items || [])].some(it => it.kind === 'file')) e.preventDefault() }}
+          onDrop={handleCanvasFileDrop}
           onClick={e => { if (e.target !== e.currentTarget) return; if (didRubberBandRef.current) { didRubberBandRef.current = false; return } setSelected(null); setSelectedImageIds(new Set()); setSelectedNodeIds(new Set()); setSelectedDrawingId(null); setDrilledImageId(null); setShowBgPicker(false); setNotePopupId(null) }}
           onDoubleClick={e => {
             if (readOnly) return
