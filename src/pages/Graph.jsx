@@ -1452,6 +1452,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const views           = useGraphStore(s => s.views)
   const addNode         = useGraphStore(s => s.addNode)
   const addEdge         = useGraphStore(s => s.addEdge)
+  const detachNodeEdges = useGraphStore(s => s.detachNodeEdges)
+  const detachEdgesForIds = useGraphStore(s => s.detachEdgesForIds)
   const removeEdge      = useGraphStore(s => s.removeEdge)
   const deleteNode      = useGraphStore(s => s.deleteNode)
   const setAnchor       = useGraphStore(s => s.setAnchor)
@@ -1811,6 +1813,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const inC = (id) => { const c = vp[id]?.containedIn; return c && vp[c]?.shape === 'container' }
     return (inC(sId) || inC(tId)) ? 0.01 : 0.4
   }
+
+  // One-time cleanup per project: frames are a separate visual hierarchy, so strip any legacy parent/child
+  // edge that touches a frame node (e.g. a node that had children and was later turned into a frame).
+  const frameEdgeCleanRef = useRef(null)
+  useEffect(() => {
+    if (loading || readOnly || !loadOkRef.current) return
+    if (frameEdgeCleanRef.current === projectId) return
+    frameEdgeCleanRef.current = projectId   // runs once per loaded project (views load atomically with edges)
+    const gs = useGraphStore.getState()
+    const frameIds = new Set()
+    ;(gs.views || []).forEach(v => Object.entries(v.nodeProps || {}).forEach(([id, p]) => { if (p?.shape === 'frame') frameIds.add(id) }))
+    if (frameIds.size && gs.edges.some(e => frameIds.has(e.source) || frameIds.has(e.target))) detachEdgesForIds(frameIds)
+  }, [projectId, loading, readOnly, storeEdges, detachEdgesForIds])
 
   const saveDirtyRef = useRef(false)
   useEffect(() => {
@@ -4132,8 +4147,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const dx = (n.x||0)-sx, dy = (n.y||0)-sy
         return Math.sqrt(dx*dx+dy*dy) < NODE_R + 20
       })
-      if (hit) addEdge(sourceId, hit.id)
-      else setPendingEditId(addNode('New node', sourceId, sx, sy))
+      // If the source is itself a frame (frames are outside the edge graph), don't parent the new node to it.
+      const srcShape = viewNodePropsRef.current[sourceId]?.shape
+      const srcIsFrameLike = srcShape === 'frame' || srcShape === '3d' || srcShape === 'container'
+      if (hit) { if (!srcIsFrameLike) addEdge(sourceId, hit.id) }
+      else setPendingEditId(addNode('New node', srcIsFrameLike ? null : sourceId, sx, sy))
       setConnecting(null)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -7761,7 +7779,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetBorderFxAmp={v => setNodeViewProp(hn.id, 'borderFxAmp', v)}
               onSetBorderFxCount={v => setNodeViewProp(hn.id, 'borderFxCount', v)}
               onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
-              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none'); if (s === 'frame') addSlide(hn.id) }}
+              onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none'); if (s === 'frame') { addSlide(hn.id); detachNodeEdges(hn.id) } }}
               onDuplicate={() => { pushUndo(); handleDuplicateNode(hn.id); close() }}
               tags={hs.meta?.tags || []}
               allTags={allProjectTags}

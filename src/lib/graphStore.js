@@ -464,6 +464,12 @@ const useGraphStore = create((set, get) => ({
 
   removeEdge: (id) => set(s => ({ edges: s.edges.filter(e => e.id !== id) })),
 
+  // Frames are a separate VISUAL hierarchy (containedIn), never part of the parent/child edge graph.
+  // Drop every edge touching a node (used when a node becomes a frame).
+  detachNodeEdges: (nodeId) => set(s => ({ edges: s.edges.filter(e => e.source !== nodeId && e.target !== nodeId) })),
+  // Same, for a set of ids at once (load-time cleanup of legacy frame edges).
+  detachEdgesForIds: (ids) => set(s => { const set = ids instanceof Set ? ids : new Set(ids); return { edges: s.edges.filter(e => !set.has(e.source) && !set.has(e.target)) } }),
+
   reparentNode: (nodeId, newParentId) => set(s => {
     // Guard against cycles: re-parenting a node UNDER one of its own descendants would disconnect
     // that whole branch from the graph (unreachable → it vanishes from drill/hierarchy views and
