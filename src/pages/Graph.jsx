@@ -4125,6 +4125,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
       const hit = simNodesRef.current.find(n => {
         if (n.id === sourceId) return false
+        // Frames (and the frame-like 3D/container shapes) are a separate VISUAL hierarchy (containedIn),
+        // not part of the parent/child edge graph — never draw an edge to one.
+        const nvp = viewNodePropsRef.current[n.id] || {}
+        if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.shape === 'container') return false
         const dx = (n.x||0)-sx, dy = (n.y||0)-sy
         return Math.sqrt(dx*dx+dy*dy) < NODE_R + 20
       })
