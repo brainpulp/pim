@@ -1814,17 +1814,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     return (inC(sId) || inC(tId)) ? 0.01 : 0.4
   }
 
-  // One-time cleanup per project: frames are a separate visual hierarchy, so strip any legacy parent/child
-  // edge that touches a frame node (e.g. a node that had children and was later turned into a frame).
+  // One-time cleanup per project: frames, containers and card nodes (table/slideshow/kanban/list/strategy/
+  // media/3D) are a separate visual hierarchy, NOT part of the parent/child edge graph. Strip any legacy
+  // edge touching one (e.g. a node that had children and was later turned into a frame or a table card).
   const frameEdgeCleanRef = useRef(null)
   useEffect(() => {
     if (loading || readOnly || !loadOkRef.current) return
     if (frameEdgeCleanRef.current === projectId) return
     frameEdgeCleanRef.current = projectId   // runs once per loaded project (views load atomically with edges)
     const gs = useGraphStore.getState()
-    const frameIds = new Set()
-    ;(gs.views || []).forEach(v => Object.entries(v.nodeProps || {}).forEach(([id, p]) => { if (p?.shape === 'frame') frameIds.add(id) }))
-    if (frameIds.size && gs.edges.some(e => frameIds.has(e.source) || frameIds.has(e.target))) detachEdgesForIds(frameIds)
+    const ids = new Set()
+    ;(gs.views || []).forEach(v => Object.entries(v.nodeProps || {}).forEach(([id, p]) => { if (p?.shape === 'frame' || p?.shape === 'container' || p?.shape === '3d') ids.add(id) }))
+    ;(gs.nodes || []).forEach(n => { if (n.table || n.ytss || n.kanban || n.list || n.strategy || n.media) ids.add(n.id) })
+    if (ids.size && gs.edges.some(e => ids.has(e.source) || ids.has(e.target))) detachEdgesForIds(ids)
   }, [projectId, loading, readOnly, storeEdges, detachEdgesForIds])
 
   const saveDirtyRef = useRef(false)
@@ -4138,20 +4140,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const onUp = ue => {
       clearGestureCursor()
       const [sx, sy] = clientToSim(ue.clientX, ue.clientY)
+      // Frames, containers, 3D and card nodes (table/slideshow/kanban/list/strategy/media) are a separate
+      // VISUAL hierarchy (containedIn), not part of the parent/child edge graph — never draw an edge to one.
+      const nodesNow = useGraphStore.getState().nodes
+      const cardIds = new Set(nodesNow.filter(nd => nd.table || nd.ytss || nd.kanban || nd.list || nd.strategy || nd.media).map(nd => nd.id))
+      const isSep = (id) => { const sh = viewNodePropsRef.current[id]?.shape; return sh === 'frame' || sh === '3d' || sh === 'container' || cardIds.has(id) }
       const hit = simNodesRef.current.find(n => {
-        if (n.id === sourceId) return false
-        // Frames (and the frame-like 3D/container shapes) are a separate VISUAL hierarchy (containedIn),
-        // not part of the parent/child edge graph — never draw an edge to one.
-        const nvp = viewNodePropsRef.current[n.id] || {}
-        if (nvp.shape === 'frame' || nvp.shape === '3d' || nvp.shape === 'container') return false
+        if (n.id === sourceId || isSep(n.id)) return false
         const dx = (n.x||0)-sx, dy = (n.y||0)-sy
         return Math.sqrt(dx*dx+dy*dy) < NODE_R + 20
       })
-      // If the source is itself a frame (frames are outside the edge graph), don't parent the new node to it.
-      const srcShape = viewNodePropsRef.current[sourceId]?.shape
-      const srcIsFrameLike = srcShape === 'frame' || srcShape === '3d' || srcShape === 'container'
-      if (hit) { if (!srcIsFrameLike) addEdge(sourceId, hit.id) }
-      else setPendingEditId(addNode('New node', srcIsFrameLike ? null : sourceId, sx, sy))
+      if (hit) { if (!isSep(sourceId)) addEdge(sourceId, hit.id) }
+      else setPendingEditId(addNode('New node', isSep(sourceId) ? null : sourceId, sx, sy))
       setConnecting(null)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
