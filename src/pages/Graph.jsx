@@ -1223,6 +1223,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [showRemote, setShowRemote] = useState(false) // QR-pairing modal
   const remoteActionsRef = useRef({})
   const [blackScreen, setBlackScreen] = useState(false)
+  const [fsVeil, setFsVeil] = useState(false)   // black veil covering the canvas during a fullscreen→fullscreen hand-off (no flash)
   const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
   const setShowDraw = useGraphStore(s => s.setShowDraw)
   const showViews = useGraphStore(s => s.showViews)
@@ -6209,6 +6210,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       frameUnfoldTexts(idx).forEach(im => { nx[im.id] = im.reveal?.startEmpty ? 0 : 1 })
       return nx
     })
+
+    // Lift the fullscreen-handoff veil once the incoming content is on screen: a bit after any fullscreen
+    // overlay's own mount delay (150–200ms) so black covers the canvas the whole time instead of flashing it.
+    setTimeout(() => setFsVeil(false), 320)
   }
 
   // Unfolding text boxes: the text boxes inside a frame slide that reveal line-by-line, in reveal order.
@@ -6297,7 +6302,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     presentSlide(idx ?? 0, 'fwd')
   }
 
-  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  const exitPresentation = () => { if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setFsVeil(false); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
   exitPresentationRef.current = exitPresentation
 
@@ -8101,6 +8106,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
       {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} />}
 
+      {/* Fullscreen hand-off veil: black cover between one fullscreen overlay closing and the next opening,
+          so the canvas never flashes through. Below the overlays (4000), above the canvas. */}
+      {fsVeil && isPresenting && (
+        <div style={{ position:'fixed', inset:0, zIndex:3990, background:'#000', pointerEvents:'none' }} />
+      )}
+
       {/* Remote "black screen" — from the phone's Black button while presenting. Tap-to-clear or phone again. */}
       {blackScreen && isPresenting && (
         <div onClick={() => setBlackScreen(false)} style={{ position:'fixed', inset:0, zIndex:4500, background:'#000', cursor:'pointer' }} />
@@ -8326,12 +8337,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             }}
             onDeckNext={() => {   // last clip reached while presenting → next slide/build, stay fullscreen
               const id = ytssFullscreenId
-              setYtssFullscreenId(null); setYtssIdxMap(m => ({ ...m, [id]: 0 }))
+              setFsVeil(true); setYtssFullscreenId(null); setYtssIdxMap(m => ({ ...m, [id]: 0 }))
               advanceBuild(1)
             }}
             onDeckPrev={() => {   // ← on the first clip while presenting → previous slide, stay fullscreen
               const id = ytssFullscreenId
-              setYtssFullscreenId(null); setYtssIdxMap(m => ({ ...m, [id]: 0 }))
+              setFsVeil(true); setYtssFullscreenId(null); setYtssIdxMap(m => ({ ...m, [id]: 0 }))
               advanceBuild(-1)
             }} />
         )
@@ -8416,8 +8427,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           : { id: 'one', kind: 'video', src: videoFullscreen.src, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
           startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} presenting={isPresenting}
           onExit={() => setVideoFullscreen(null)}
-          onDeckNext={() => { setVideoFullscreen(null); advanceBuild(1) }}
-          onDeckPrev={() => { setVideoFullscreen(null); advanceBuild(-1) }} />
+          onDeckNext={() => { setFsVeil(true); setVideoFullscreen(null); advanceBuild(1) }}
+          onDeckPrev={() => { setFsVeil(true); setVideoFullscreen(null); advanceBuild(-1) }} />
       )}
       {RC_DEBUG && (
         <div style={{ position: 'fixed', left: 8, bottom: 8, zIndex: 99999, maxWidth: 460, background: 'rgba(0,0,0,0.9)', color: '#7CFC00', font: '12px ui-monospace, monospace', padding: '8px 10px', borderRadius: 6, border: '1px solid #2f6a48', whiteSpace: 'pre-wrap', pointerEvents: 'none' }}>
@@ -11967,6 +11978,11 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
             <rect x={-halfW + off} y={-halfH + off} width={halfW * 2} height={halfH * 2}
               fill={shadowColor} opacity={shadowOp} filter={`url(#${bId})`} />
           </g>
+          {/* The thinnest hairline border so the frame reads as an actual rectangle, not only a shadow.
+              Constant on-screen thickness; subtle, background-reactive. Hidden when selected (accent shows). */}
+          {!isSelected && <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
+            fill="none" stroke={lightBg ? '#000000' : '#ffffff'} strokeOpacity={0.22}
+            strokeWidth={Math.max(0.35, 1 / k)} style={{ pointerEvents: 'none' }} />}
           {/* Selected: a hair-thin accent outline (constant on-screen thickness). */}
           {isSelected && <rect x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
             fill="none" stroke="#6470f5" strokeWidth={Math.max(0.4, 1 / k)} style={{ pointerEvents: 'none' }} />}
