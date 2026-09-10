@@ -2698,6 +2698,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const cur = useGraphStore.getState().nodes.find(n => n.id === nodeId)
     if (cur?.ytss && to) setYtssClips(nodeId, (cur.ytss.clips || []).map(c => c.src === from ? { ...c, src: to } : c))
   }, [setYtssClips])
+  // Drop a clip whose upload failed (its blob src would never survive a reload anyway).
+  const removeClipBySrc = useCallback((nodeId, src) => {
+    const cur = useGraphStore.getState().nodes.find(n => n.id === nodeId)
+    if (cur?.ytss) setYtssClips(nodeId, (cur.ytss.clips || []).filter(c => c.src !== src))
+  }, [setYtssClips])
   const uploadSlideToYtss = useCallback((nodeId) => {
     const input = document.createElement('input')
     input.type = 'file'; input.accept = 'image/*,audio/*,video/*'
@@ -2712,7 +2717,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const kind = file.type.startsWith('audio/') ? 'audio' : 'video'
         const blobUrl = URL.createObjectURL(file)
         addSlideToYtss(nodeId, { kind, src: blobUrl, title })
-        uploadMediaFile(file, projectId).then(url => { if (url) { swapClipSrc(nodeId, blobUrl, url); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) } })
+        uploadMediaFile(file, projectId).then(url => {
+          if (url) { swapClipSrc(nodeId, blobUrl, url); setTimeout(() => URL.revokeObjectURL(blobUrl), 5000) }
+          else { removeClipBySrc(nodeId, blobUrl); window.alert(`Couldn't upload “${title}”. Files must be under 50 MB — this ${kind} wasn't saved.`) }
+        })
       }
     }
     input.click()

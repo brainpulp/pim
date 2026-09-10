@@ -5,13 +5,26 @@ const tb = () => supabase.from('pim_projects')
 const BUCKET = 'pim-models'
 
 // Strip base64 blobs from nodes before saving — keep storage URLs (start with https://)
+// A blob: URL only lives in the browser session that created it — persisting one guarantees a dead/corrupt
+// reference on the next load or another device. Uploads swap the blob for a hosted URL asynchronously; this
+// is the last line of defence so an in-flight (or failed) upload can never write a blob into the project.
+const isBlobUrl = s => typeof s === 'string' && s.startsWith('blob:')
+
 function sanitizeNodes(nodes) {
-  return nodes.map(n => {
+  return (nodes || []).map(n => {
     const out = { ...n }
     if (out.modelData && !out.modelData.startsWith('https://')) delete out.modelData
     if (out.modelThumb && !out.modelThumb.startsWith('https://')) delete out.modelThumb
+    // Drop slideshow clips still pointing at a blob URL (their hosted upload hasn't landed / failed).
+    if (out.ytss?.clips?.some(c => isBlobUrl(c.src))) out.ytss = { ...out.ytss, clips: out.ytss.clips.filter(c => !isBlobUrl(c.src)) }
+    if (isBlobUrl(out.media?.src)) { const m = { ...out.media }; delete m.src; out.media = m }
     return out
   })
+}
+
+// Same defence for free images / videos on each view (view.images[].src).
+function sanitizeViews(views) {
+  return (views || []).map(v => (v?.images?.some(im => isBlobUrl(im.src))) ? { ...v, images: v.images.filter(im => !isBlobUrl(im.src)) } : v)
 }
 
 export async function listProjects() {
@@ -45,7 +58,7 @@ export async function saveProject(id, { nodes, edges, views, activeViewId, prope
   const patch = {
     nodes: sanitizeNodes(nodes),
     edges,
-    views,
+    views: sanitizeViews(views),
     active_view_id: activeViewId,
     updated_at: new Date().toISOString(),
   }
