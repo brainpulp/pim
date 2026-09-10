@@ -2149,6 +2149,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     })
   }, [loading, readOnly, storeNodes, activeViewId, updateLabel, updateImage])
   const storeNodeById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n])), [storeNodes])
+  // Speaker notes can live on a node OR on a free image (either can be made a slide) — read/write generically.
+  const getNotesFor = (id) => { const im = (activeView?.images || []).find(i => i.id === id); return im ? (im.speakerNotes || '') : (storeNodeById[id]?.speakerNotes || '') }
+  const setNotesFor = (id, html) => { const im = (activeView?.images || []).find(i => i.id === id); if (im) updateImage(id, { speakerNotes: html }); else setSpeakerNotes(id, html) }
   const nodeLabelById  = useMemo(() => Object.fromEntries(storeNodes.map(n => [n.id, n.label])), [storeNodes])
   const childrenOrdered = useMemo(() => { const m = {}; storeEdges.forEach(e => { (m[e.source] = m[e.source] || []).push(e.target) }); return m }, [storeEdges])
   // Flatten a node's whole subtree into indented rows (edge order; cycle-safe) for the list card.
@@ -6589,8 +6592,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
     step: showStep, steps: showSteps,
     title: curSlideNode?.label || '',
-    noteId: curSlideNode?.id || null,   // target node id so the phone can edit this slide's notes
-    note: (curSlideNode ? (storeNodeById[curSlideNode.id]?.speakerNotes || '') : '').slice(0, 4000),
+    noteId: curSlideNode?.id || null,   // target id (node OR image) so the phone can edit this slide's notes
+    note: (curSlideNode ? getNotesFor(curSlideNode.id) : '').slice(0, 4000),
     nextTitle: (presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx + 1]?.label : '') || '',
     totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
     slideMs: Math.round(slideMs / 1000) * 1000,
@@ -8205,6 +8208,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
         })()}
 
+        {/* Notes chip for a free IMAGE made into a slide. Pegged to the image's bottom-left. */}
+        {!readOnly && !isPresenting && timelineFrameId == null && selectedImageIds.size === 1 && (() => {
+          const im = (activeView?.images || []).find(i => i.id === [...selectedImageIds][0])
+          if (!im || !slideIds.includes(im.id)) return null
+          const left = T.x + ((im.x || 0) - (im.width || 360) / 2) * T.k
+          const top = T.y + ((im.y || 0) + (im.height || 240) / 2) * T.k + 8
+          const hasNotes = !!(im.speakerNotes || '').replace(/<[^>]*>/g, '').trim()
+          const notesOpen = notesFrameId === im.id
+          return (
+            <button onClick={() => setNotesFrameId(id => id === im.id ? null : im.id)} title="Speaker notes (shown on your phone)"
+              style={{ position: 'absolute', left, top, zIndex: 40, background: notesOpen ? '#1e2547' : '#12122a', border: `1px solid ${notesOpen ? '#5b6af0' : '#2d3a6a'}`, color: notesOpen ? '#dbe4ff' : (hasNotes ? '#c5d0ff' : '#9fb0e8'), borderRadius: 9, padding: '7px 11px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              📝 Notes{hasNotes ? ' •' : ''}
+            </button>
+          )
+        })()}
+
         {/* Container options — shown when a container node is selected. */}
         {!readOnly && !isPresenting && selected?.type === 'node' && getVP(selected.id).shape === 'container' && (() => {
           const cid = selected.id, cvp = getVP(cid)
@@ -8455,21 +8474,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
       {/* Canvas speaker-notes popup — a VERTICAL panel pegged to the selected frame, opened only via the
           📝 Notes chip (next to Stages). Rich text (B/I/U); shows on the phone. */}
-      {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node' && notesFrameId === selected.id
-        && (frameSimNodes.some(n => n.id === selected.id) || slideIds.includes(selected.id)) && (() => {
-        const sn = storeNodeById[selected.id] || {}
-        const label = sn.label || selectedNode?.label || 'Frame'
-        const slideNo = slideIds.indexOf(selected.id) + 1   // 0 when the frame isn't in the slideshow
-        // Peg to the element's bottom-left in screen space (below the chip row); flip above if off-screen.
-        // Works for frames and for non-frame nodes made into slides (box comes from the node's shape).
-        const fvp = getVP(selected.id)
-        const fsn = simNodesRef.current.find(n => n.id === selected.id)
-        const fr = NODE_R * (fvp.scale || 1)
-        let hw, hh
-        if (fvp.shape === 'frame') { const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr); hw = fvp.frameHalfW ?? dHW; hh = fvp.frameHalfH ?? dHH }
-        else { const { halfW, halfH } = shapeDims(fvp.shape || 'circle', fr, sn.label || '', Math.max(9, Math.round(12 * (fvp.scale || 1))), fvp.labelWidth); hw = halfW; hh = halfH }
-        const anchorLeft = T.x + ((fsn?.x ?? 0) - hw) * T.k
-        const anchorBottom = T.y + ((fsn?.y ?? 0) + hh) * T.k
+      {!isPresenting && !readOnly && !showSlideGrid && notesFrameId && (() => {
+        const img = (activeView?.images || []).find(i => i.id === notesFrameId)
+        const isNode = !img && selected?.type === 'node' && selected.id === notesFrameId
+        if (!isNode && !(img && selectedImageIds.has(notesFrameId))) return null   // target no longer selected
+        const label = img ? (img.title || (img.type === 'text' ? 'Text' : 'Photo')) : (storeNodeById[notesFrameId]?.label || selectedNode?.label || 'Frame')
+        const slideNo = slideIds.indexOf(notesFrameId) + 1
+        // Peg to the element's bottom-left in screen space; flip above if off-screen. Works for frames,
+        // non-frame nodes, and free images made into slides (box comes from the element's own geometry).
+        let cx, cy, hw, hh
+        if (img) { cx = img.x || 0; cy = img.y || 0; hw = (img.width || 360) / 2; hh = (img.height || 240) / 2 }
+        else {
+          const fvp = getVP(notesFrameId); const fsn = simNodesRef.current.find(n => n.id === notesFrameId)
+          const fr = NODE_R * (fvp.scale || 1); cx = fsn?.x ?? 0; cy = fsn?.y ?? 0
+          if (fvp.shape === 'frame') { const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr); hw = fvp.frameHalfW ?? dHW; hh = fvp.frameHalfH ?? dHH }
+          else { const { halfW, halfH } = shapeDims(fvp.shape || 'circle', fr, label, Math.max(9, Math.round(12 * (fvp.scale || 1))), fvp.labelWidth); hw = halfW; hh = halfH }
+        }
+        const anchorLeft = T.x + (cx - hw) * T.k
+        const anchorBottom = T.y + (cy + hh) * T.k
         const PW = 300, PH = Math.min(window.innerHeight * 0.52, 380)
         const left = Math.max(8, Math.min(anchorLeft, window.innerWidth - PW - 8))
         let top = anchorBottom + 48
@@ -8490,11 +8512,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               </div>
               <span style={{ fontSize:T_FS.sm, fontWeight:T_FW.bold, color:T_C.tx, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
             </div>
-            <RichNotes key={selected.id} html={sn.speakerNotes || ''} flex
-              onChange={v => setSpeakerNotes?.(selected.id, v)}
+            <RichNotes key={notesFrameId} html={getNotesFor(notesFrameId)} flex
+              onChange={v => setNotesFor(notesFrameId, v)}
               placeholder={`Notes for “${label}”…`} minHeight={120} />
             {slideNo === 0 && (
-              <button onClick={() => addSlide(selected.id)}
+              <button onClick={() => addSlide(notesFrameId)}
                 style={T_BTN('subtle', { padding:`${T_SP[2]}px ${T_SP[3]}px`, fontSize:T_FS.sm, color:T_C.tx2 })}>+ Add to slideshow</button>
             )}
             <span style={{ fontSize:'0.62rem', color:T_C.tx3, textAlign:'right' }}>shows on your phone</span>
@@ -8518,7 +8540,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       ))}
 
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
-      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} thumb={remoteThumb} onPhoneConnect={() => setShowRemote(false)} onSetNote={(id, html) => setSpeakerNotes(id, html)} />}
+      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} thumb={remoteThumb} onPhoneConnect={() => setShowRemote(false)} onSetNote={(id, html) => setNotesFor(id, html)} />}
 
       {/* Fullscreen hand-off veil: black cover between one fullscreen overlay closing and the next opening,
           so the canvas never flashes through. Below the overlays (4000), above the canvas. */}
