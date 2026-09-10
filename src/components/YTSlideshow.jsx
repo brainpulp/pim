@@ -457,11 +457,60 @@ function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
     maskImage: `linear-gradient(to right, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent), linear-gradient(to bottom, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent)`,
     WebkitMaskComposite: 'source-in', maskComposite: 'intersect',
   } : null
+  // Reframe: an optional per-clip scale+pan applied over the base `contain` fit. z = zoom (≥1),
+  // x/y = pan in % of the frame. Absent frame → identical to the old plain `contain` render.
+  const fr = clip.frame
+  const frameTf = (fr && ((fr.z && fr.z !== 1) || fr.x || fr.y))
+    ? { transform: `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`, transformOrigin: 'center center' }
+    : null
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
       <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`,
-        filter: b ? `blur(${b}px)` : 'none', opacity: op, ...(feather || {}) }} />
+        filter: b ? `blur(${b}px)` : 'none', opacity: op, ...(frameTf || {}), ...(feather || {}) }} />
       {tint && <div style={{ position: 'absolute', inset: 0, background: tint.color, opacity: tint.amount, mixBlendMode: 'color', pointerEvents: 'none' }} />}
+    </div>
+  )
+}
+
+// ── Reframe control (inspector): drag inside the mini-preview to PAN, slider to ZOOM. Fully
+//    self-contained — it only patches `clip.frame`, so it can't disturb any canvas gesture. ──
+function ImageReframe({ clip, onPatch }) {
+  const fr = clip.frame || { z: 1, x: 0, y: 0 }
+  const boxRef = useRef(null)
+  const onDown = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const box = boxRef.current; if (!box) return
+    const w = box.clientWidth || 210, h = box.clientHeight || 118
+    const z = fr.z || 1
+    const sx = e.clientX, sy = e.clientY, ox = fr.x || 0, oy = fr.y || 0
+    const move = (me) => {
+      // Track the cursor 1:1: on-screen pan = x% · z, so divide the pixel delta by z.
+      const nx = ox + ((me.clientX - sx) / w) * 100 / z
+      const ny = oy + ((me.clientY - sy) / h) * 100 / z
+      onPatch({ frame: { z, x: Math.max(-90, Math.min(90, nx)), y: Math.max(-90, Math.min(90, ny)) } })
+    }
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  const setZoom = (z) => onPatch({ frame: { z, x: fr.x || 0, y: fr.y || 0 } })
+  const framed = (fr.z && fr.z !== 1) || fr.x || fr.y
+  const tf = `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 11, color: '#aeb8ff', fontWeight: 600 }}>Reframe <span style={{ color: '#7d84a4', fontWeight: 400 }}>drag to pan</span></span>
+        {framed ? <button onClick={() => onPatch({ frame: undefined })} style={{ background: 'transparent', border: 'none', color: '#8fa0d8', cursor: 'pointer', fontSize: 10.5, textDecoration: 'underline' }}>Reset</button> : null}
+      </div>
+      <div ref={boxRef} onMouseDown={onDown} title="Drag to reposition the image within the slide"
+        style={{ position: 'relative', width: '100%', height: 118, borderRadius: 6, overflow: 'hidden', cursor: 'grab', background: '#000', border: '1px solid #2a3358', userSelect: 'none' }}>
+        <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`, transform: tf, transformOrigin: 'center center', pointerEvents: 'none' }} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ fontSize: 11, color: '#8fa0d8' }}>Zoom</span>
+        <input type="range" min={1} max={4} step={0.02} value={fr.z || 1} onChange={e => setZoom(parseFloat(e.target.value))}
+          style={{ flex: 1, accentColor: '#5b6af0', cursor: 'pointer' }} />
+        <span style={{ fontSize: 10.5, color: '#c5d0ff', minWidth: 30, textAlign: 'right' }}>{(fr.z || 1).toFixed(2)}×</span>
+      </div>
     </div>
   )
 }
@@ -1045,6 +1094,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                     onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
                 </div>
               )}
+              {k === 'image' && <ImageReframe clip={cur} onPatch={p => patch(sel, p)} />}
               {timed && (
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 12px' }}>
                   {(k === 'youtube' || k === 'video') && (
