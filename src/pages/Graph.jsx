@@ -1244,7 +1244,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [presentElapsed, setPresentElapsed] = useState(0)   // live elapsed ms during a run (for the nav-bar timer)
   // The on-screen control/slide-count bar during a presentation is optional (persisted). When hidden, a tiny
   // restore handle remains so the on-stage control is never fully lost. Keyboard/phone always drive the deck.
-  const [remoteThumb, setRemoteThumb] = useState(null)   // {cur,next SVG strings, labels, clip} for the phone preview
+  const remoteThumbRef = useRef({ sig: '', val: null })   // cache for the phone-preview thumbnail (rebuilt only on slide/clip change)
   const [presentBarHidden, setPresentBarHidden] = useState(() => { try { return localStorage.getItem('pim_present_bar_hidden') === '1' } catch { return false } })
   const togglePresentBar = (v) => setPresentBarHidden(prev => { const nv = typeof v === 'boolean' ? v : !prev; try { localStorage.setItem('pim_present_bar_hidden', nv ? '1' : '0') } catch { /* ignore */ } return nv })
   const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
@@ -6485,26 +6485,32 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     slideMs: Math.round(slideMs / 1000) * 1000,
   }
 
-  // Phone canvas preview: render the current + next slide to a compact SVG string (plus the currently playing
-  // clip's name, so uploaded videos with no still frame are identifiable) and stash it in state. Done in an
-  // EFFECT, never during render — renderToStaticMarkup swaps React's hook dispatcher, so calling it inline
-  // (e.g. inside useMemo) corrupts this component's hooks (React #310). Recomputes only on slide/clip change.
-  useEffect(() => {
-    if (presentingSlideIdx === null) { setRemoteThumb(null); return }
-    const toSvg = fn => { try { return fn ? renderToStaticMarkup(
-      <SlideThumbSVG fn={fn} getVP={getVP} viewImages={activeView?.images || []} allSimNodes={simNodesRef.current}
-        storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={220} />) : null } catch { return null } }
-    let clip = null
-    if (activeShowId) {
-      const yn = storeNodes.find(n => n.id === activeShowId)
-      const clips = yn?.ytss?.clips || []
-      const ci = Math.max(0, Math.min(ytssIdxMap[activeShowId] ?? 0, clips.length - 1))
-      const c = clips[ci]
-      if (c) clip = { label: c.label || c.title || `${clipKind(c) === 'youtube' ? 'YouTube' : clipKind(c)} ${ci + 1}`, n: ci + 1, of: clips.length }
+  // Phone canvas preview: the current + next slide rendered to a compact SVG string (plus the currently
+  // playing clip's name, so uploaded videos with no still frame are identifiable). Plain value, NOT a hook —
+  // it sits after the `if (loading) return` guard above, so a hook here would change the hook count between
+  // renders (React #310). A ref caches the result so renderToStaticMarkup only runs on a slide/clip change.
+  let remoteThumb = null
+  if (presentingSlideIdx !== null) {
+    const sig = `${presentingSlideIdx}|${activeShowId || ''}|${showStep}|${slideSimNodes.length}`
+    if (remoteThumbRef.current.sig === sig) {
+      remoteThumb = remoteThumbRef.current.val
+    } else {
+      const toSvg = fn => { try { return fn ? renderToStaticMarkup(
+        <SlideThumbSVG fn={fn} getVP={getVP} viewImages={activeView?.images || []} allSimNodes={simNodesRef.current}
+          storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={220} />) : null } catch { return null } }
+      let clip = null
+      if (activeShowId) {
+        const yn = storeNodes.find(n => n.id === activeShowId)
+        const clips = yn?.ytss?.clips || []
+        const ci = Math.max(0, Math.min(ytssIdxMap[activeShowId] ?? 0, clips.length - 1))
+        const c = clips[ci]
+        if (c) clip = { label: c.label || c.title || `${clipKind(c) === 'youtube' ? 'YouTube' : clipKind(c)} ${ci + 1}`, n: ci + 1, of: clips.length }
+      }
+      const cur = slideSimNodes[presentingSlideIdx], nxt = slideSimNodes[presentingSlideIdx + 1]
+      remoteThumb = { cur: toSvg(cur), next: toSvg(nxt), curLabel: cur?.label || '', nextLabel: nxt?.label || '', clip }
+      remoteThumbRef.current = { sig, val: remoteThumb }
     }
-    const cur = slideSimNodes[presentingSlideIdx], nxt = slideSimNodes[presentingSlideIdx + 1]
-    setRemoteThumb({ cur: toSvg(cur), next: toSvg(nxt), curLabel: cur?.label || '', nextLabel: nxt?.label || '', clip })
-  }, [presentingSlideIdx, activeShowId, showStep, slideSimNodes.length]) // eslint-disable-line -- recompute on slide/clip change only
+  }
 
   // Group bounding boxes for selected groups
   const selectedGroupIds = new Set()
