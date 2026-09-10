@@ -908,11 +908,13 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                   <option value="delay">After a delay</option>
                 </select>
                 {cur.trigger === 'delay' && <input style={{ ...inp, width: 46 }} defaultValue={String((cur.delayMs || 1500) / 1000)} key={'d' + cur.id}
+                  onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }}
                   onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }} title="seconds" />}
               </div>
               {(k === 'image' || k === 'text') && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span>Show for</span>
                   <input style={{ ...inp, width: 48 }} defaultValue={String(cur.duration || 5)} key={'dur' + cur.id}
+                    onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }}
                     onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
                 </div>
               )}

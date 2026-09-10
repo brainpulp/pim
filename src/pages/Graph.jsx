@@ -1400,6 +1400,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // timelinePlaying = running the builds (non-destructive overlay). Decoupled from node selection so the
   // strip stays up while you drag members around.
   const [timelineFrameId, setTimelineFrameId] = useState(null)
+  const [notesFrameId, setNotesFrameId] = useState(null)   // frame whose speaker-notes popup is open (pegged to the frame)
   const [timelineStageIdx, setTimelineStageIdx] = useState(0)
   const [timelinePlaying, setTimelinePlaying] = useState(false)
   const [timelineRecordPulse, setTimelineRecordPulse] = useState(0)   // bump → "●recorded" flash on marker
@@ -8135,9 +8136,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           })} />
         )}
 
-        {/* "Edit builds" entry chip — shown when a frame is selected and we're not already editing it. */}
+        {/* "Edit builds" + "Notes" entry chips — pinned to the selected frame's bottom-left corner. */}
         {!readOnly && !isPresenting && timelineFrameId == null && selected?.type === 'node' && getVP(selected.id).shape === 'frame' && (() => {
-          // Pin the chip to the frame's bottom-left corner (screen space), not the screen's corner.
+          // Pin the chips to the frame's bottom-left corner (screen space), not the screen's corner.
           const fvp = getVP(selected.id)
           const fsn = simNodesRef.current.find(n => n.id === selected.id)
           const fr = NODE_R * (fvp.scale || 1)
@@ -8145,11 +8146,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
           const left = T.x + ((fsn?.x ?? 0) - hw) * T.k
           const top = T.y + ((fsn?.y ?? 0) + hh) * T.k + 8
+          const hasNotes = !!(storeNodeById[selected.id]?.speakerNotes || '').replace(/<[^>]*>/g, '').trim()
+          const notesOpen = notesFrameId === selected.id
           return (
-            <button onClick={() => enterTimeline(selected.id)}
-              style={{ position: 'absolute', left, top, zIndex: 40, background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 9, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 7 }}>
-              🎬 Stages{(fvp.stages?.length) ? ` · ${fvp.stages.length}` : ''}
-            </button>
+            <div style={{ position: 'absolute', left, top, zIndex: 40, display: 'flex', gap: 6 }}>
+              <button onClick={() => enterTimeline(selected.id)}
+                style={{ background: '#12122a', border: '1px solid #2d3a6a', color: '#c5d0ff', borderRadius: 9, padding: '7px 12px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                🎬 Stages{(fvp.stages?.length) ? ` · ${fvp.stages.length}` : ''}
+              </button>
+              <button onClick={() => setNotesFrameId(id => id === selected.id ? null : selected.id)} title="Speaker notes (shown on your phone)"
+                style={{ background: notesOpen ? '#1e2547' : '#12122a', border: `1px solid ${notesOpen ? '#5b6af0' : '#2d3a6a'}`, color: notesOpen ? '#dbe4ff' : (hasNotes ? '#c5d0ff' : '#9fb0e8'), borderRadius: 9, padding: '7px 11px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                📝 Notes{hasNotes ? ' •' : ''}
+              </button>
+            </div>
           )
         })()}
 
@@ -8401,33 +8410,49 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         />
       )}
 
-      {/* Canvas speaker-notes inspector — floating HORIZONTAL bar along the bottom when a single FRAME is
-          selected (whether or not it's in the slideshow). Rich text (B/I/U); shows on the phone. */}
-      {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node'
+      {/* Canvas speaker-notes popup — a VERTICAL panel pegged to the selected frame, opened only via the
+          📝 Notes chip (next to Stages). Rich text (B/I/U); shows on the phone. */}
+      {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node' && notesFrameId === selected.id
         && (frameSimNodes.some(n => n.id === selected.id) || slideIds.includes(selected.id)) && (() => {
         const sn = storeNodeById[selected.id] || {}
         const label = sn.label || selectedNode?.label || 'Frame'
         const slideNo = slideIds.indexOf(selected.id) + 1   // 0 when the frame isn't in the slideshow
+        // Peg to the frame's bottom-left in screen space (below the chip row); flip above if it'd run off-screen.
+        const fvp = getVP(selected.id)
+        const fsn = simNodesRef.current.find(n => n.id === selected.id)
+        const fr = NODE_R * (fvp.scale || 1)
+        const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
+        const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
+        const anchorLeft = T.x + ((fsn?.x ?? 0) - hw) * T.k
+        const anchorBottom = T.y + ((fsn?.y ?? 0) + hh) * T.k
+        const PW = 300, PH = Math.min(window.innerHeight * 0.52, 380)
+        const left = Math.max(8, Math.min(anchorLeft, window.innerWidth - PW - 8))
+        let top = anchorBottom + 48
+        if (top + PH > window.innerHeight - 8) top = Math.max(8, anchorBottom - PH - 4)
         return (
           <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-            style={{ position:'fixed', left:'50%', bottom:T_SP[5], transform:'translateX(-50%)', zIndex:60, ...T_PANEL(),
-              width:'min(720px, 94vw)', maxHeight:'42vh', padding:`${T_SP[4]}px ${T_SP[5]}px`,
-              display:'flex', flexDirection:'column', gap:T_SP[2] }}>
-            <div style={{ display:'flex', alignItems:'baseline', gap:T_SP[3] }}>
-              <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
-                SPEAKER NOTES{slideNo > 0 ? ` · SLIDE ${slideNo}` : ''}
-              </span>
+            style={{ position:'fixed', left, top, zIndex:60, ...T_PANEL(),
+              width:PW, height:PH, padding:`${T_SP[4]}px ${T_SP[4]}px`,
+              display:'flex', flexDirection:'column', gap:T_SP[3] }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:T_SP[2] }}>
+                <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
+                  SPEAKER NOTES{slideNo > 0 ? ` · SLIDE ${slideNo}` : ''}
+                </span>
+                <div style={{ flex:1 }} />
+                <button onClick={() => setNotesFrameId(null)} title="Close"
+                  style={{ background:'transparent', border:'none', color:T_C.tx3, cursor:'pointer', fontSize:16, lineHeight:1, padding:0 }}>✕</button>
+              </div>
               <span style={{ fontSize:T_FS.sm, fontWeight:T_FW.bold, color:T_C.tx, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
-              <div style={{ flex:1 }} />
-              {slideNo === 0 && (
-                <button onClick={() => addSlide(selected.id)}
-                  style={T_BTN('subtle', { padding:`2px ${T_SP[3]}px`, fontSize:T_FS.xs, color:T_C.tx2 })}>+ Add to slideshow</button>
-              )}
-              <span style={{ fontSize:'0.62rem', color:T_C.tx3 }}>on your phone</span>
             </div>
-            <RichNotes key={selected.id} html={sn.speakerNotes || ''}
+            <RichNotes key={selected.id} html={sn.speakerNotes || ''} flex
               onChange={v => setSpeakerNotes?.(selected.id, v)}
-              placeholder={`Notes for “${label}”…`} minHeight={72} />
+              placeholder={`Notes for “${label}”…`} minHeight={120} />
+            {slideNo === 0 && (
+              <button onClick={() => addSlide(selected.id)}
+                style={T_BTN('subtle', { padding:`${T_SP[2]}px ${T_SP[3]}px`, fontSize:T_FS.sm, color:T_C.tx2 })}>+ Add to slideshow</button>
+            )}
+            <span style={{ fontSize:'0.62rem', color:T_C.tx3, textAlign:'right' }}>shows on your phone</span>
           </div>
         )
       })()}
