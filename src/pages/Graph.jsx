@@ -8200,6 +8200,39 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           </span>
         </div>}
 
+        {/* Vertical INSERT toolbar — left edge. Same items as the right-click Insert menu, dropped at the
+            viewport centre. */}
+        {!readOnly && !isPresenting && timelineFrameId == null && (() => {
+          const rect = () => svgRef.current?.getBoundingClientRect()
+          const cSim = () => { const r = rect(); return zoomTransformRef.current.invert([(r?.width || 800) / 2, (r?.height || 600) / 2]) }
+          const place = (id, sx, sy) => setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = sx; sn.y = sy; sn.fx = sx; sn.fy = sy } scheduleRender() }, 0)
+          const items = [
+            ['▭', 'Frame', () => addFrameToCenter()],
+            ['✚', 'Node', () => { const r = rect(); const c = cSim(); setNewNodeAt({ px: (r?.left || 0) + (r?.width || 800) / 2, py: (r?.top || 0) + (r?.height || 600) / 2, sx: c[0], sy: c[1] }) }],
+            ['🅃', 'Text box', () => { const c = cSim(); const tid = addTextBox(c[0], c[1], 220, 60, '<div>Text</div>'); setSelectedNodeIds(new Set()); setSelected(null); setSelectedImageIds(new Set([tid])) }],
+            ['▦', 'Table', () => { pushUndo(); const c = cSim(); const id = addTableNode(c[0], c[1]); if (drillRoot) addEdge(drillRoot, id); setSelected({ id, type: 'node' }); place(id, c[0], c[1]) }],
+            ['🗂️', 'Kanban board', () => { pushUndo(); const c = cSim(); const id = addKanbanNode(c[0], c[1]); if (drillRoot) addEdge(drillRoot, id); setSelected({ id, type: 'node' }); place(id, c[0], c[1]) }],
+            ['⬭', 'Container', () => addContainerToCenter()],
+            ['🖼️', 'Image…', () => { const c = cSim(); addImageFileAt(c[0], c[1]) }],
+            ['🎬', 'Video (upload)', () => { const c = cSim(); addVideoFileAt(c[0], c[1]) }],
+            ['🎵', 'Audio (upload)', () => { const c = cSim(); addAudioFileAt(c[0], c[1]) }],
+            ['📺', 'Slideshow', () => { pushUndo(); const c = cSim(); const id = addYtssNode(c[0], c[1]); place(id, c[0], c[1]); setYtssInspectorId(id) }],
+            ['🔗', 'Link…', () => { const c = cSim(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), c[0], c[1]) }],
+          ]
+          return (
+            <div onMouseDown={e => e.stopPropagation()}
+              style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', zIndex: 38, display: 'flex', flexDirection: 'column', gap: 2,
+                background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, padding: 5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+              {items.map(([icon, label, fn]) => (
+                <button key={label} title={label} onClick={fn}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#1e2547' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                  style={{ width: 34, height: 34, borderRadius: 8, border: 'none', background: 'transparent', color: '#c5d0ff', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{icon}</button>
+              ))}
+            </div>
+          )
+        })()}
+
         {/* AI assistant command bar (Cmd/Ctrl+J or the ✦ button) */}
         {!readOnly && !isPresenting && (
           <CommandBar getSelection={() => ({
