@@ -5248,11 +5248,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const stopTimelinePlay = useCallback(() => {
     if (timelinePlayTimerRef.current) { clearTimeout(timelinePlayTimerRef.current); timelinePlayTimerRef.current = null }
     setTimelinePlaying(false)
-    exitStagePreview()   // clears overlay + restores base positions
-    // Re-pose the doc to whatever stage we ended on so edit mode resumes cleanly.
-    const frameId = timelineFrameIdRef.current
-    if (frameId != null) setTimeout(() => applyStageToDoc(frameId, timelineStageIdx, false), 300)
-  }, [exitStagePreview, applyStageToDoc, timelineStageIdx])
+    exitStagePreview()   // clears overlay + restores the real (base) positions — NON-destructive.
+    // NOTE: we deliberately do NOT re-pose the doc to the ended-on stage here. Playing a build is a
+    // preview; writing a stage's snapshot back into the document on stop could overwrite the real
+    // arrangement with a bad/collapsed capture (data loss). Editing a specific stage still poses it.
+  }, [exitStagePreview])
 
   const timelinePlayNext = useCallback(() => {
     const frameId = timelineFrameIdRef.current; if (frameId == null) return
