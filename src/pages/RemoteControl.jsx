@@ -12,6 +12,9 @@ export default function RemoteControl({ code }) {
   const seenRef = useRef(false)
   const audioRef = useRef(null)
   const prevPosRef = useRef(null)
+  const [muted, setMuted] = useState(() => { try { return localStorage.getItem('pim_remote_mute') === '1' } catch { return false } })
+  const toggleMute = () => setMuted(m => { const nm = !m; try { localStorage.setItem('pim_remote_mute', nm ? '1' : '0') } catch { /* ignore */ } return nm })
+  const mutedRef = useRef(muted); mutedRef.current = muted
 
   // Short confirmation beep so you can HEAR that a press registered and the deck actually advanced (a ghost
   // click that doesn't advance makes no sound). Web Audio needs a user gesture to start — unlocked on tap.
@@ -63,7 +66,7 @@ export default function RemoteControl({ code }) {
   useEffect(() => {
     if (!presenting) { prevPosRef.current = null; return }
     if (prevPosRef.current == null) { prevPosRef.current = posSig; return }   // don't beep on the first state
-    if (posSig !== prevPosRef.current) { prevPosRef.current = posSig; beep() }
+    if (posSig !== prevPosRef.current) { prevPosRef.current = posSig; if (!mutedRef.current) beep() }
   }, [posSig, presenting]) // eslint-disable-line
 
   const send = (action) => {
@@ -86,6 +89,9 @@ export default function RemoteControl({ code }) {
         <span style={{ width: 10, height: 10, borderRadius: '50%', background: dot, boxShadow: `0 0 8px ${dot}` }} />
         <span style={{ fontSize: '0.82rem', color: '#a9b6e8' }}>{statusText}</span>
         <div style={{ flex: 1 }} />
+        <button onClick={toggleMute} title={muted ? 'Unmute beep' : 'Mute beep'}
+          style={{ background: muted ? 'transparent' : '#12291d', border: `1px solid ${muted ? '#2a3358' : '#2f7a4a'}`, color: muted ? '#8090b8' : '#6ee7a8',
+            borderRadius: 8, padding: '4px 10px', fontSize: '0.82rem', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>{muted ? '🔇' : '🔔'}</button>
         {state && (
           <span style={{ fontSize: '0.82rem', color: '#c5d0ff', fontWeight: 600 }}>
             {presenting ? `Slide ${(state.idx ?? 0) + 1} / ${state.total ?? '?'}` : 'Not presenting'}
@@ -183,6 +189,35 @@ export default function RemoteControl({ code }) {
           )}
         </div>
       )}
+
+      {/* Slideshow contents — a thumbnail per clip, current one highlighted. */}
+      {presenting && thumb?.clipThumbs && thumb.clipThumbs.length > 1 && (
+        <div style={{ flexShrink: 0, display: 'flex', gap: 6, padding: '0 12px 8px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          {thumb.clipThumbs.map((src, i) => {
+            const on = i === (state?.step ?? 0)
+            return (
+              <div key={i} style={{ position: 'relative', flexShrink: 0, width: 62, height: 40, borderRadius: 6, overflow: 'hidden',
+                border: on ? '2px solid #6ee7a8' : '1px solid #2a3358', background: src ? `#000 center/cover no-repeat url("${src}")` : '#12162c',
+                boxShadow: on ? '0 0 8px rgba(110,231,168,0.5)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {!src && <span style={{ color: '#6b7699', fontSize: 13 }}>▶</span>}
+                <span style={{ position: 'absolute', top: 1, left: 3, fontSize: '0.56rem', fontWeight: 700, color: '#fff', textShadow: '0 1px 2px #000' }}>{i + 1}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Eyes-free tap zones: the top half of the screen advances (right) / goes back (left), so you can
+          drive the deck without looking. Sit above the display area but below the header (mute) and the
+          bottom buttons. Faint ‹ › hint at the edges. */}
+      {presenting && (<>
+        <div onPointerDown={() => send('prev')} aria-label="Previous"
+          style={{ position: 'fixed', left: 0, top: 52, width: '50%', height: '40vh', zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+            paddingLeft: 14, color: 'rgba(143,160,216,0.25)', fontSize: '2.6rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>‹</div>
+        <div onPointerDown={() => send('next')} aria-label="Next"
+          style={{ position: 'fixed', right: 0, top: 52, width: '50%', height: '40vh', zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+            paddingRight: 14, color: 'rgba(143,160,216,0.25)', fontSize: '2.6rem', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>›</div>
+      </>)}
 
       {/* Big Prev / Next — the primary controls, split for thumb reach */}
       <div style={{ flex: 1, display: 'flex', gap: 12, padding: 12, minHeight: 0 }}>

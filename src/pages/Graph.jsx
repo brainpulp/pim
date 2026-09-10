@@ -6565,16 +6565,19 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         <SlideThumbSVG fn={fn} getVP={getVP} viewImages={activeView?.images || []} allSimNodes={simNodesRef.current}
           storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={220} />) : null
         return (s && s.length <= 60000) ? s : null } catch { return null } }
-      let clip = null
+      let clip = null, clipThumbs = null
       if (activeShowId) {
         const yn = storeNodes.find(n => n.id === activeShowId)
         const clips = yn?.ytss?.clips || []
         const ci = Math.max(0, Math.min(ytssIdxMap[activeShowId] ?? 0, clips.length - 1))
         const c = clips[ci]
         if (c) clip = { label: c.label || c.title || `${clipKind(c) === 'youtube' ? 'YouTube' : clipKind(c)} ${ci + 1}`, n: ci + 1, of: clips.length }
+        // Thumbnails of EVERY clip in the slideshow (poster/youtube/image), so the phone shows the whole
+        // slideshow's contents, not just the first. Small URL strings, capped so the payload stays tiny.
+        if (clips.length > 1) clipThumbs = clips.slice(0, 12).map(cc => clipPoster(cc) || null)
       }
       const cur = slideSimNodes[presentingSlideIdx], nxt = slideSimNodes[presentingSlideIdx + 1]
-      remoteThumb = { cur: toSvg(cur), next: toSvg(nxt), curLabel: cur?.label || '', nextLabel: nxt?.label || '', clip }
+      remoteThumb = { cur: toSvg(cur), next: toSvg(nxt), curLabel: cur?.label || '', nextLabel: nxt?.label || '', clip, clipThumbs }
       remoteThumbRef.current = { sig, val: remoteThumb }
     }
   }
