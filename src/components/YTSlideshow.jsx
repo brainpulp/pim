@@ -373,9 +373,21 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
     el.addEventListener('timeupdate', onTime)
     el.addEventListener('ended', onNativeEnded)
     if (el.readyState >= 1) onLoaded()
-    // Autoplay: try with sound; if the browser blocks it, fall back to muted.
-    if (autoplay) { el.muted = !!muted; el.play().catch(() => { el.muted = true; el.play().catch(() => {}) }) }
-    else el.muted = !!muted
+    // Autoplay: try with the intended sound. A play() promise can reject for two very different reasons
+    // and we must NOT treat them the same:
+    //   • AbortError  → the play was interrupted by a re-render/seek/pause (common during slide
+    //                    transitions). Sound is fine — just retry; muting here is what silenced
+    //                    presentations while preview (a calm single mount) kept its sound.
+    //   • NotAllowedError → the browser genuinely blocked UNMUTED autoplay. Only then fall back to
+    //                    muted so the slide still plays rather than freezing.
+    if (autoplay) {
+      el.muted = !!muted
+      const tryPlay = (left) => el.play().catch(err => {
+        if (err && err.name === 'AbortError') { if (left > 0) setTimeout(() => { if (ref.current === el) tryPlay(left - 1) }, 60); return }
+        el.muted = true; el.play().catch(() => {})   // autoplay-with-sound blocked → last-resort muted
+      })
+      tryPlay(4)
+    } else el.muted = !!muted
     onReady?.({
       play: () => { waiting = false; el.play().catch(() => {}) }, pause: () => el.pause(),
       isWaiting: () => waiting,                                        // paused at a stop marker?

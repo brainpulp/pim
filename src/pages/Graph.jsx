@@ -9561,7 +9561,10 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, 
   return (
     <div ref={containerRef} data-slide-sidebar="1" onMouseDown={e => e.stopPropagation()}
       style={{ width: 196, flexShrink: 0, borderLeft: `1px solid ${T_C.line}`, background: T_C.bg,
-        overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: T_SP[4], padding: `${T_SP[4]}px ${T_SP[4]}px ${T_SP[6]}px` }}>
+        overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: T_SP[4], padding: `0 ${T_SP[4]}px ${T_SP[6]}px` }}>
+      {/* Controls header — pinned to the top so it stays put while the slide list scrolls under it. */}
+      <div style={{ position:'sticky', top:0, zIndex:6, background:T_C.bg, display:'flex', flexDirection:'column', gap:T_SP[3],
+        paddingTop:T_SP[3], paddingBottom:T_SP[3], borderBottom:`1px solid ${T_C.line}` }}>
       {/* Header: collapse ‹ + SLIDES label. */}
       <div style={{ display:'flex', alignItems:'center', gap:T_SP[3] }}>
         <button onClick={onClose} title="Hide panel"
@@ -9574,7 +9577,7 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, 
         onClick={() => { if (!slideSimNodes.length) return; const i = Math.max(0, Math.min(currentIdx, slideSimNodes.length - 1)); onPresent ? onPresent(i) : (setPresentingSlideIdx(i), zoomToFrame(slideSimNodes[i])) }}
         disabled={!slideSimNodes.length}
         title="Present from the highlighted slide (F5)"
-        style={T_BTN('primary', { width:'100%', padding:`${T_SP[4]}px ${T_SP[5]}px`, fontSize:T_FS.md,
+        style={T_BTN('primary', { width:'100%', padding:`${T_SP[3]}px ${T_SP[5]}px`, fontSize:T_FS.md,
           ...(slideSimNodes.length ? { boxShadow:'0 4px 14px rgba(100,112,245,0.35)' } : { background:T_C.bg3, borderColor:'transparent', color:T_C.tx3, cursor:'not-allowed' }) })}>
         ▶ Present <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.medium, opacity:0.85, background:'rgba(255,255,255,0.18)', borderRadius:T_R.sm, padding:'1px 5px' }}>F5</span>
       </button>
@@ -9625,6 +9628,7 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, 
         <button onClick={() => addSlideshow()}
           style={T_BTN('subtle', { justifyContent:'flex-start', padding:`${T_SP[2]}px ${T_SP[4]}px`, fontSize:T_FS.sm, color:T_C.tx2 })}>+ new slideshow</button>
       </div>
+      </div>{/* end pinned controls header */}
 
       {/* Capture / update slides from the current viewport. */}
       <div style={{ display:'flex', gap:T_SP[3] }}>
@@ -11964,7 +11968,18 @@ function RichTextBox({ html, editable, selected, bgColor, borderColor, textShado
     const el = ref.current; if (!el) return
     if (document.activeElement !== el && el.innerHTML !== (html || '')) el.innerHTML = html || ''
   }, [html])
-  useEffect(() => { if (editable) requestAnimationFrame(() => ref.current?.focus()) }, [editable])
+  useEffect(() => {
+    if (!editable) return
+    requestAnimationFrame(() => {
+      const el = ref.current; if (!el) return
+      el.focus()
+      // A brand-new box carries the placeholder word "Text". Pre-select it so the first keystroke
+      // replaces it instantly — no hand-deleting the token. Real content is left with a plain caret.
+      if ((el.textContent || '').trim() === 'Text') {
+        try { const r = document.createRange(); r.selectNodeContents(el); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r) } catch { /* */ }
+      }
+    })
+  }, [editable])
   // Auto-height: the box grows DOWNWARD to fit its content (no manual height handle). Measure the content's
   // natural height and report it up; the parent keeps the top edge pinned. Runs on type and whenever the
   // wrap width / font scale / html changes (all of which re-wrap and change the height).
