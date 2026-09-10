@@ -1193,6 +1193,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setShowSlideSidebar = useGraphStore(s => s.setShowSlideSidebar)
   const [showSlideGrid, setShowSlideGrid] = useState(false)   // full-screen slide-sorter overlay
   const [dbgTick, setDbgTick] = useState(0)   // Presentation diagnostic: refresh the on-screen log (see presDebug.js)
+  const PRES_DEBUG = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('presdebug') === '1'
   useEffect(() => {
     if (!showSlideGrid) return
     const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); setShowSlideGrid(false) } }
@@ -1268,12 +1269,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const iv = setInterval(grab, 250)
     return () => { window.removeEventListener('focusin', onFocusIn, true); clearInterval(iv) }
   }, [presentingSlideIdx])
-  // Presentation diagnostic: refresh the on-screen log while presenting.
+  // Presentation diagnostic: refresh the on-screen log while presenting (only when ?presdebug=1).
   useEffect(() => {
-    if (presentingSlideIdx === null) return
+    if (presentingSlideIdx === null || !PRES_DEBUG) return
     const iv = setInterval(() => setDbgTick(t => t + 1), 250)
     return () => clearInterval(iv)
-  }, [presentingSlideIdx])
+  }, [presentingSlideIdx, PRES_DEBUG])
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
   // Declared here — before any early return — so the hooks order never changes (React #310).
   const exitPresentationRef = useRef(null)
@@ -8004,13 +8005,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             borderRadius:9, padding:'12px 20px', fontSize:'1.05rem', fontWeight:700, lineHeight:1, minWidth:70 }
           return (
           <div style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:4200 }}>
-            {/* DIAGNOSTIC (temporary): live log of what each Next/arrow does. Screenshot this on the stuck slide. */}
-            <div style={{ position:'fixed', top:8, left:8, pointerEvents:'none', zIndex:99999,
+            {/* DIAGNOSTIC (opt-in via ?presdebug=1): live log of what each Next/arrow does. */}
+            {PRES_DEBUG && <div style={{ position:'fixed', top:8, left:8, pointerEvents:'none', zIndex:99999,
               background:'rgba(0,0,0,0.82)', color:'#8effa0', font:'11px/1.35 monospace', padding:'6px 8px',
               borderRadius:6, maxWidth:'62vw', whiteSpace:'pre-wrap', border:'1px solid #2a3a2a' }}>
               {`presIdx=${presentingSlideIdx} stage=${presentStageIdx} act=${ytssActiveId||'-'} fsId=${ytssFullscreenId||'-'} vidFS=${videoFullscreen?'Y':'-'} slides=${slideSimNodes.length}\n`}
               {presLog.slice(-14).join('\n') || '(press Next / arrow to log…)'}
-            </div>
+            </div>}
             <div style={{ position:'absolute', bottom:22, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
               background:'rgba(8,8,20,0.92)', border:'1px solid #2d3a6a', borderRadius:14,
               padding:'10px 14px', display:'flex', gap:10, alignItems:'center', boxShadow:'0 8px 28px rgba(0,0,0,0.75)' }}>
@@ -8413,7 +8414,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         <YTFullscreenPlayer clips={[videoFullscreen.youtubeId
           ? { id: 'one', youtubeId: videoFullscreen.youtubeId, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }
           : { id: 'one', kind: 'video', src: videoFullscreen.src, start: videoFullscreen.start, end: videoFullscreen.end, speed: videoFullscreen.speed || 1, trigger: 'click' }]}
-          startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} presenting={isPresenting} onExit={() => setVideoFullscreen(null)} />
+          startIndex={0} muted={videoFullscreen.muted} captions={videoFullscreen.captions === true} presenting={isPresenting}
+          onExit={() => setVideoFullscreen(null)}
+          onDeckNext={() => { setVideoFullscreen(null); advanceBuild(1) }}
+          onDeckPrev={() => { setVideoFullscreen(null); advanceBuild(-1) }} />
       )}
       {RC_DEBUG && (
         <div style={{ position: 'fixed', left: 8, bottom: 8, zIndex: 99999, maxWidth: 460, background: 'rgba(0,0,0,0.9)', color: '#7CFC00', font: '12px ui-monospace, monospace', padding: '8px 10px', borderRadius: 6, border: '1px solid #2f6a48', whiteSpace: 'pre-wrap', pointerEvents: 'none' }}>
