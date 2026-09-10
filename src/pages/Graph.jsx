@@ -1673,57 +1673,80 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const layoutFramesToGrid = useCallback((orderedIds) => {
     const vp = viewNodePropsRef.current
     const sim = simNodesRef.current
-    const ids = (orderedIds || []).filter(id => (vp[id] || {}).shape === 'frame')
-    if (ids.length < 2) return
     const byId = Object.fromEntries(sim.map(n => [n.id, n]))
-    const boxOf = (id) => {
-      const fvp = vp[id] || {}
-      const fr = NODE_R * (fvp.scale || 1)
-      const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
-      const n = byId[id]
-      return { cx: n?.fx ?? n?.x ?? 0, cy: n?.fy ?? n?.y ?? 0, hw: fvp.frameHalfW ?? dHW, hh: fvp.frameHalfH ?? dHH }
-    }
-    const boxes = ids.map(boxOf)                       // snapshot BEFORE moving anything
-    const inBox = (b, x, y) => Math.abs((x || 0) - b.cx) <= b.hw && Math.abs((y || 0) - b.cy) <= b.hh
-    const frameSet = new Set(ids)
+    const gs = useGraphStore.getState()
+    const imgs = gs.views.find(v => v.id === gs.activeViewId)?.images || []
+    const imgById = Object.fromEntries(imgs.map(im => [im.id, im]))
+    const labelOf = id => (gs.nodes.find(n => n.id === id)?.label) || ''
 
-    // Assign each non-frame node and each free image to exactly one owning frame.
-    const owners = {}; ids.forEach(id => { owners[id] = { nodes: [], imgs: [] } })
+    // Every slide is a grid cell — a frame, a plain node (e.g. a slideshow/media element made into a
+    // slide), or a free image. Classify each in deck order and snapshot its box BEFORE moving anything.
+    const cells = []
+    ;(orderedIds || []).forEach(id => {
+      const nd = byId[id], nvp = vp[id] || {}
+      if (nd && nvp.shape === 'frame') {
+        const fr = NODE_R * (nvp.scale || 1)
+        const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
+        cells.push({ id, kind: 'frame', cx: nd.fx ?? nd.x ?? 0, cy: nd.fy ?? nd.y ?? 0, hw: nvp.frameHalfW ?? dHW, hh: nvp.frameHalfH ?? dHH })
+      } else if (nd) {
+        const r = NODE_R * (nvp.scale || 1)
+        const { halfW, halfH } = shapeDims(nvp.shape || 'circle', r, labelOf(id), Math.max(9, Math.round(12 * (nvp.scale || 1))), nvp.labelWidth)
+        cells.push({ id, kind: 'node', cx: nd.fx ?? nd.x ?? 0, cy: nd.fy ?? nd.y ?? 0, hw: halfW, hh: halfH })
+      } else if (imgById[id]) {
+        const im = imgById[id]
+        cells.push({ id, kind: 'image', cx: im.x || 0, cy: im.y || 0, hw: (im.width || 360) / 2, hh: (im.height || 240) / 2 })
+      }
+    })
+    if (cells.length < 2) return
+    const cellSet = new Set(cells.map(c => c.id))
+    const frameCells = cells.filter(c => c.kind === 'frame')
+    const inBox = (b, x, y) => Math.abs((x || 0) - b.cx) <= b.hw && Math.abs((y || 0) - b.cy) <= b.hh
+
+    // Frames carry their contents. Assign each non-cell node/image to an owning frame (containedIn, else
+    // geometrically inside). Cells themselves are never treated as another cell's content.
+    const owners = {}; frameCells.forEach(c => { owners[c.id] = { nodes: [], imgs: [] } })
     sim.forEach(nd => {
+      if (cellSet.has(nd.id)) return
       const nvp = vp[nd.id] || {}
       if (nvp.shape === 'frame' || nvp.shape === 'container' || nvp.shape === '3d') return
-      let owner = frameSet.has(nvp.containedIn) ? nvp.containedIn : null
-      if (!owner) for (let i = 0; i < ids.length; i++) if (inBox(boxes[i], nd.fx ?? nd.x, nd.fy ?? nd.y)) { owner = ids[i]; break }
+      let owner = frameCells.some(c => c.id === nvp.containedIn) ? nvp.containedIn : null
+      if (!owner) { const fc = frameCells.find(c => inBox(c, nd.fx ?? nd.x, nd.fy ?? nd.y)); owner = fc?.id || null }
       if (owner) owners[owner].nodes.push(nd)
     })
-    const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
-    imgs.forEach(im => { for (let i = 0; i < ids.length; i++) if (inBox(boxes[i], im.x, im.y)) { owners[ids[i]].imgs.push(im); break } })
+    imgs.forEach(im => { if (cellSet.has(im.id)) return; const fc = frameCells.find(c => inBox(c, im.x, im.y)); if (fc) owners[fc.id].imgs.push(im) })
 
-    // Grid metrics: uniform pitch from the largest frame so nothing overlaps; anchored at the current
-    // top-left-most frame so the whole set stays roughly where it already is.
-    const n = ids.length
+    // Grid metrics: uniform pitch from the largest cell so nothing overlaps; anchored at the current
+    // top-left-most cell so the whole set stays roughly where it already is.
+    const n = cells.length
     const cols = Math.max(1, Math.round(Math.sqrt(n * 1.7)))
-    const pitchX = Math.max(...boxes.map(b => b.hw * 2)) + 90
-    const pitchY = Math.max(...boxes.map(b => b.hh * 2)) + 110
-    const originX = Math.min(...boxes.map(b => b.cx))
-    const originY = Math.min(...boxes.map(b => b.cy))
+    const pitchX = Math.max(...cells.map(c => c.hw * 2)) + 90
+    const pitchY = Math.max(...cells.map(c => c.hh * 2)) + 110
+    const originX = Math.min(...cells.map(c => c.cx))
+    const originY = Math.min(...cells.map(c => c.cy))
 
     // Snapshot every element's pre-move position + anchored state, so "Undo layout" can restore it exactly.
     const revert = []
     pushUndo()
-    ids.forEach((id, i) => {
-      const b = boxes[i]
+    cells.forEach((c, i) => {
       const tx = originX + (i % cols) * pitchX, ty = originY + Math.floor(i / cols) * pitchY
-      const dx = tx - b.cx, dy = ty - b.cy
-      const fn = byId[id]
-      revert.push({ id, x: b.cx, y: b.cy, anchored: fn ? fn.fx != null : true })
+      const dx = tx - c.cx, dy = ty - c.cy
+      if (c.kind === 'image') {
+        const im = imgById[c.id]
+        revert.push({ img: true, id: c.id, x: im.x || 0, y: im.y || 0 })
+        updateImage(c.id, { x: (im.x || 0) + dx, y: (im.y || 0) + dy })
+        return
+      }
+      const fn = byId[c.id]
+      revert.push({ id: c.id, x: c.cx, y: c.cy, anchored: fn ? fn.fx != null : true })
       if (fn) { fn.x = tx; fn.y = ty; fn.fx = tx; fn.fy = ty }
-      setAnchor(id, tx, ty)
-      owners[id].nodes.forEach(nd => {
-        revert.push({ id: nd.id, x: nd.fx ?? nd.x ?? 0, y: nd.fy ?? nd.y ?? 0, anchored: nd.fx != null })
-        const nx = (nd.fx ?? nd.x ?? 0) + dx, ny = (nd.fy ?? nd.y ?? 0) + dy; nd.x = nx; nd.y = ny; nd.fx = nx; nd.fy = ny; setAnchor(nd.id, nx, ny)
-      })
-      owners[id].imgs.forEach(im => { revert.push({ img: true, id: im.id, x: im.x, y: im.y }); updateImage(im.id, { x: im.x + dx, y: im.y + dy }) })
+      setAnchor(c.id, tx, ty)
+      if (c.kind === 'frame') {
+        owners[c.id].nodes.forEach(nd => {
+          revert.push({ id: nd.id, x: nd.fx ?? nd.x ?? 0, y: nd.fy ?? nd.y ?? 0, anchored: nd.fx != null })
+          const nx = (nd.fx ?? nd.x ?? 0) + dx, ny = (nd.fy ?? nd.y ?? 0) + dy; nd.x = nx; nd.y = ny; nd.fx = nx; nd.fy = ny; setAnchor(nd.id, nx, ny)
+        })
+        owners[c.id].imgs.forEach(im => { revert.push({ img: true, id: im.id, x: im.x, y: im.y }); updateImage(im.id, { x: im.x + dx, y: im.y + dy }) })
+      }
     })
     lastLayoutRef.current = revert; setHasLayoutUndo(true)
     simRef.current?.alpha(0.15).restart()
@@ -8162,6 +8185,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
         })()}
 
+        {/* Notes chip for a NON-frame element made into a slide (a node/slideshow/media element). Pegged
+            to the element's bottom-left; opens the same speaker-notes popup. */}
+        {!readOnly && !isPresenting && timelineFrameId == null && selected?.type === 'node'
+          && getVP(selected.id).shape !== 'frame' && slideIds.includes(selected.id) && (() => {
+          const evp = getVP(selected.id)
+          const esn = simNodesRef.current.find(n => n.id === selected.id)
+          const er = NODE_R * (evp.scale || 1)
+          const { halfW, halfH } = shapeDims(evp.shape || 'circle', er, storeNodeById[selected.id]?.label || '', Math.max(9, Math.round(12 * (evp.scale || 1))), evp.labelWidth)
+          const left = T.x + ((esn?.x ?? 0) - halfW) * T.k
+          const top = T.y + ((esn?.y ?? 0) + halfH) * T.k + 8
+          const hasNotes = !!(storeNodeById[selected.id]?.speakerNotes || '').replace(/<[^>]*>/g, '').trim()
+          const notesOpen = notesFrameId === selected.id
+          return (
+            <button onClick={() => setNotesFrameId(id => id === selected.id ? null : selected.id)} title="Speaker notes (shown on your phone)"
+              style={{ position: 'absolute', left, top, zIndex: 40, background: notesOpen ? '#1e2547' : '#12122a', border: `1px solid ${notesOpen ? '#5b6af0' : '#2d3a6a'}`, color: notesOpen ? '#dbe4ff' : (hasNotes ? '#c5d0ff' : '#9fb0e8'), borderRadius: 9, padding: '7px 11px', cursor: 'pointer', fontSize: 12.5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              📝 Notes{hasNotes ? ' •' : ''}
+            </button>
+          )
+        })()}
+
         {/* Container options — shown when a container node is selected. */}
         {!readOnly && !isPresenting && selected?.type === 'node' && getVP(selected.id).shape === 'container' && (() => {
           const cid = selected.id, cvp = getVP(cid)
@@ -8417,12 +8460,14 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const sn = storeNodeById[selected.id] || {}
         const label = sn.label || selectedNode?.label || 'Frame'
         const slideNo = slideIds.indexOf(selected.id) + 1   // 0 when the frame isn't in the slideshow
-        // Peg to the frame's bottom-left in screen space (below the chip row); flip above if it'd run off-screen.
+        // Peg to the element's bottom-left in screen space (below the chip row); flip above if off-screen.
+        // Works for frames and for non-frame nodes made into slides (box comes from the node's shape).
         const fvp = getVP(selected.id)
         const fsn = simNodesRef.current.find(n => n.id === selected.id)
         const fr = NODE_R * (fvp.scale || 1)
-        const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
-        const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
+        let hw, hh
+        if (fvp.shape === 'frame') { const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr); hw = fvp.frameHalfW ?? dHW; hh = fvp.frameHalfH ?? dHH }
+        else { const { halfW, halfH } = shapeDims(fvp.shape || 'circle', fr, sn.label || '', Math.max(9, Math.round(12 * (fvp.scale || 1))), fvp.labelWidth); hw = halfW; hh = halfH }
         const anchorLeft = T.x + ((fsn?.x ?? 0) - hw) * T.k
         const anchorBottom = T.y + ((fsn?.y ?? 0) + hh) * T.k
         const PW = 300, PH = Math.min(window.innerHeight * 0.52, 380)
@@ -9193,8 +9238,8 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
         <span style={{ fontSize:T_FS.sm, color:T_C.tx3 }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · click for notes · double-click to open</span>
         <div style={{ flex:1 }} />
         {onLayout && (
-          <button onClick={() => { if (slideSimNodes.length >= 2 && window.confirm('Lay the real frames out on the canvas in a grid matching this order? You can undo it with the “Undo layout” button, Ctrl+Z, or a duplicated view.')) onLayout() }}
-            disabled={slideSimNodes.length < 2} title="Reposition the actual frames on the canvas into this grid order"
+          <button onClick={() => { if (slideSimNodes.length >= 2 && window.confirm('Lay the real slides out on the canvas in a grid matching this order? Frames carry their contents; loose elements move too. You can undo it with the “Undo layout” button, Ctrl+Z, or a duplicated view.')) onLayout() }}
+            disabled={slideSimNodes.length < 2} title="Reposition the actual slides on the canvas into this grid order"
             style={T_BTN('default', slideSimNodes.length >= 2 ? { padding:`${T_SP[4]}px ${T_SP[5]}px` } : { padding:`${T_SP[4]}px ${T_SP[5]}px`, opacity:0.5, cursor:'not-allowed' })}>⤢ Lay out on canvas</button>
         )}
         {onUndoLayout && (
