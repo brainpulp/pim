@@ -278,10 +278,16 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
   const clipRef = useRef(clip); clipRef.current = clip   // markers/cuts read live so editing them doesn't reseek
   const start = clip.start || 0
   const end = (clip.end && clip.end > start) ? clip.end : 0
+  // Cover the <video> with its poster frame until playback actually starts — a loading uploaded video
+  // renders BLACK otherwise, which looks like a stuck/blank slide during a presentation.
+  const [covered, setCovered] = useState(true)
   useEffect(() => {
     const el = ref.current; if (!el) return
+    setCovered(true)   // new clip → cover until it plays
     el.playbackRate = clip.speed || 1
     el.loop = !!clip.loop
+    const onPlaying = () => setCovered(false)
+    el.addEventListener('playing', onPlaying)
     let ended = false, waiting = false, lastT = 0
     const consumed = new Set()
     const seekStart = () => { consumed.clear(); waiting = false; if (start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
@@ -319,7 +325,7 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
       setRate: (r) => { el.playbackRate = r || 1 },
       duration: () => el.duration || 0, time: () => el.currentTime || 0,
     })
-    return () => { el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
+    return () => { el.removeEventListener('playing', onPlaying); el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
   }, [clip.src, clip.start, clip.end, clip.speed, clip.loop]) // eslint-disable-line
 
   if (kind === 'audio') {
@@ -333,7 +339,14 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
       </div>
     )
   }
-  return <video ref={ref} src={clip.src} playsInline preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', pointerEvents: interactive ? 'auto' : 'none', ...style }} />
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <video ref={ref} src={clip.src} playsInline preload="auto" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', pointerEvents: interactive ? 'auto' : 'none' }} />
+      {covered && clip.poster && (
+        <div style={{ position: 'absolute', inset: 0, background: `#000 center/contain no-repeat url("${clip.poster}")`, pointerEvents: 'none' }} />
+      )}
+    </div>
+  )
 }
 
 // ── Image slide: shown for `duration` seconds, then "ends" so the show can advance ────────────
