@@ -10,7 +10,7 @@ import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadImageFromUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { pickDriveVideo, downloadDriveFile, driveEmbedUrl, hasDriveCreds, setDriveCreds } from '../lib/gdrive'
-import { luminance as lumaOf, c as T_C, sp as T_SP, r as T_R, fs as T_FS, fw as T_FW, shadow as T_SH } from '../lib/theme'
+import { luminance as lumaOf, c as T_C, sp as T_SP, r as T_R, fs as T_FS, fw as T_FW, shadow as T_SH, btn as T_BTN, input as T_INPUT } from '../lib/theme'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -8695,36 +8695,40 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
 // drag any card to reorder, double-click to jump to that slide on the canvas, or Present. ──────────
 function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onClose, interimSlideId = null }) {
   const gridRef = useRef(null)
-  const [dragIdx, setDragIdx] = useState(null)
-  const [dropIdx, setDropIdx] = useState(null)
+  const [dragIdx, setDragIdx] = useState(null)   // index of the tile being lifted
+  const [dropIdx, setDropIdx] = useState(null)   // insertion index (0..n) it would land at
+  const [ghost, setGhost] = useState(null)       // { x, y, w, h, dx, dy, fn } — the lifted tile that follows the cursor
 
   const handleDown = (e, idx) => {
     if (e.button !== 0 || e.target.closest('[data-grid-remove]')) return
     e.preventDefault()
     const startX = e.clientX, startY = e.clientY
+    const card = e.currentTarget.getBoundingClientRect()
+    const offX = startX - card.left, offY = startY - card.top
     let dragging = false
     const onMove = me => {
       if (!dragging) {
         if (Math.abs(me.clientX - startX) < 5 && Math.abs(me.clientY - startY) < 5) return
         dragging = true; setDragIdx(idx)
       }
+      setGhost({ x: me.clientX - offX, y: me.clientY - offY, w: card.width, h: card.height, fn: slideSimNodes[idx] })
       if (!gridRef.current) return
+      // Insertion index in reading order: the first cell whose centre lies after the cursor.
       const items = [...gridRef.current.querySelectorAll('[data-grid-idx]')]
-      // Insert position = first card whose center is past the cursor (reading order: row then column).
       let insertBefore = slideSimNodes.length
       for (const el of items) {
         const r = el.getBoundingClientRect()
-        const cx = r.left + r.width / 2, cy = r.top + r.height / 2
-        // A card is "after" the cursor if it's on a later row, or same row and to the right.
+        const cx = r.left + r.width / 2
         const laterRow = me.clientY < r.top
-        const sameRowRight = me.clientY < cy + r.height / 2 && me.clientY > r.top && me.clientX < cx
-        if (laterRow || sameRowRight) { insertBefore = parseInt(el.dataset.gridIdx); break }
+        const sameRowBefore = me.clientY <= r.bottom && me.clientY >= r.top && me.clientX < cx
+        if (laterRow || sameRowBefore) { insertBefore = parseInt(el.dataset.gridIdx); break }
       }
       setDropIdx(insertBefore)
     }
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      setGhost(null)
       if (!dragging) { setDragIdx(null); setDropIdx(null); return }
       const fromIdx = idx
       setDragIdx(null)
@@ -8742,62 +8746,74 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
     document.addEventListener('mouseup', onUp)
   }
 
+  const tile = (fn, i) => {
+    const dropHere = dragIdx !== null && dropIdx === i && dragIdx !== i && dragIdx + 1 !== i
+    const lifted = dragIdx === i
+    return (
+      <div key={fn.id} data-grid-idx={i}
+        onMouseDown={e => handleDown(e, i)}
+        onDoubleClick={() => onJump?.(i)}
+        style={{ position:'relative', cursor: lifted ? 'grabbing' : 'grab', userSelect:'none',
+          transition:'transform .12s ease', transform: dropHere ? 'translateX(8px)' : 'none' }}>
+        {/* Snap guide: a highlighted rail on the cell the lifted tile will drop before. */}
+        {dropHere && <div style={{ position:'absolute', left:-11, top:0, bottom:0, width:4, borderRadius:T_R.pill, background:T_C.accentH, boxShadow:`0 0 10px ${T_C.accent}` }} />}
+        <div style={{ borderRadius:T_R.lg, overflow:'hidden', background:T_C.bg2,
+          border:`2px solid ${fn.id === interimSlideId ? '#7a5a2a' : T_C.border}`, boxShadow:T_SH.sm,
+          opacity: lifted ? 0.25 : 1, outline: lifted ? `2px dashed ${T_C.border2}` : 'none', outlineOffset:-2 }}>
+          <div style={{ position:'relative' }}>
+            <SlideThumbSVG fn={fn} getVP={getVP} viewImages={viewImages} allSimNodes={allSimNodes}
+              storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={340} />
+            <span style={{ position:'absolute', top:T_SP[3], left:T_SP[3], minWidth:20, height:20, padding:'0 6px', borderRadius:T_R.pill,
+              background:'rgba(10,10,22,0.82)', color:T_C.tx, fontSize:T_FS.xs, fontWeight:T_FW.bold,
+              display:'inline-flex', alignItems:'center', justifyContent:'center' }}>{i + 1}</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:T_SP[3], padding:`${T_SP[3]}px ${T_SP[4]}px` }}>
+            <span style={{ flex:1, fontSize:T_FS.sm, color:T_C.tx2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+              {fn.label || 'Slide'}
+            </span>
+            {fn.id === interimSlideId && (
+              <span title="Interim slide" style={{ fontSize:T_FS.xs, color:T_C.warn, border:'1px solid #7a5a2a', borderRadius:T_R.sm, padding:'0 4px', flexShrink:0 }}>⤾</span>
+            )}
+            <button data-grid-remove="true" title="Remove from slideshow"
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
+              style={{ background:'transparent', border:'none', color:T_C.danger, cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div onMouseDown={e => e.stopPropagation()}
-      style={{ position:'fixed', inset:0, zIndex:5000, background:'#0a0a14', display:'flex', flexDirection:'column' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 20px', borderBottom:'1px solid #1e1e2e', flexShrink:0 }}>
-        <span style={{ fontSize:'0.95rem', fontWeight:700, color:'#e6ebff', letterSpacing:'0.02em' }}>Slide sorter</span>
-        <span style={{ fontSize:'0.74rem', color:'#7080a0' }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · double-click to open</span>
+      style={{ position:'fixed', inset:0, zIndex:5000, background:T_C.canvas, display:'flex', flexDirection:'column', fontFamily:'-apple-system, sans-serif' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:T_SP[5], padding:`${T_SP[5]}px ${T_SP[7]}px`, borderBottom:`1px solid ${T_C.line}`, flexShrink:0 }}>
+        <span style={{ fontSize:T_FS.lg, fontWeight:T_FW.bold, color:T_C.tx }}>Arrange slides</span>
+        <span style={{ fontSize:T_FS.sm, color:T_C.tx3 }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · double-click to open</span>
         <div style={{ flex:1 }} />
         <button onClick={() => slideSimNodes.length && onPresent?.(0)} disabled={!slideSimNodes.length}
-          style={{ display:'flex', alignItems:'center', gap:7, background: slideSimNodes.length ? 'linear-gradient(180deg,#5b6af0,#4652d6)' : '#20233a',
-            border:'none', color: slideSimNodes.length ? '#fff' : '#5a6088', borderRadius:8, padding:'8px 16px',
-            cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.85rem', fontWeight:700 }}>▶ Present</button>
-        <button onClick={onClose} title="Close (Esc)"
-          style={{ background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff', borderRadius:8, padding:'8px 14px', cursor:'pointer', fontSize:'0.85rem' }}>✕ Close</button>
+          style={T_BTN('primary', slideSimNodes.length ? { padding:`${T_SP[4]}px ${T_SP[6]}px` } : { padding:`${T_SP[4]}px ${T_SP[6]}px`, background:T_C.bg3, borderColor:'transparent', color:T_C.tx3, cursor:'not-allowed' })}>▶ Present</button>
+        <button onClick={onClose} title="Close (Esc)" style={T_BTN('ghost', { padding:`${T_SP[4]}px ${T_SP[5]}px` })}>✕ Close</button>
       </div>
-      <div ref={gridRef} style={{ flex:1, overflowY:'auto', padding:24,
-        display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:20, alignContent:'start' }}>
-        {slideSimNodes.map((fn, i) => {
-          const showLineBefore = dragIdx !== null && dropIdx === i && dragIdx !== i && dragIdx + 1 !== i
-          return (
-            <div key={fn.id} data-grid-idx={i}
-              onMouseDown={e => handleDown(e, i)}
-              onDoubleClick={() => onJump?.(i)}
-              style={{ position:'relative', cursor:'grab', userSelect:'none', opacity: dragIdx === i ? 0.35 : 1,
-                borderLeft: showLineBefore ? '3px solid #22e06a' : '3px solid transparent', paddingLeft: 5 }}>
-              <div style={{ borderRadius:8, overflow:'hidden', background:'#111827',
-                border: `2px solid ${fn.id === interimSlideId ? '#7a5a2a' : '#24304a'}`, boxShadow:'0 4px 16px rgba(0,0,0,0.4)' }}>
-                <div style={{ position:'relative' }}>
-                  <SlideThumbSVG fn={fn} getVP={getVP} viewImages={viewImages} allSimNodes={allSimNodes}
-                    storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={340} />
-                  <span style={{ position:'absolute', top:6, left:6, minWidth:20, height:20, padding:'0 6px', borderRadius:10,
-                    background:'rgba(10,10,22,0.82)', color:'#c5d0ff', fontSize:'0.72rem', fontWeight:700,
-                    display:'inline-flex', alignItems:'center', justifyContent:'center' }}>{i + 1}</span>
-                </div>
-                <div style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px' }}>
-                  <span style={{ flex:1, fontSize:'0.78rem', color:'#a9b6e8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                    {fn.label || 'Slide'}
-                  </span>
-                  {fn.id === interimSlideId && (
-                    <span title="Interim slide" style={{ fontSize:'0.6rem', color:'#f6ad55', border:'1px solid #7a5a2a', borderRadius:4, padding:'0 4px', flexShrink:0 }}>⤾</span>
-                  )}
-                  <button data-grid-remove="true" title="Remove from slideshow"
-                    onMouseDown={e => e.stopPropagation()}
-                    onClick={e => { e.stopPropagation(); removeSlide(fn.id) }}
-                    style={{ background:'transparent', border:'none', color:'#f87171', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
-                </div>
-              </div>
-            </div>
-          )
-        })}
+      <div ref={gridRef} style={{ flex:1, overflowY:'auto', padding:T_SP[8],
+        display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:T_SP[7], alignContent:'start' }}>
+        {slideSimNodes.map((fn, i) => tile(fn, i))}
         {dragIdx !== null && dropIdx === slideSimNodes.length && dragIdx !== slideSimNodes.length - 1 && (
-          <div style={{ width:3, background:'#22e06a', borderRadius:2, alignSelf:'stretch' }} />
+          <div style={{ minHeight:60, border:`2px dashed ${T_C.border2}`, borderRadius:T_R.lg, alignSelf:'stretch' }} />
         )}
         {slideSimNodes.length === 0 && (
-          <div style={{ color:'#7080a0', fontSize:'0.85rem', padding:20 }}>No slides yet — add frames to the slideshow first.</div>
+          <div style={{ color:T_C.tx3, fontSize:T_FS.md, padding:T_SP[7] }}>No slides yet — add frames to the slideshow first.</div>
         )}
       </div>
+      {/* Lifted tile following the cursor. */}
+      {ghost && (
+        <div style={{ position:'fixed', left:ghost.x, top:ghost.y, width:ghost.w, height:ghost.h, zIndex:5100, pointerEvents:'none',
+          transform:'rotate(-2deg) scale(1.03)', opacity:0.95, borderRadius:T_R.lg, overflow:'hidden',
+          background:T_C.bg2, border:`2px solid ${T_C.accentH}`, boxShadow:T_SH.lg }}>
+          <SlideThumbSVG fn={ghost.fn} getVP={getVP} viewImages={viewImages} allSimNodes={allSimNodes}
+            storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={340} />
+        </div>
+      )}
     </div>
   )
 }
@@ -8957,77 +8973,79 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
 
   return (
     <div ref={containerRef} data-slide-sidebar="1" onMouseDown={e => e.stopPropagation()}
-      style={{ width: 190, flexShrink: 0, borderLeft: '1px solid #1e1e2e', background: '#0d0d1a',
-        overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px 8px 16px' }}>
-      {/* Prominent Present button, pinned at the very top. Starts from the highlighted slide (F5 does too). */}
+      style={{ width: 196, flexShrink: 0, borderLeft: `1px solid ${T_C.line}`, background: T_C.bg,
+        overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: T_SP[4], padding: `${T_SP[4]}px ${T_SP[4]}px ${T_SP[6]}px` }}>
+      {/* Header: collapse ‹ + SLIDES label. */}
+      <div style={{ display:'flex', alignItems:'center', gap:T_SP[3] }}>
+        <button onClick={onClose} title="Hide panel"
+          style={{ background:'transparent', border:'none', color:T_C.tx2, cursor:'pointer', fontSize:16, padding:0, lineHeight:1 }}>‹</button>
+        <span style={{ fontSize:T_FS.xs, color:T_C.tx3, letterSpacing:'0.1em', fontWeight:T_FW.bold }}>SLIDES</span>
+      </div>
+
+      {/* Prominent Present button. Starts from the highlighted slide (F5 does too). */}
       <button
         onClick={() => { if (!slideSimNodes.length) return; const i = Math.max(0, Math.min(currentIdx, slideSimNodes.length - 1)); onPresent ? onPresent(i) : (setPresentingSlideIdx(i), zoomToFrame(slideSimNodes[i])) }}
         disabled={!slideSimNodes.length}
         title="Present from the highlighted slide (F5)"
-        style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, width:'100%', marginBottom:8,
-          background: slideSimNodes.length ? 'linear-gradient(180deg,#5b6af0,#4652d6)' : '#20233a',
-          border:'none', color: slideSimNodes.length ? '#fff' : '#5a6088', borderRadius:9, padding:'10px 12px',
-          cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.92rem', fontWeight:700,
-          boxShadow: slideSimNodes.length ? '0 4px 14px rgba(91,106,240,0.4)' : 'none' }}>
-        ▶ Present <span style={{ fontSize:'0.68rem', fontWeight:600, opacity:0.85, background:'rgba(255,255,255,0.18)', borderRadius:4, padding:'1px 5px' }}>F5</span>
+        style={T_BTN('primary', { width:'100%', padding:`${T_SP[4]}px ${T_SP[5]}px`, fontSize:T_FS.md,
+          ...(slideSimNodes.length ? { boxShadow:'0 4px 14px rgba(100,112,245,0.35)' } : { background:T_C.bg3, borderColor:'transparent', color:T_C.tx3, cursor:'not-allowed' }) })}>
+        ▶ Present <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.medium, opacity:0.85, background:'rgba(255,255,255,0.18)', borderRadius:T_R.sm, padding:'1px 5px' }}>F5</span>
       </button>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, paddingBottom:6, borderBottom:'1px solid #1e1e2e' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <button onClick={onClose} style={{ background:'transparent', border:'none', color:'#8090b8', cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1 }}>‹</button>
-          <span style={{ fontSize:'0.68rem', color:'#8090b8', letterSpacing:'0.08em', fontWeight:600 }}>SLIDES</span>
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-          <button onClick={() => onOpenLog?.()} title="Presentation log — times per slide, past runs"
-            style={{ display:'flex', alignItems:'center', gap:4, background:'transparent', border:'1px solid #2a3358', color:'#c5d0ff',
-              borderRadius:6, padding:'2px 7px', cursor:'pointer', fontSize:'0.66rem', fontWeight:600 }}>⏱ Log</button>
-          <button onClick={() => onOpenRemote?.()} title="Control the presentation from your phone"
-            style={{ display:'flex', alignItems:'center', gap:4, background: remoteOn ? '#17301f' : 'transparent', border:`1px solid ${remoteOn ? '#2f7a4a' : '#2a3358'}`, color: remoteOn ? '#7ee6a6' : '#c5d0ff',
-              borderRadius:6, padding:'2px 7px', cursor:'pointer', fontSize:'0.66rem', fontWeight:600 }}>📱 Remote{remoteOn ? ' ●' : ''}</button>
-          <button onClick={() => onOpenGrid?.()} disabled={!slideSimNodes.length} title="Full-screen slide sorter"
-            style={{ display:'flex', alignItems:'center', gap:4, background:'transparent', border:'1px solid #2a3358', color: slideSimNodes.length ? '#c5d0ff' : '#5a6088',
-              borderRadius:6, padding:'2px 7px', cursor: slideSimNodes.length ? 'pointer' : 'not-allowed', fontSize:'0.66rem', fontWeight:600 }}>⊞ Grid</button>
-        </div>
+
+      {/* Utility row: three equal buttons that fit the panel width. Remote turns green when paired. */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:T_SP[3] }}>
+        <button onClick={() => onOpenGrid?.()} disabled={!slideSimNodes.length} title="Arrange & reorder slides in a grid"
+          style={T_BTN('ghost', { flexDirection:'column', gap:T_SP[1], padding:`${T_SP[3]}px 0`, fontSize:T_FS.xs,
+            ...(slideSimNodes.length ? {} : { color:T_C.tx3, cursor:'not-allowed' }) })}>
+          <span style={{ fontSize:15 }}>⊞</span>Grid</button>
+        <button onClick={() => onOpenRemote?.()} title="Control the presentation from your phone"
+          style={T_BTN(remoteOn ? 'ok' : 'ghost', { flexDirection:'column', gap:T_SP[1], padding:`${T_SP[3]}px 0`, fontSize:T_FS.xs })}>
+          <span style={{ fontSize:15 }}>📱</span>Remote</button>
+        <button onClick={() => onOpenLog?.()} title="Presentation log — times per slide, past runs"
+          style={T_BTN('ghost', { flexDirection:'column', gap:T_SP[1], padding:`${T_SP[3]}px 0`, fontSize:T_FS.xs })}>
+          <span style={{ fontSize:15 }}>⏱</span>Log</button>
       </div>
 
       {/* Slideshow selector */}
-      <div style={{ marginBottom:10 }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:T_SP[1], paddingTop:T_SP[4], borderTop:`1px solid ${T_C.line}` }}>
         {slideshows.map(ss => (
           renamingId === ss.id ? (
             <input key={ss.id} autoFocus value={renameVal}
               onChange={e => setRenameVal(e.target.value)}
               onBlur={() => { renameSlideshow(ss.id, renameVal || ss.name); setRenamingId(null) }}
               onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { renameSlideshow(ss.id, renameVal || ss.name); setRenamingId(null) } e.stopPropagation() }}
-              style={{ width:'100%', fontSize:'0.75rem', background:'#0d1020', border:'1px solid #4a5280', borderRadius:4, color:'#e0e4ff', padding:'3px 7px', outline:'none', marginBottom:2, boxSizing:'border-box' }}
+              style={T_INPUT({ width:'100%', fontSize:T_FS.sm, boxSizing:'border-box' })}
             />
           ) : (
-            <div key={ss.id} style={{ display:'flex', alignItems:'center', marginBottom:2 }}>
+            <div key={ss.id} style={{ display:'flex', alignItems:'center', gap:T_SP[1] }}>
               <button
                 onDoubleClick={() => { setRenamingId(ss.id); setRenameVal(ss.name) }}
                 onClick={() => setActiveSlideshowId(ss.id)}
-                style={{ flex:1, textAlign:'left', fontSize:'0.75rem', padding:'4px 8px', borderRadius:4, border:'none',
-                  background: ss.id === activeSlideshowId ? '#222a5a' : 'transparent',
-                  color: ss.id === activeSlideshowId ? '#ffffff' : '#9aa0c8',
-                  cursor:'pointer', fontWeight: ss.id === activeSlideshowId ? 600 : 400 }}>
+                style={{ flex:1, minWidth:0, textAlign:'left', fontSize:T_FS.sm, padding:`${T_SP[3]}px ${T_SP[4]}px`, borderRadius:T_R.sm, border:'none',
+                  background: ss.id === activeSlideshowId ? T_C.accentBg : 'transparent',
+                  color: ss.id === activeSlideshowId ? T_C.tx : T_C.tx2,
+                  cursor:'pointer', fontWeight: ss.id === activeSlideshowId ? T_FW.medium : T_FW.normal,
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                 {ss.name}
               </button>
               {slideshows.length > 1 && (
                 <button onClick={() => deleteSlideshow(ss.id)} title="Delete slideshow"
-                  style={{ background:'transparent', border:'none', color:'#6070a0', cursor:'pointer', fontSize:14, padding:'0 4px', lineHeight:1, flexShrink:0 }}>×</button>
+                  style={{ background:'transparent', border:'none', color:T_C.tx3, cursor:'pointer', fontSize:14, padding:'0 2px', lineHeight:1, flexShrink:0 }}>×</button>
               )}
             </div>
           )
         ))}
         <button onClick={() => addSlideshow()}
-          style={{ fontSize:'0.72rem', padding:'3px 8px', borderRadius:4, border:'1px solid #3a4878', background:'transparent', color:'#9aa0c8', cursor:'pointer', marginTop:2 }}>+ new slideshow</button>
+          style={T_BTN('subtle', { justifyContent:'flex-start', padding:`${T_SP[2]}px ${T_SP[4]}px`, fontSize:T_FS.sm, color:T_C.tx2 })}>+ new slideshow</button>
       </div>
 
-      {/* Capture / update slides from the current viewport — sits with the slideshow controls. */}
-      <div style={{ display:'flex', gap:6, marginBottom:10 }}>
+      {/* Capture / update slides from the current viewport. */}
+      <div style={{ display:'flex', gap:T_SP[3] }}>
         <button onClick={() => onAddSlideFromView?.()} title="Add a new slide framing the current view"
-          style={{ flex:1, fontSize:'0.72rem', padding:'5px 6px', borderRadius:5, border:'1px solid #3a4a8a', background:'#1a1f4a', color:'#c5d0ff', cursor:'pointer', whiteSpace:'nowrap' }}>＋ From view</button>
+          style={T_BTN('default', { flex:1, padding:`${T_SP[3]}px ${T_SP[3]}px`, fontSize:T_FS.sm })}>＋ From view</button>
         <button onClick={() => { const fn = slideSimNodes[activeIdx]; if (fn) onUpdateSlideToView?.(fn.id) }} disabled={!slideSimNodes[activeIdx]}
           title="Resize the current slide to match the current view"
-          style={{ flex:1, fontSize:'0.72rem', padding:'5px 6px', borderRadius:5, border:'1px solid #2a3358', background:'transparent', color:'#c5d0ff', cursor:'pointer', whiteSpace:'nowrap', opacity: slideSimNodes[activeIdx] ? 1 : 0.5 }}>⟳ Update slide</button>
+          style={T_BTN('ghost', { flex:1, padding:`${T_SP[3]}px ${T_SP[3]}px`, fontSize:T_FS.sm, ...(slideSimNodes[activeIdx] ? {} : { opacity:0.5, cursor:'not-allowed' }) })}>⟳ Update</button>
       </div>
 
       {/* Interim slide status: the designated bounce-to frame (often not a deck slide). ⤾ toggles per gap. */}
