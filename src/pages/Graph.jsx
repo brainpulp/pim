@@ -11,7 +11,7 @@ import ViewManager from '../components/ViewManager'
 import CommandBar from '../components/CommandBar'
 import { saveProject, uploadModel, uploadThumbnail, uploadImageDataUrl, uploadImageFromUrl, uploadMediaFile, unfurlLink } from '../lib/db'
 import { pickDriveVideo, downloadDriveFile, driveEmbedUrl, hasDriveCreds, setDriveCreds } from '../lib/gdrive'
-import { luminance as lumaOf, c as T_C, sp as T_SP, r as T_R, fs as T_FS, fw as T_FW, shadow as T_SH, btn as T_BTN, input as T_INPUT } from '../lib/theme'
+import { luminance as lumaOf, c as T_C, sp as T_SP, r as T_R, fs as T_FS, fw as T_FW, shadow as T_SH, btn as T_BTN, input as T_INPUT, panel as T_PANEL } from '../lib/theme'
 import { PropertyField, PROP_TYPES } from '../components/PropertyField'
 import { tagColor } from '../lib/tags'
 import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../lib/arrange'
@@ -8399,6 +8399,35 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onClose={() => setShowSlideGrid(false)}
         />
       )}
+
+      {/* Canvas speaker-notes inspector — floating at the bottom when a single slide node is selected.
+          Same notes that show on the phone; mirrors the one in the Arrange-slides grid. */}
+      {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node' && slideIds.includes(selected.id) && (() => {
+        const sn = storeNodeById[selected.id] || {}
+        const label = sn.label || selectedNode?.label || 'Slide'
+        const slideNo = slideIds.indexOf(selected.id) + 1
+        return (
+          <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+            style={{ position:'fixed', left:'50%', bottom:T_SP[5], transform:'translateX(-50%)',
+              width:'min(680px, 92vw)', zIndex:60, ...T_PANEL(), padding:`${T_SP[4]}px ${T_SP[5]}px`,
+              display:'flex', flexDirection:'column', gap:T_SP[2] }}>
+            <div style={{ display:'flex', alignItems:'baseline', gap:T_SP[3] }}>
+              <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
+                SPEAKER NOTES · SLIDE {slideNo}
+              </span>
+              <span style={{ fontSize:T_FS.sm, color:T_C.tx2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
+              <div style={{ flex:1 }} />
+              <span style={{ fontSize:T_FS.xs, color:T_C.tx3 }}>shows on your phone</span>
+            </div>
+            <textarea key={selected.id} defaultValue={sn.speakerNotes || ''}
+              onChange={e => setSpeakerNotes?.(selected.id, e.target.value)}
+              onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+              placeholder={`Notes for “${label}”…`} rows={3}
+              style={T_INPUT({ width:'100%', boxSizing:'border-box', resize:'vertical', minHeight:56,
+                lineHeight:1.5, fontFamily:'inherit', fontSize:T_FS.md })} />
+          </div>
+        )
+      })()}
 
       {/* Presentation session log (times per slide, per run). */}
       {presentLogOpen && (
