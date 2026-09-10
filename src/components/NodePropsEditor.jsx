@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { SwatchRow } from './SwatchPicker'
 
 // Modal: edit every property of a node (all types). Writes via onSet(propId, value).
 // onAddOption(propId, name) adds a new select/multiSelect value. Shared by pack view + board.
@@ -47,12 +48,8 @@ function CosmeticsRow({ fillColors = [], shapes = [], value = {}, onSet }) {
     <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #23233e', display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={npe.key}>Colour</span>
-        <button title="No fill" onClick={() => onSet('fillColor', null)}
-          style={{ ...npe.swatch, background: 'transparent', outline: cur ? 'none' : '2px solid #8ab4ff' }}>∅</button>
-        {fillColors.map(c => (
-          <button key={c} onClick={() => onSet('fillColor', c)}
-            style={{ ...npe.swatch, background: c, outline: cur === c ? '2px solid #fff' : 'none' }} />
-        ))}
+        <SwatchRow value={cur} swatches={fillColors && fillColors.length ? fillColors : undefined}
+          onPick={c => onSet('fillColor', c)} onNone={() => onSet('fillColor', null)} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={npe.key}>Shape</span>

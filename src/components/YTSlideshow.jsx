@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { driveEmbedUrl, driveThumbUrl } from '../lib/gdrive'
 import { fsArrowAction } from '../lib/slideshowNav'
 import { plog } from '../lib/presDebug'
+import { SwatchButton } from './SwatchPicker'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 export const parseYoutubeId = (str) => {
@@ -947,10 +948,10 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               style={{ flex: 1, minWidth: 300, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#e8ecff', borderRadius: 6, fontSize: 14, padding: '8px 10px', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11.5, color: '#8fa0d8', minWidth: 210 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Text
-                  <input type="color" value={cur.color || '#e8ecff'} onChange={e => patch(sel, { color: e.target.value })} style={{ width: 26, height: 20, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} /></label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Background
-                  <input type="color" value={cur.bg || '#0c0c1a'} onChange={e => patch(sel, { bg: e.target.value })} style={{ width: 26, height: 20, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} /></label>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Text
+                  <SwatchButton title="Text colour" size={20} value={cur.color || '#e8ecff'} onChange={c => patch(sel, { color: c })} /></span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Background
+                  <SwatchButton title="Background colour" size={20} value={cur.bg || '#0c0c1a'} onChange={c => patch(sel, { bg: c })} /></span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span>Size</span>

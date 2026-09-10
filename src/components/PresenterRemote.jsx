@@ -5,11 +5,13 @@ import { supabase } from '../lib/supabase'
 // Subscribes to `pim-remote-<code>`, routes incoming commands to actionsRef.current[action], and
 // broadcasts the current `state` so the phone shows the live position. Answers a phone 'hello' with state.
 // Auto-reconnects if the realtime channel drops (network blip, laptop sleep) so control isn't silently lost.
-export default function PresenterRemote({ code, actionsRef, state }) {
+export default function PresenterRemote({ code, actionsRef, state, onPhoneConnect }) {
   const chanRef = useRef(null)
   const stateRef = useRef(state)
   stateRef.current = state
   const lastSentRef = useRef('')
+  const onConnectRef = useRef(onPhoneConnect)   // kept in a ref so the channel effect never re-subscribes
+  onConnectRef.current = onPhoneConnect
 
   useEffect(() => {
     if (!code) return
@@ -29,7 +31,7 @@ export default function PresenterRemote({ code, actionsRef, state }) {
         if (fn) fn()
         setTimeout(pushState, 80)   // reflect the result back to the phone
       })
-      chan.on('broadcast', { event: 'hello' }, () => pushState())
+      chan.on('broadcast', { event: 'hello' }, () => { pushState(); try { onConnectRef.current?.() } catch { /* ignore */ } })
       chan.subscribe(s => {
         if (s === 'SUBSCRIBED') pushState()
         else if ((s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') && !closed) {

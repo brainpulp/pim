@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import useGraphStore, { NODE_R } from '../lib/graphStore'
+import { SwatchRow } from '../components/SwatchPicker'
 
 // ─── Writer ──────────────────────────────────────────────────────────────────
 // Full-screen, keyboard-driven outliner over the same nodes+edges as the graph, with a lightweight
@@ -693,8 +694,8 @@ export default function Writer({ projectName, embedded = false, maximized = fals
           {showColorMenu && (<>
             <div onMouseDown={() => setShowColorMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
             <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: '115%', left: 0, zIndex: 41, background: dark ? '#161a24' : '#fff', border: `1px solid ${line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.3)', padding: 8, display: 'flex', flexWrap: 'wrap', gap: 6, width: 148 }}>
-              {TEXT_COLORS.map(c => <div key={c} onClick={() => { styleFocused({ color: c }); setShowColorMenu(false) }} style={{ width: 18, height: 18, borderRadius: '50%', background: c, cursor: 'pointer', border: `2px solid ${fs.color === c ? '#5b6af0' : 'transparent'}` }} />)}
-              <div onClick={() => { styleFocused({ color: null }); setShowColorMenu(false) }} title="Default" style={{ width: 18, height: 18, borderRadius: '50%', cursor: 'pointer', border: `1px solid ${line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: faint }}>⦸</div>
+              <SwatchRow value={fs.color} onPick={c => { styleFocused({ color: c }); setShowColorMenu(false) }}
+                onNone={() => { styleFocused({ color: null }); setShowColorMenu(false) }} />
             </div>
           </>)}
         </div>

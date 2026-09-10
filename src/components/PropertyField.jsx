@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import useGraphStore from '../lib/graphStore'
+import { SwatchButton } from './SwatchPicker'
 
 // Shared Notion-style property editors, used by both the Table grid and the node toolbar.
 // PropertyField renders the value editor for one property def; the surrounding layout
@@ -106,8 +107,7 @@ function SelectCell({ def, value, multi, onChange, onAddOption }) {
             {options.map(o => (
               editing === o.id ? (
                 <div key={o.id} style={{ ...S.menuItem, gap: 6 }} onClick={e => e.stopPropagation()}>
-                  <input type="color" value={o.color || '#6366f1'} onChange={e => recolorSelectOption(def.id, o.id, e.target.value)}
-                    style={{ width: 20, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0 }} title="Color" />
+                  <SwatchButton title="Colour" size={20} value={o.color || '#6366f1'} onChange={c => recolorSelectOption(def.id, o.id, c)} />
                   <input value={editName} autoFocus onChange={e => setEditName(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') { const n = editName.trim(); if (n) renameSelectOption(def.id, o.id, n); setEditing(null) } if (e.key === 'Escape') setEditing(null) }}
                     style={{ ...S.cellInput, flex: 1, border: '1px solid #2d3a6a', borderRadius: 4, padding: '2px 6px' }} />

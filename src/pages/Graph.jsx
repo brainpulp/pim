@@ -21,6 +21,7 @@ import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptio
 import { driveThumbUrl } from '../lib/gdrive'
 import { playDrop } from '../lib/sound'
 import PresenterRemote from '../components/PresenterRemote'
+import { SwatchRow, SwatchButton } from '../components/SwatchPicker'
 import QRCode from '../components/QRCode'
 import { plog, presLog } from '../lib/presDebug'
 
@@ -795,10 +796,8 @@ function ImageToolbar({ images, selectedImageIds, anchor,
           <div style={{ borderTop: '1px solid #23234a', margin: '4px 8px' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px' }}>
             <span style={{ fontSize: '0.8rem', color: '#c5d0ff', flex: 1 }}>Colorize</span>
-            <input type="color" value={tint.color || '#5b6af0'}
-              onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
-              onChange={e => onSetEffect({ tint: { color: e.target.value, amount: tint.amount > 0 ? tint.amount : 0.6 } })}
-              style={{ width: 26, height: 22, padding: 0, border: '1px solid #2d3a6a', borderRadius: 4, background: 'transparent', cursor: 'pointer' }} />
+            <SwatchButton title="Colorize" size={22} value={tint.color || '#5b6af0'}
+              onChange={c => onSetEffect({ tint: { color: c, amount: tint.amount > 0 ? tint.amount : 0.6 } })} />
             {tintOn && <button onClick={() => onSetEffect({ tint: null })}
               style={{ padding: '0 6px', borderRadius: 4, border: '1px solid #2a3358', background: 'transparent', color: '#f87171', cursor: 'pointer', fontSize: 13 }}>×</button>}
           </div>
@@ -1242,6 +1241,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [presentLogOpen, setPresentLogOpen] = useState(false)
   const [presentLog, setPresentLog] = useState([])
   const [presentElapsed, setPresentElapsed] = useState(0)   // live elapsed ms during a run (for the nav-bar timer)
+  // The on-screen control/slide-count bar during a presentation is optional (persisted). When hidden, a tiny
+  // restore handle remains so the on-stage control is never fully lost. Keyboard/phone always drive the deck.
+  const [presentBarHidden, setPresentBarHidden] = useState(() => { try { return localStorage.getItem('pim_present_bar_hidden') === '1' } catch { return false } })
+  const togglePresentBar = (v) => setPresentBarHidden(prev => { const nv = typeof v === 'boolean' ? v : !prev; try { localStorage.setItem('pim_present_bar_hidden', nv ? '1' : '0') } catch { /* ignore */ } return nv })
   const showDraw = useGraphStore(s => s.showDraw)               // drawing palette (right panel, tabbed w/ slides)
   const setShowDraw = useGraphStore(s => s.setShowDraw)
   const showViews = useGraphStore(s => s.showViews)
@@ -1635,6 +1638,62 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy }
     scheduleRender()
   }, [setNodeViewProp]) // eslint-disable-line -- pushUndo/scheduleRender are declared later (TDZ)
+
+  // Lay the REAL frames out on the canvas in a tidy grid whose reading order matches `orderedIds`
+  // (the deck order). Each frame carries its contents — the same membership rule as a frame drag:
+  // nodes marked containedIn OR geometrically inside, plus free images/text inside the frame box.
+  // Undoable (Ctrl+Z restores the previous layout). Positions only — never topology or slide order.
+  const layoutFramesToGrid = useCallback((orderedIds) => {
+    const vp = viewNodePropsRef.current
+    const sim = simNodesRef.current
+    const ids = (orderedIds || []).filter(id => (vp[id] || {}).shape === 'frame')
+    if (ids.length < 2) return
+    const byId = Object.fromEntries(sim.map(n => [n.id, n]))
+    const boxOf = (id) => {
+      const fvp = vp[id] || {}
+      const fr = NODE_R * (fvp.scale || 1)
+      const { halfW: dHW, halfH: dHH } = shapeDims('frame', fr)
+      const n = byId[id]
+      return { cx: n?.fx ?? n?.x ?? 0, cy: n?.fy ?? n?.y ?? 0, hw: fvp.frameHalfW ?? dHW, hh: fvp.frameHalfH ?? dHH }
+    }
+    const boxes = ids.map(boxOf)                       // snapshot BEFORE moving anything
+    const inBox = (b, x, y) => Math.abs((x || 0) - b.cx) <= b.hw && Math.abs((y || 0) - b.cy) <= b.hh
+    const frameSet = new Set(ids)
+
+    // Assign each non-frame node and each free image to exactly one owning frame.
+    const owners = {}; ids.forEach(id => { owners[id] = { nodes: [], imgs: [] } })
+    sim.forEach(nd => {
+      const nvp = vp[nd.id] || {}
+      if (nvp.shape === 'frame' || nvp.shape === 'container' || nvp.shape === '3d') return
+      let owner = frameSet.has(nvp.containedIn) ? nvp.containedIn : null
+      if (!owner) for (let i = 0; i < ids.length; i++) if (inBox(boxes[i], nd.fx ?? nd.x, nd.fy ?? nd.y)) { owner = ids[i]; break }
+      if (owner) owners[owner].nodes.push(nd)
+    })
+    const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+    imgs.forEach(im => { for (let i = 0; i < ids.length; i++) if (inBox(boxes[i], im.x, im.y)) { owners[ids[i]].imgs.push(im); break } })
+
+    // Grid metrics: uniform pitch from the largest frame so nothing overlaps; anchored at the current
+    // top-left-most frame so the whole set stays roughly where it already is.
+    const n = ids.length
+    const cols = Math.max(1, Math.round(Math.sqrt(n * 1.7)))
+    const pitchX = Math.max(...boxes.map(b => b.hw * 2)) + 90
+    const pitchY = Math.max(...boxes.map(b => b.hh * 2)) + 110
+    const originX = Math.min(...boxes.map(b => b.cx))
+    const originY = Math.min(...boxes.map(b => b.cy))
+
+    pushUndo()
+    ids.forEach((id, i) => {
+      const b = boxes[i]
+      const tx = originX + (i % cols) * pitchX, ty = originY + Math.floor(i / cols) * pitchY
+      const dx = tx - b.cx, dy = ty - b.cy
+      const fn = byId[id]; if (fn) { fn.x = tx; fn.y = ty; fn.fx = tx; fn.fy = ty }
+      setAnchor(id, tx, ty)
+      owners[id].nodes.forEach(nd => { const nx = (nd.fx ?? nd.x ?? 0) + dx, ny = (nd.fy ?? nd.y ?? 0) + dy; nd.x = nx; nd.y = ny; nd.fx = nx; nd.fy = ny; setAnchor(nd.id, nx, ny) })
+      owners[id].imgs.forEach(im => updateImage(im.id, { x: im.x + dx, y: im.y + dy }))
+    })
+    simRef.current?.alpha(0.15).restart()
+    scheduleRender()
+  }, [setAnchor, updateImage]) // eslint-disable-line -- pushUndo/scheduleRender declared later (TDZ), refs are stable
 
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
@@ -6496,15 +6555,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               {showBgPicker && (
                 <div style={{ position:'absolute', top:'110%', left:0, marginTop:2, background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:8, display:'flex', flexDirection:'column', gap:6, zIndex:30, boxShadow:'0 4px 20px rgba(0,0,0,0.6)' }}
                   onClick={e => e.stopPropagation()}>
-                  <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:136 }}>
-                    {BG_COLORS.map(c => (
-                      <div key={c} onClick={() => { setViewBgColor(c); setShowBgPicker(false) }} style={{ width:22, height:22, borderRadius:4, background:c, cursor:'pointer', border: bgColor===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
-                    ))}
-                  </div>
-                  <div style={{ borderTop:'1px solid #2d3a6a', paddingTop:6, display:'flex', flexWrap:'wrap', gap:4, width:160 }}>
-                    {COLOR_PALETTE.map(c => (
-                      <div key={c} onClick={() => { setViewBgColor(c); setShowBgPicker(false) }} style={{ width:22, height:22, borderRadius:4, background:c, cursor:'pointer', border: bgColor===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)' }} />
-                    ))}
+                  <div style={{ width:180 }}>
+                    <SwatchRow value={bgColor} swatches={BG_COLORS} onPick={c => { setViewBgColor(c); setShowBgPicker(false) }} />
                   </div>
                 </div>
               )}
@@ -7315,11 +7367,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           )
           const back = (label) => item(null, <span style={{ color: '#8090b8' }}>‹ {label}</span>, () => setBulkPanel(null))
           const swatchGrid = (withNone, onPick) => (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, width: 178, padding: '4px 8px 6px' }}>
-              {withNone && <div title="None" onClick={() => { onPick('__none__'); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: 'transparent', border: '1.5px solid #5b6af0', cursor: 'pointer', color: '#8090b8', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>∅</div>}
-              {COLOR_PALETTE.map(c => (
-                <div key={c} title={c} onClick={() => { onPick(c); close() }} style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: 'pointer', border: '1.5px solid rgba(255,255,255,0.15)' }} />
-              ))}
+            <div style={{ width: 190, padding: '4px 8px 6px' }}>
+              <SwatchRow onPick={c => { onPick(c); close() }} onNone={withNone ? () => { onPick('__none__'); close() } : undefined} />
             </div>
           )
           const listPanel = (opts, onPick) => opts.map(([label, val], i) => <div key={i}>{item(null, label, () => { onPick(val); close() })}</div>)
@@ -8065,17 +8114,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 background:'#16162a', border:'1px solid #2d3a6a', borderRadius:8, padding:'6px 8px',
                 display:'flex', flexDirection:'column', gap:4, zIndex:25, boxShadow:'0 4px 16px rgba(0,0,0,0.6)' }}>
               <div style={{ fontSize:'0.63rem', color:'#8090b8', letterSpacing:'0.06em' }}>FILL</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:4, width:188 }}>
-                <div title="No fill" onClick={() => setNodeViewProp(selected.id, 'fillColor', 'none')}
-                  style={{ width:20, height:20, borderRadius:3, cursor:'pointer',
-                    backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
-                    backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px',
-                    border: (fvp.fillColor==='none'||!fvp.fillColor) ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.12)' }} />
-                {COLOR_PALETTE.map(c => (
-                  <div key={c} onClick={() => setNodeViewProp(selected.id, 'fillColor', c)}
-                    style={{ width:20, height:20, borderRadius:3, background:c, cursor:'pointer',
-                      border: fvp.fillColor===c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.12)' }} />
-                ))}
+              <div style={{ width:190 }}>
+                <SwatchRow value={fvp.fillColor} onPick={c => setNodeViewProp(selected.id, 'fillColor', c)} onNone={() => setNodeViewProp(selected.id, 'fillColor', 'none')} />
               </div>
             </div>
           )
@@ -8110,6 +8150,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               {`presIdx=${presentingSlideIdx} stage=${presentStageIdx} act=${ytssActiveId||'-'} fsId=${ytssFullscreenId||'-'} vidFS=${videoFullscreen?'Y':'-'} slides=${slideSimNodes.length}\n`}
               {presLog.slice(-14).join('\n') || '(press Next / arrow to log…)'}
             </div>}
+            {presentBarHidden ? (
+              // Minimal restore handle — the deck still runs from keyboard/phone; click to bring the bar back.
+              <button onClick={() => togglePresentBar(false)} title="Show controls"
+                style={{ position:'absolute', bottom:14, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
+                  background:'rgba(8,8,20,0.55)', border:'1px solid #2d3a6a', borderRadius:999, width:44, height:14,
+                  color:'#8090b8', cursor:'pointer', fontSize:10, lineHeight:1, padding:0, opacity:0.6 }}>•••</button>
+            ) : (
             <div style={{ position:'absolute', bottom:22, left:'50%', transform:'translateX(-50%)', pointerEvents:'all',
               background:'rgba(8,8,20,0.92)', border:'1px solid #2d3a6a', borderRadius:14,
               padding:'10px 14px', display:'flex', gap:10, alignItems:'center', boxShadow:'0 8px 28px rgba(0,0,0,0.75)' }}>
@@ -8121,8 +8168,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 <div style={{ fontSize:'0.66rem', color:'#8090b8', fontVariantNumeric:'tabular-nums' }}>⏱ {fmtDur(presentElapsed)}</div>
               </span>
               <button style={{ ...navBtn, background:'linear-gradient(180deg,#5b6af0,#4652d6)', border:'none', color:'#fff' }} onClick={() => remoteKey('ArrowRight')} title="Next (→ / Space)">Next ›</button>
+              <button style={{ ...navBtn, minWidth:0, padding:'12px 10px', fontSize:'0.9rem', color:'#8090b8' }} onClick={() => togglePresentBar(true)} title="Hide this bar (keyboard/phone still work)">⌄</button>
               <button style={{ ...navBtn, minWidth:0, padding:'12px 14px', color:'#f9b4b4', background:'#241318', border:'1px solid #5a2a2a' }} onClick={() => exitPresentation()} title="Exit (Esc)">✕</button>
             </div>
+            )}
           </div>
           )
         })()}
@@ -8195,6 +8244,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           interimSlideId={activeSlideshow?.interimSlideId || null}
           onPresent={(idx) => { setShowSlideGrid(false); presentSlide(idx, 'fwd') }}
           onJump={(idx) => { setShowSlideGrid(false); zoomToFrame(slideSimNodes[idx]) }}
+          onLayout={() => layoutFramesToGrid(slideSimNodes.map(n => n.id))}
           onClose={() => setShowSlideGrid(false)}
         />
       )}
@@ -8208,7 +8258,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       )}
 
       {/* Phone remote: presenter-side Realtime channel (invisible) — live whenever the remote is enabled. */}
-      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} />}
+      {remoteOn && !readOnly && <PresenterRemote code={remoteCode} actionsRef={remoteActionsRef} state={remoteState} onPhoneConnect={() => setShowRemote(false)} />}
 
       {/* Fullscreen hand-off veil: black cover between one fullscreen overlay closing and the next opening,
           so the canvas never flashes through. Below the overlays (4000), above the canvas. */}
@@ -8693,7 +8743,7 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
 
 // ─── SlideGrid — full-screen "slide sorter" (PowerPoint-style). Big thumbnails in a wrapping grid,
 // drag any card to reorder, double-click to jump to that slide on the canvas, or Present. ──────────
-function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onClose, interimSlideId = null }) {
+function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onLayout, onClose, interimSlideId = null }) {
   const gridRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)   // index of the tile being lifted
   const [dropIdx, setDropIdx] = useState(null)   // insertion index (0..n) it would land at
@@ -8791,6 +8841,11 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
         <span style={{ fontSize:T_FS.lg, fontWeight:T_FW.bold, color:T_C.tx }}>Arrange slides</span>
         <span style={{ fontSize:T_FS.sm, color:T_C.tx3 }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · double-click to open</span>
         <div style={{ flex:1 }} />
+        {onLayout && (
+          <button onClick={() => { if (slideSimNodes.length >= 2 && window.confirm('Lay the real frames out on the canvas in a grid matching this order? (Undo with Ctrl+Z.)')) onLayout() }}
+            disabled={slideSimNodes.length < 2} title="Reposition the actual frames on the canvas into this grid order"
+            style={T_BTN('default', slideSimNodes.length >= 2 ? { padding:`${T_SP[4]}px ${T_SP[5]}px` } : { padding:`${T_SP[4]}px ${T_SP[5]}px`, opacity:0.5, cursor:'not-allowed' })}>⤢ Lay out on canvas</button>
+        )}
         <button onClick={() => slideSimNodes.length && onPresent?.(0)} disabled={!slideSimNodes.length}
           style={T_BTN('primary', slideSimNodes.length ? { padding:`${T_SP[4]}px ${T_SP[6]}px` } : { padding:`${T_SP[4]}px ${T_SP[6]}px`, background:T_C.bg3, borderColor:'transparent', color:T_C.tx3, cursor:'not-allowed' })}>▶ Present</button>
         <button onClick={onClose} title="Close (Esc)" style={T_BTN('ghost', { padding:`${T_SP[4]}px ${T_SP[5]}px` })}>✕ Close</button>
@@ -9180,16 +9235,9 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
             <div style={{ padding:'2px 12px 8px', fontSize:'0.72rem', color:'#8090b8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{slideMenu.label}</div>
             <div style={{ padding:'2px 12px 8px', display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
               <span style={{ fontSize:'0.62rem', color:'#7080a0', width:'100%', marginBottom:3 }}>Background</span>
-              <div title="Default" onClick={() => setSlideBgColor(activeSlideshowId, slideMenu.frameId, null)}
-                style={{ width:16, height:16, borderRadius:3, cursor:'pointer',
-                  backgroundImage:'linear-gradient(45deg,#444 25%,transparent 25%,transparent 75%,#444 75%),linear-gradient(45deg,#444 25%,transparent 25%,transparent 75%,#444 75%)',
-                  backgroundSize:'6px 6px', backgroundPosition:'0 0,3px 3px',
-                  border: !activeSlideBgColors[slideMenu.frameId] ? '2px solid #fff' : '1px solid #3a4a6a' }} />
-              {SLIDE_BG_COLORS.map(c => (
-                <div key={c} onClick={() => setSlideBgColor(activeSlideshowId, slideMenu.frameId, c)}
-                  style={{ width:16, height:16, borderRadius:3, background:c, cursor:'pointer',
-                    border: activeSlideBgColors[slideMenu.frameId]===c ? '2px solid #5b6af0' : '1px solid rgba(255,255,255,0.2)' }} />
-              ))}
+              <SwatchRow value={activeSlideBgColors[slideMenu.frameId]} swatches={SLIDE_BG_COLORS}
+                onPick={c => setSlideBgColor(activeSlideshowId, slideMenu.frameId, c)}
+                onNone={() => setSlideBgColor(activeSlideshowId, slideMenu.frameId, null)} />
             </div>
             <div style={{ borderTop:'1px solid #1e2a3a', margin:'4px 0' }} />
             {(slideMenu.selectedIds?.length >= 2) && (
@@ -10656,9 +10704,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
               <button style={tc.hbtn} title="Table background colour" onMouseDown={stop} onClick={e => { stop(e); setShowTextColors(false); setShowColors(v => !v) }}>◑</button>
               {showColors && (
                 <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
-                  <div title="Transparent" onClick={() => { onSetColor('none'); setShowColors(false) }}
-                    style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid #5b6af0', background: 'repeating-conic-gradient(#555 0% 25%, #222 0% 50%) 50% / 8px 8px' }} />
-                  {palette.map(c => <div key={c} title={c} onClick={() => { onSetColor(c); setShowColors(false) }} style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
+                  <SwatchRow onPick={c => { onSetColor(c); setShowColors(false) }} onNone={() => { onSetColor('none'); setShowColors(false) }} />
                 </div>
               )}
             </div>
@@ -10666,9 +10712,7 @@ function TableCard({ node, title, table, fill, textColor, scale = 1, collapsedSc
               <button style={{ ...tc.hbtn, fontWeight: 800 }} title="Table text colour" onMouseDown={stop} onClick={e => { stop(e); setShowColors(false); setShowTextColors(v => !v) }}>A</button>
               {showTextColors && (
                 <div style={tc.colorPop} onMouseDown={stop} onClick={stop} onWheel={stop}>
-                  <div title="Default" onClick={() => { onSetTextColor('__default__'); setShowTextColors(false) }}
-                    style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid #5b6af0', background: TC_TXT, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16162a', fontSize: 11, fontWeight: 800 }}>A</div>
-                  {palette.map(c => <div key={c} title={c} onClick={() => { onSetTextColor(c); setShowTextColors(false) }} style={{ width: 18, height: 18, borderRadius: 4, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
+                  <SwatchRow onPick={c => { onSetTextColor(c); setShowTextColors(false) }} onNone={() => { onSetTextColor('__default__'); setShowTextColors(false) }} />
                 </div>
               )}
             </div>
@@ -10963,9 +11007,8 @@ function RichCell({ value, wrap, textColor, editable = true, onChange }) {
             style={{ background: tcOpen ? '#232a5c' : 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 13, fontWeight: 800, lineHeight: 1, padding: '3px 6px', borderRadius: 4 }}>A</button>
         </div>
         {tcOpen && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, padding: '1px 3px 2px', maxWidth: 170 }}>
-            {TEXT_COLORS.map(c => <div key={c} title={c} onMouseDown={e => { e.preventDefault(); stop(e); applyColor(c) }}
-              style={{ width: 16, height: 16, borderRadius: 3, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)' }} />)}
+          <div style={{ maxWidth: 180, padding: '1px 3px 2px' }}>
+            <SwatchRow keepFocus onPick={c => applyColor(c)} />
           </div>
         )}
       </div>, document.body)}
@@ -11082,10 +11125,9 @@ function DrawingItem({ d, selected, zoomRef, palette, onSelect, onUpdate, onDele
   const hx = bbox ? bbox.x + bbox.w : ((d.x2 ?? x + 120) - x), hy = bbox ? bbox.y + bbox.h : ((d.y2 ?? y) - y)
   const CHECKER = 'repeating-conic-gradient(#555 0% 25%, #222 0% 50%) 50% / 7px 7px'
   const swatchRow = (onPick, label) => (
-    <div onMouseDown={stop} style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 6, padding: '3px 5px', width: 'fit-content' }}>
+    <div onMouseDown={stop} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#16162a', border: '1px solid #2d3a6a', borderRadius: 6, padding: '3px 5px', width: 'fit-content' }}>
       {label && <span style={{ fontSize: 8, color: '#8090b8', width: 10, textAlign: 'center', flexShrink: 0 }}>{label}</span>}
-      <div title="Transparent" onClick={ev => { stop(ev); onPick('none') }} style={{ width: 13, height: 13, borderRadius: 3, cursor: 'pointer', border: '1px solid #5b6af0', background: CHECKER }} />
-      {palette.slice(0, 12).map(c => <div key={c} onClick={ev => { stop(ev); onPick(c) }} style={{ width: 13, height: 13, borderRadius: 3, background: c, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.15)' }} />)}
+      <SwatchRow size={13} onPick={c => onPick(c)} onNone={() => onPick('none')} />
     </div>
   )
   const pickFill = c => onUpdate({ fill: c === 'none' ? 'none' : c })
@@ -11545,18 +11587,8 @@ function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
       <button style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 2, fontWeight: 700 }} onMouseDown={keep}
         title="Text color" onClick={() => setShowColors(v => !v)}>A<span style={{ fontSize: 8, opacity: 0.7 }}>▾</span></button>
       {showColors && (
-        <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, padding: '5px 2px 2px' }}>
-          {TEXT_SWATCHES.map(c => (
-            <div key={c} title={c} onMouseDown={keep} onClick={() => exec('foreColor', c)}
-              style={{ width: 18, height: 18, borderRadius: 5, background: c, cursor: 'pointer',
-                border: c === '#ffffff' || c === '#e8ecff' ? '1px solid #3a4570' : '1px solid rgba(255,255,255,0.15)' }} />
-          ))}
-          <label onMouseDown={keep} title="Custom color"
-            style={{ width: 18, height: 18, borderRadius: 5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              border: '1px solid #3a4570', background: 'conic-gradient(from 0deg,#e5484d,#ffc53d,#46a758,#00a2c7,#3e63dd,#8e4ec6,#e5484d)', overflow: 'hidden' }}>
-            <input type="color" defaultValue="#e8ecff" onInput={e => exec('foreColor', e.target.value)}
-              style={{ opacity: 0, width: '100%', height: '100%', cursor: 'pointer', border: 'none' }} />
-          </label>
+        <div style={{ flexBasis: '100%', padding: '5px 2px 2px' }}>
+          <SwatchRow keepFocus onPick={c => exec('foreColor', c)} />
         </div>
       )}
       {sep}
@@ -11578,12 +11610,12 @@ function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
       <button style={btn} onMouseDown={keep} title="Link" onClick={() => { const u = window.prompt('Link URL:'); if (u) exec('createLink', u) }}>🔗</button>
       {sep}
       {/* Box-level styles (whole text element) */}
-      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Background color">▧
-        <input type="color" value={box?.bgColor && box.bgColor !== 'none' ? box.bgColor : '#12122a'} onInput={e => onBoxStyle?.({ bgColor: e.target.value })} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
-      {box?.bgColor && box.bgColor !== 'none' && <button style={{ ...btn, fontSize: 10, color: '#8fa0d8' }} onMouseDown={keep} title="No background" onClick={() => onBoxStyle?.({ bgColor: null })}>✕bg</button>}
-      <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Border color">▢
-        <input type="color" value={box?.borderColor || '#5b6af0'} onInput={e => onBoxStyle?.({ borderColor: e.target.value })} style={{ width: 16, height: 16, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} /></label>
-      {box?.borderColor && <button style={{ ...btn, fontSize: 10, color: '#8fa0d8' }} onMouseDown={keep} title="No border" onClick={() => onBoxStyle?.({ borderColor: null })}>✕bd</button>}
+      <span style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Background color">▧
+        <SwatchButton title="Background color" size={16} value={box?.bgColor && box.bgColor !== 'none' ? box.bgColor : null}
+          onChange={c => onBoxStyle?.({ bgColor: c })} onNone={() => onBoxStyle?.({ bgColor: null })} /></span>
+      <span style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="Border color">▢
+        <SwatchButton title="Border color" size={16} value={box?.borderColor || null}
+          onChange={c => onBoxStyle?.({ borderColor: c })} onNone={() => onBoxStyle?.({ borderColor: null })} /></span>
       <button style={{ ...btn, background: box?.textShadow ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Drop shadow" onClick={() => onBoxStyle?.({ textShadow: !box?.textShadow })}>⌵</button>
       <button style={{ ...btn, background: box?.halo ? '#232a5c' : 'transparent' }} onMouseDown={keep} title="Halo (outline glow for legibility)" onClick={() => onBoxStyle?.({ halo: !box?.halo })}>◎</button>
       {sep}
@@ -13868,38 +13900,11 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           </div>
           <div>
             <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>FILL</div>
-            <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-              <div title="Transparent" onClick={() => onSetFill('none')} style={{
-                width:18, height:18, borderRadius:4, cursor:'pointer',
-                backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
-                backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px',
-                border: (viewProps.fillColor==='none'||!viewProps.fillColor) ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.1)',
-              }} />
-              {COLOR_PALETTE.map(c => (
-                <div key={c} onClick={() => onSetFill(c)} style={{
-                  width:18, height:18, borderRadius:4, background:c, cursor:'pointer',
-                  border: viewProps.fillColor===c ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.1)',
-                }} />
-              ))}
-            </div>
+            <SwatchRow value={viewProps.fillColor} onPick={onSetFill} onNone={() => onSetFill('none')} />
           </div>
           <div>
             <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>OUTLINE</div>
-            <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-              <div title="No outline" onClick={() => { onSetStrokeColor(null); onSetStrokeWidth(0) }} style={{
-                width:18, height:18, borderRadius:4, cursor:'pointer', boxSizing:'border-box',
-                backgroundImage: 'linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%),linear-gradient(45deg,#333 25%,transparent 25%,transparent 75%,#333 75%)',
-                backgroundSize: '6px 6px', backgroundPosition: '0 0, 3px 3px',
-                border: (!viewProps.strokeColor && !viewProps.strokeWidth) ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.2)',
-              }} />
-              {COLOR_PALETTE.map(c => (
-                <div key={c} onClick={() => onSetStrokeColor(c)} style={{
-                  width:18, height:18, borderRadius:4, background:'transparent', cursor:'pointer',
-                  border: viewProps.strokeColor===c ? `3px solid ${c}` : `2px solid ${c}`,
-                  boxSizing:'border-box',
-                }} />
-              ))}
-            </div>
+            <SwatchRow value={viewProps.strokeColor} onPick={onSetStrokeColor} onNone={() => { onSetStrokeColor(null); onSetStrokeWidth(0) }} />
             <div style={{ display:'flex', gap:5, alignItems:'center', marginTop:5 }}>
               <span style={{ fontSize:'0.6rem', color:'#7080a0', letterSpacing:'0.05em' }}>WIDTH</span>
               <button style={{ padding:'1px 5px', borderRadius:3, border:'1px solid #2a3358', background:'transparent', color:'#7b8fcc', cursor:'pointer', fontSize:11 }} onClick={() => onSetStrokeWidth(Math.max(0, ((viewProps.strokeWidth||0)-0.5)))}>-</button>
@@ -13936,14 +13941,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
           </div>
           <div>
             <div style={{ fontSize:'0.65rem', color:'#7080a0', marginBottom:4, letterSpacing:'0.05em' }}>TEXT</div>
-            <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-              {COLOR_PALETTE.map(c => (
-                <div key={c} onClick={() => onSetTextColor(c)} style={{
-                  width:18, height:18, borderRadius:'50%', background:c, cursor:'pointer',
-                  border: (viewProps.textColor||'#ffffff')===c ? '2px solid #5b6af0' : '1.5px solid rgba(255,255,255,0.15)',
-                }} />
-              ))}
-            </div>
+            <SwatchRow value={viewProps.textColor} onPick={onSetTextColor} />
           </div>
         </div>
       )}
