@@ -6489,6 +6489,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     stages: curSlideNode ? (getVP(curSlideNode.id).stages || []).length : 0,
     step: showStep, steps: showSteps,
     title: curSlideNode?.label || '',
+    nextTitle: (presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx + 1]?.label : '') || '',
     totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
     slideMs: Math.round(slideMs / 1000) * 1000,
   }
@@ -6503,9 +6504,13 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (remoteThumbRef.current.sig === sig) {
       remoteThumb = remoteThumbRef.current.val
     } else {
-      const toSvg = fn => { try { return fn ? renderToStaticMarkup(
+      // A Realtime broadcast has a payload ceiling; a very busy slide's SVG could blow it and the whole
+      // message (thumbnail AND clip name) would be dropped. Cap each SVG — if it's too big, send null and
+      // let the phone fall back to the slide names (which ride the tiny always-on state payload).
+      const toSvg = fn => { try { const s = fn ? renderToStaticMarkup(
         <SlideThumbSVG fn={fn} getVP={getVP} viewImages={activeView?.images || []} allSimNodes={simNodesRef.current}
-          storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={220} />) : null } catch { return null } }
+          storeNodeById={storeNodeById} ytssIdxMap={ytssIdxMap} TW={220} />) : null
+        return (s && s.length <= 60000) ? s : null } catch { return null } }
       let clip = null
       if (activeShowId) {
         const yn = storeNodes.find(n => n.id === activeShowId)

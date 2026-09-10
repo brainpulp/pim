@@ -84,10 +84,17 @@ export default function RemoteControl({ code }) {
         </div>
       )}
 
-      {/* Current slide title + build indicator */}
+      {/* Current slide title (+ next slide name) + build indicator */}
       <div style={{ flexShrink: 0, padding: '10px 18px', minHeight: 44, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ flex: 1, fontSize: '1.0rem', fontWeight: 600, color: '#e6ebff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {presenting ? (state?.title || 'Slide') : 'Ready'}
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#e6ebff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {presenting ? (state?.title || 'Slide') : 'Ready'}
+          </span>
+          {presenting && state?.nextTitle && (
+            <span style={{ fontSize: '0.72rem', color: '#8fa0d8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Next: {state.nextTitle}
+            </span>
+          )}
         </span>
         {presenting && (state?.steps ?? 0) > 1 && (
           <span style={{ fontSize: '0.72rem', color: '#6ee7a8', background: '#12291d', borderRadius: 10, padding: '2px 9px' }}>
