@@ -10,6 +10,21 @@ export default function RemoteControl({ code }) {
   const [thumb, setThumb] = useState(null)             // { cur, next (SVG strings), curLabel, nextLabel, clip }
   const chanRef = useRef(null)
   const seenRef = useRef(false)
+  const audioRef = useRef(null)
+  const prevPosRef = useRef(null)
+
+  // Short confirmation beep so you can HEAR that a press registered and the deck actually advanced (a ghost
+  // click that doesn't advance makes no sound). Web Audio needs a user gesture to start — unlocked on tap.
+  const ensureAudio = () => { try { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; if (!audioRef.current) audioRef.current = new AC(); if (audioRef.current.state === 'suspended') audioRef.current.resume() } catch { /* ignore */ } }
+  const beep = (freq = 880) => {
+    const ac = audioRef.current; if (!ac) return
+    try {
+      const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime
+      o.type = 'sine'; o.frequency.value = freq
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.2, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13)
+      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 0.14)
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     if (!code) return
@@ -42,7 +57,17 @@ export default function RemoteControl({ code }) {
     return () => { closed = true; clearTimeout(retry); clearInterval(ka); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis); try { supabase.removeChannel(chanRef.current) } catch { /* ignore */ } chanRef.current = null }
   }, [code])
 
+  const presenting = !!state?.presenting
+  // Position signature: slide + sub-slide (slideshow clip) + build stage. Beep + pulse whenever it changes.
+  const posSig = presenting ? `${state?.idx ?? 0}|${state?.step ?? 0}|${state?.stage ?? 0}` : null
+  useEffect(() => {
+    if (!presenting) { prevPosRef.current = null; return }
+    if (prevPosRef.current == null) { prevPosRef.current = posSig; return }   // don't beep on the first state
+    if (posSig !== prevPosRef.current) { prevPosRef.current = posSig; beep() }
+  }, [posSig, presenting]) // eslint-disable-line
+
   const send = (action) => {
+    ensureAudio()   // first tap unlocks the phone's audio so the confirmation beep can play
     if (navigator.vibrate) { try { navigator.vibrate(12) } catch { /* ignore */ } }
     // Single send only — a command like Next must never fire twice (that would skip two). If the channel is
     // gone, rebuild it (the visibility/keep-alive paths also do this) and drop this press rather than double it.
@@ -50,7 +75,6 @@ export default function RemoteControl({ code }) {
     try { chanRef.current.send({ type: 'broadcast', event: 'cmd', payload: { action } }) } catch { /* ignore */ }
   }
 
-  const presenting = !!state?.presenting
   const dot = status === 'live' ? '#22e06a' : status === 'offline' ? '#f87171' : '#f6ad55'
   const statusText = status === 'live' ? 'Connected' : status === 'offline' ? 'Presenter offline' : 'Connecting…'
 
@@ -81,6 +105,30 @@ export default function RemoteControl({ code }) {
             <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
             <span style={{ fontSize: '0.62rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>total</span>
           </span>
+        </div>
+      )}
+
+      {/* Prominent position readout — pulses on every advance so you can SEE a press register (and hear the
+          beep). Shows slide, sub-slide (slideshow clip) and build stage; a ghost click won't change it. */}
+      {presenting && (
+        <div key={posSig} style={{ flexShrink: 0, margin: '10px 18px 0', padding: '8px 10px', borderRadius: 12, background: '#12162c', border: '1px solid #2a3358',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, animation: 'pim-posflash 0.35s ease' }}>
+          <style>{`@keyframes pim-posflash{0%{background:#1c2c4e;transform:scale(1.015)}100%{background:#12162c;transform:scale(1)}}`}</style>
+          <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#e6ebff', fontVariantNumeric: 'tabular-nums' }}>
+            {(state?.idx ?? 0) + 1}<span style={{ fontSize: '0.9rem', color: '#8090b8', fontWeight: 600 }}> / {state?.total ?? '?'}</span>
+          </span>
+          {(state?.steps ?? 0) > 1 && (
+            <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{(state.step ?? 0) + 1}/{state.steps}</span>
+              <span style={{ fontSize: '0.56rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>sub-slide</span>
+            </span>
+          )}
+          {(state?.stages ?? 0) > 1 && (
+            <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#7c8cff', fontVariantNumeric: 'tabular-nums' }}>{(state.stage ?? 0) + 1}/{state.stages}</span>
+              <span style={{ fontSize: '0.56rem', color: '#8090b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>build</span>
+            </span>
+          )}
         </div>
       )}
 
