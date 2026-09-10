@@ -6032,7 +6032,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
         }
         if (canAttach) {
-          const target = attachTargetAt(lastCursor, lastCenter)
+          // Text boxes must NOT convert to a node (a node has a label, not rich HTML — the text would be
+          // lost and the box would go blank). Only real media/photos promote to child nodes.
+          const dImg = (useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []).find(i => i.id === imageId)
+          const target = dImg?.type === 'text' ? null : attachTargetAt(lastCursor, lastCenter)
           if (target) {
             // Promote to a real child NODE of the target (edges/outliner/collapse/shift-drag).
             pushUndo()
