@@ -8988,6 +8988,35 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
 // by slide id so it remounts per slide), write innerHTML back on input. Legacy plain-text notes (no
 // tags) are shown with newlines preserved.
 const NOTES_IS_HTML = s => /<[a-z/][^>]*>/i.test(s || '')
+
+// Clean pasted content down to a tiny allowed set: line breaks, bold, italic, and bullet/numbered lists.
+// Everything else (tabs, margins/indent styles, fonts, colors, spans, tables, links…) is stripped, so
+// pasting from Word/Docs/web doesn't drag in indentation or spacing that then shows on the phone.
+const NOTES_ALLOWED = { B: 'b', STRONG: 'b', I: 'i', EM: 'i', UL: 'ul', OL: 'ol', LI: 'li' }
+function sanitizePastedNotes(html) {
+  const root = document.createElement('div')
+  root.innerHTML = html || ''
+  const walk = node => {
+    let out = ''
+    node.childNodes.forEach(ch => {
+      if (ch.nodeType === 3) {
+        out += (ch.nodeValue || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      } else if (ch.nodeType === 1) {
+        const tag = ch.tagName
+        if (tag === 'BR') { out += '<br>'; return }
+        const inner = walk(ch)
+        if (NOTES_ALLOWED[tag]) { const t = NOTES_ALLOWED[tag]; out += `<${t}>${inner}</${t}>` }
+        else if (tag === 'P' || tag === 'DIV' || tag === 'TR' || tag === 'H1' || tag === 'H2' || tag === 'H3') out += inner + '<br>'
+        else out += inner   // unwrap anything else, keep its (already-cleaned) text/children
+      }
+    })
+    return out
+  }
+  return walk(root).replace(/(?:<br>\s*){3,}/g, '<br><br>').replace(/(?:<br>\s*)+$/, '')
+}
+function sanitizePastedPlain(text) {
+  return (text || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>')
+}
 function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex = false }) {
   const ref = useRef(null)
   const focusedRef = useRef(false)
@@ -9006,6 +9035,14 @@ function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex
   useEffect(() => { if (!focusedRef.current) seed(html) }, [html])
   const sync = () => { const el = ref.current; if (!el) return; setEmpty(!el.textContent.trim()); onChange?.(el.innerHTML) }
   const exec = cmd => { document.execCommand(cmd, false, null); ref.current?.focus(); sync() }
+  const onPaste = e => {
+    e.preventDefault()
+    const cd = e.clipboardData || window.clipboardData
+    const html = cd?.getData?.('text/html')
+    const clean = html ? sanitizePastedNotes(html) : sanitizePastedPlain(cd?.getData?.('text/plain') || '')
+    document.execCommand('insertHTML', false, clean)
+    sync()
+  }
   const fmtBtn = (cmd, glyph) => (
     <button type="button" title={cmd} onMouseDown={e => { e.preventDefault(); e.stopPropagation(); exec(cmd) }}
       style={T_BTN('ghost', { padding:`2px ${T_SP[3]}px`, fontSize:T_FS.sm, minWidth:28, lineHeight:1.2 })}>{glyph}</button>
@@ -9017,7 +9054,7 @@ function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex
       </div>
       <div style={{ position:'relative', ...(flex ? { flex:1, minHeight:0, display:'flex' } : {}) }}>
         <div ref={ref} contentEditable suppressContentEditableWarning
-          onInput={sync} onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+          onInput={sync} onPaste={onPaste} onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
           onFocus={() => { focusedRef.current = true }}
           onBlur={() => { focusedRef.current = false; sync() }}
           style={T_INPUT({ width:'100%', minHeight, boxSizing:'border-box', overflowY:'auto', resize:'none',

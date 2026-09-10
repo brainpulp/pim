@@ -170,6 +170,7 @@ export default function RemoteControl({ code }) {
               {editNotes
                 ? <div ref={noteRef} contentEditable suppressContentEditableWarning
                     inputMode="text" autoCorrect="on" autoCapitalize="sentences"
+                    onPaste={e => { e.preventDefault(); const cd = e.clipboardData; const h = cd?.getData?.('text/html'); document.execCommand('insertHTML', false, h ? rcSanitizeHtml(h) : rcSanitizePlain(cd?.getData?.('text/plain') || '')); sendNote() }}
                     onInput={sendNote} onFocus={() => { noteFocusRef.current = true }} onBlur={() => { noteFocusRef.current = false; sendNote() }}
                     style={{ minHeight: '100%', fontSize: '1.12rem', lineHeight: 1.5, color: '#eaf0ff', wordBreak: 'break-word',
                       outline: 'none', border: '1px solid #3a7d5a', borderRadius: 8, padding: '8px 10px', background: '#0b0f1e',
@@ -247,6 +248,32 @@ export default function RemoteControl({ code }) {
       )}
     </div>
   )
+}
+
+// Clean pasted notes to a tiny allowed set (line breaks, bold, italic, bullet/numbered lists); strip
+// tabs, margins/indent styles, fonts and everything else — so pasted text stays clean on the phone too.
+const RC_ALLOWED = { B: 'b', STRONG: 'b', I: 'i', EM: 'i', UL: 'ul', OL: 'ol', LI: 'li' }
+function rcSanitizeHtml(html) {
+  const root = document.createElement('div'); root.innerHTML = html || ''
+  const walk = node => {
+    let out = ''
+    node.childNodes.forEach(ch => {
+      if (ch.nodeType === 3) out += (ch.nodeValue || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      else if (ch.nodeType === 1) {
+        const tag = ch.tagName
+        if (tag === 'BR') { out += '<br>'; return }
+        const inner = walk(ch)
+        if (RC_ALLOWED[tag]) { const t = RC_ALLOWED[tag]; out += `<${t}>${inner}</${t}>` }
+        else if (tag === 'P' || tag === 'DIV' || tag === 'TR' || tag === 'H1' || tag === 'H2' || tag === 'H3') out += inner + '<br>'
+        else out += inner
+      }
+    })
+    return out
+  }
+  return walk(root).replace(/(?:<br>\s*){3,}/g, '<br><br>').replace(/(?:<br>\s*)+$/, '')
+}
+function rcSanitizePlain(text) {
+  return (text || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>')
 }
 
 // mm:ss (or h:mm:ss past an hour) for the live presentation timers.
