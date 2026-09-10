@@ -100,6 +100,9 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
   const waitingRef = useRef(false)         // paused at a stop marker, waiting for → / resume
   const consumedRef = useRef(new Set())    // stop-marker ids already released this playthrough
   const lastTRef = useRef(0)
+  const lastRateRef = useRef(1)
+  const seenRef = useRef(new Set())   // pause-marker ids already encountered this playthrough
+  const ytFreshRef = useRef('')       // youtubeId|start — only a change here reloads (end/speed edits don't)
 
   useEffect(() => {
     let dead = false
@@ -153,7 +156,7 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
     skipToNextStop: () => {
       const now = p.getCurrentTime?.() || 0
       let best = null
-      for (const m of resolveMarkers(clipRef.current)) { if (!m.stop) continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
+      for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
       if (!best) return false
       consumedRef.current.add(best.id); waitingRef.current = false
       try { p.seekTo(Math.max(0, best.s), true); p.playVideo() } catch { /* */ }
@@ -182,24 +185,38 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
     if (externalControl) return
     if (!ready || !playerRef.current || !clip?.youtubeId) return
     const p = playerRef.current
-    try {
-      const opts = { videoId: clip.youtubeId, startSeconds: Math.round(clip.start || 0), ...(clip.end ? { endSeconds: Math.round(clip.end) } : {}) }
-      setCovered(true)
-      if (autoplay) p.loadVideoById(opts); else p.cueVideoById(opts)
-      try { p.setPlaybackRate(clip.speed || 1) } catch { /* */ }
-    } catch { /* */ }
+    // Only a NEW video or a new trim-start reloads (which jumps to start). Editing the end or speed applies
+    // in place so the preview head doesn't snap back to the beginning.
+    const fkey = clip.youtubeId + '|' + Math.round(clip.start || 0)
+    if (ytFreshRef.current !== fkey) {
+      ytFreshRef.current = fkey
+      try {
+        const opts = { videoId: clip.youtubeId, startSeconds: Math.round(clip.start || 0), ...(clip.end ? { endSeconds: Math.round(clip.end) } : {}) }
+        setCovered(true)
+        if (autoplay) p.loadVideoById(opts); else p.cueVideoById(opts)
+      } catch { /* */ }
+    }
+    try { p.setPlaybackRate(clip.speed || 1) } catch { /* */ }
   }, [clip?.youtubeId, clip?.start, clip?.end, clip?.speed]) // eslint-disable-line
 
-  // Marker playback: poll currentTime, skip cut ranges, and pause at stop markers.
+  // Marker playback: poll currentTime, apply speed ranges, skip cuts, and pause at pause markers.
   useEffect(() => {
     const iv = setInterval(() => {
       const p = playerRef.current; if (!p?.getCurrentTime) return
-      const markers = resolveMarkers(clipRef.current); if (!markers.length) return
-      if (waitingRef.current) return   // paused at a stop → wait for resume
+      const markers = resolveMarkers(clipRef.current)
       let t; try { t = p.getCurrentTime() } catch { return }
-      if (t < lastTRef.current - 1) consumedRef.current.clear()   // rewound/looped → stops fire again
+      // Speed markers apply continuously, independent of pause/cut and even while covered.
+      const rate = speedAt(t, markers, clipRef.current?.speed || 1)
+      if (rate !== lastRateRef.current) { lastRateRef.current = rate; try { p.setPlaybackRate(rate) } catch { /* */ } }
+      if (!markers.length) { lastTRef.current = t; return }
+      if (waitingRef.current) return   // paused at a pause marker → wait for resume
+      if (t < lastTRef.current - 1) { consumedRef.current.clear(); seenRef.current.clear() }   // rewound/looped → pauses fire again
+      // A pause marker only pauses if the head CROSSES INTO it. One first seen at/behind the head now (e.g.
+      // just dropped there while playing) is auto-consumed, so adding a marker never stops the live preview.
+      for (const m of markers) { if (markerKind(m) === 'pause' && !seenRef.current.has(m.id)) { seenRef.current.add(m.id); if (Math.min(m.s, m.e ?? m.s) <= t + 0.05) consumedRef.current.add(m.id) } }
+      const prevT = lastTRef.current
       lastTRef.current = t
-      const a = markerAction(t, markers, consumedRef.current)
+      const a = markerAction(t, markers, consumedRef.current, prevT)
       if (!a) return
       if (a.type === 'skip') { try { p.seekTo(a.to, true) } catch { /* */ } }
       else if (a.type === 'stop') { consumedRef.current.add(a.id); waitingRef.current = true; try { p.pauseVideo() } catch { /* */ } }
@@ -249,44 +266,63 @@ export function cutSkipTarget(t, cuts) {
 //   → a line + stop = a plain pause step · a wide marker = a silent cut · a wide marker + stop = pause,
 //     then skip · a line without stop is inert (the editor never makes one).
 // Legacy `clip.cuts` are read as wide (cut) markers so old shows keep working.
-export const CUT_MIN = 0.1   // a marker at least this wide counts as a cutout
-export const isCut = (m) => (Math.max(m.s, m.e) - Math.min(m.s, m.e)) >= CUT_MIN
+export const CUT_MIN = 0.1   // a marker at least this wide counts as a range/chunk
+export const isWide = (m) => (Math.max(m.s, m.e ?? m.s) - Math.min(m.s, m.e ?? m.s)) >= CUT_MIN
+// A marker's BEHAVIOR kind: 'cut' (skip the range) | 'pause' (stop until →) | 'speed' (play the range at
+// m.speed). New markers carry `kind`; legacy markers are derived from the old `stop` flag + width so
+// existing shows keep working: a wide marker without stop = cut; a wide marker with stop = pause; a line
+// (zero-width) = pause point.
+export function markerKind(m) {
+  if (m?.kind === 'cut' || m?.kind === 'pause' || m?.kind === 'speed') return m.kind
+  if (isWide(m)) return m?.stop ? 'pause' : 'cut'
+  return 'pause'
+}
+export const isCut = (m) => markerKind(m) === 'cut'   // kept for callers; now kind-based
 export function resolveMarkers(clip) {
   if (clip?.markers?.length) return clip.markers
-  if (clip?.cuts?.length) return clip.cuts.map((c, i) => ({ id: `cut${i}`, s: c.s, e: c.e, stop: false }))
+  if (clip?.cuts?.length) return clip.cuts.map((c, i) => ({ id: `cut${i}`, s: c.s, e: c.e, kind: 'cut' }))
   return []
 }
 
-// Decide what should happen at time `t`. `consumed` is a Set of stop-marker ids already released
-// this playthrough (so we don't re-pause at the same stop after the user hits →).
-// Returns { type:'stop', id } | { type:'skip', to } | null.
-export function markerAction(t, markers, consumed) {
+// Decide what should happen at time `t`. `consumed` = ids of pause markers already released this
+// playthrough (so we don't re-pause after →). `prevT` = the previously-polled time; a pause fires only
+// when the head CROSSES its start (predictable, and dropping a marker at the head never pauses "now").
+// Returns { type:'stop', id } | { type:'skip', to } | null. (Speed is handled by speedAt, not here.)
+export function markerAction(t, markers, consumed, prevT) {
   if (t == null || !markers || !markers.length) return null
   const eps = 0.05
-  // Stops win over cuts, so a wide-and-stop marker PAUSES before it skips. Earliest pending stop wins.
   let best = null
   for (const m of markers) {
-    if (!m.stop || consumed?.has(m.id)) continue
+    if (markerKind(m) !== 'pause' || consumed?.has(m.id)) continue
     const s = Math.min(m.s, m.e ?? m.s)
-    // A wide stop fires anywhere in its range; a line stop gets a generous 1.5s window so a fast/slow
-    // poll can't overshoot it silently (consumed prevents re-firing after resume).
-    const hi = isCut(m) ? Math.max(m.s, m.e) : s + 1.5
-    if (t >= s - eps && t < hi - 0.05) { if (!best || s < best.s) best = { type: 'stop', id: m.id, s } }
+    const from = (prevT != null && prevT <= t) ? prevT - eps : t - 0.4   // span just traversed since last poll
+    if (s > from && s <= t + eps) { if (!best || s < best.s) best = { type: 'stop', id: m.id, s } }
   }
   if (best) return best
-  // Then cuts (width) — any stop here is already consumed, so skipping is safe.
   for (const m of markers) {
-    if (!isCut(m)) continue
+    if (markerKind(m) !== 'cut') continue
     const s = Math.min(m.s, m.e), e = Math.max(m.s, m.e)
     if (t >= s - eps && t < e - 0.1) return { type: 'skip', to: e }
   }
   return null
 }
 
+// Playback rate to apply at time `t`: the speed of the speed-marker under the head, else the clip's base.
+export function speedAt(t, markers, base = 1) {
+  if (t == null || !markers || !markers.length) return base || 1
+  for (const m of markers) {
+    if (markerKind(m) !== 'speed') continue
+    const s = Math.min(m.s, m.e), e = Math.max(m.s, m.e)
+    if (t >= s - 0.02 && t < e) return m.speed || 1
+  }
+  return base || 1
+}
+
 // ── Native <video>/<audio> file player with a YT-compatible handle ────────────────────────────
 function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interactive = true, onReady, onEnded, style }) {
   const ref = useRef(null)
   const clipRef = useRef(clip); clipRef.current = clip   // markers/cuts read live so editing them doesn't reseek
+  const freshKeyRef = useRef('')   // src|start — only a change here reseeks/re-covers (end/speed edits don't)
   const start = clip.start || 0
   const end = (clip.end && clip.end > start) ? clip.end : 0
   // Cover the <video> with its poster frame until playback actually starts — a loading uploaded video
@@ -294,21 +330,35 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
   const [covered, setCovered] = useState(true)
   useEffect(() => {
     const el = ref.current; if (!el) return
-    setCovered(true)   // new clip → cover until it plays
+    // "fresh" = the source or trim-start changed. Only then do we cover with the poster and seek to start.
+    // Editing the trim END, speed, loop or markers must NOT yank the head back to the start.
+    const fkey = (clip.src || '') + '|' + start
+    const fresh = freshKeyRef.current !== fkey
+    freshKeyRef.current = fkey
+    if (fresh) setCovered(true)   // new clip / new start → cover until it plays
     el.playbackRate = clip.speed || 1
     el.loop = !!clip.loop
     const onPlaying = () => setCovered(false)
     el.addEventListener('playing', onPlaying)
     let ended = false, waiting = false, lastT = 0
     const consumed = new Set()
-    const seekStart = () => { consumed.clear(); waiting = false; if (start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
+    const seen = new Set()   // pause-marker ids already encountered this playthrough
+    const seekStart = () => { consumed.clear(); waiting = false; if (fresh && start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
     const onLoaded = () => { seekStart(); el.playbackRate = clip.speed || 1 }
+    let lastRate = 1
     const onTime = () => {
-      if (waiting) return
       const t = el.currentTime
-      if (t < lastT - 1) consumed.clear()   // rewound/looped → stops fire again
+      const markers = resolveMarkers(clipRef.current)
+      // Speed ranges apply continuously (even while paused-scrubbing).
+      const rate = speedAt(t, markers, clipRef.current?.speed || 1)
+      if (rate !== lastRate) { lastRate = rate; try { el.playbackRate = rate } catch { /* */ } }
+      if (waiting) return
+      if (t < lastT - 1) { consumed.clear(); seen.clear() }   // rewound/looped → pauses fire again
+      // Auto-consume a pause marker first seen at/behind the head now, so dropping one never stops preview.
+      for (const m of markers) { if (markerKind(m) === 'pause' && !seen.has(m.id)) { seen.add(m.id); if (Math.min(m.s, m.e ?? m.s) <= t + 0.05) consumed.add(m.id) } }
+      const prevT = lastT
       lastT = t
-      const a = markerAction(t, resolveMarkers(clipRef.current), consumed)
+      const a = markerAction(t, markers, consumed, prevT)
       if (a) {
         if (a.type === 'skip') { try { el.currentTime = a.to } catch { /* */ } return }
         if (a.type === 'stop') { consumed.add(a.id); waiting = true; el.pause(); return }
@@ -334,7 +384,7 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
       skipToNextStop: () => {
         const now = el.currentTime || 0
         let best = null
-        for (const m of resolveMarkers(clipRef.current)) { if (!m.stop) continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
+        for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
         if (!best) return false
         consumed.add(best.id); waiting = false
         try { el.currentTime = best.s } catch { /* */ }
@@ -555,9 +605,14 @@ const TriGrip = ({ left, color, onMouseDown, title, dim }) => (
       cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 4, opacity: dim ? 0.85 : 1,
       filter: dim ? 'none' : 'drop-shadow(0 0 2px rgba(0,0,0,0.5))' }} />
 )
+const MARKER_SPEEDS = [0.25, 0.5, 0.75, 1.25, 1.5, 2]
+// Visual identity per kind: cut = red, pause = amber, speed = violet.
+const kindColor = (k) => k === 'cut' ? '#f87171' : k === 'speed' ? '#a78bfa' : '#ffb454'
+const kindFill = (k) => k === 'cut' ? 'rgba(248,113,113,0.30)' : k === 'speed' ? 'rgba(167,139,250,0.30)' : 'rgba(255,180,84,0.28)'
 function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange, start, end, onTrim }) {
   const trackRef = useRef(null)
   const [sel, setSel] = useState(null)   // index of the marker whose numeric fields are shown
+  const [jogT, setJogT] = useState(null)   // live playhead while jogging (dragging the timeline)
   const M = Math.max(max || 1, 1)
   const stateRef = useRef({ markers, M }); stateRef.current = { markers, M }
   const pct = t => Math.max(0, Math.min(1, t / M)) * 100
@@ -565,10 +620,32 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
   const sorted = (arr) => [...arr].sort((a, b) => Math.min(a.s, a.e) - Math.min(b.s, b.e))
   const commit = (arr) => onChange(sorted(arr))
   const setM = (i, patch) => onChange(markers.map((m, j) => j === i ? { ...m, ...patch } : m))
-  const addMarker = () => {
-    const at = snap(getTime?.() ?? M / 2)   // a LINE (zero width) — a stop point. Drag its right edge to widen → a cutout.
-    commit([...(markers || []), { id: newMarkerId(), s: at, e: at, stop: true }])
-    setSel((markers || []).length)   // select the new one so its fields show immediately
+  const addMarker = () => {   // a PAUSE line at the playhead. Crossing detection means it won't pause the live preview now.
+    const at = snap(getTime?.() ?? M / 2)
+    commit([...(markers || []), { id: newMarkerId(), s: at, e: at, kind: 'pause' }])
+    setSel((markers || []).length)
+  }
+  const addChunk = () => {   // a wide CUT range at the playhead — the base for cut / speed chunks.
+    const at = snap(getTime?.() ?? M / 2); const e = snap(Math.min(M, at + 1.5))
+    commit([...(markers || []), { id: newMarkerId(), s: at, e: Math.max(e, at + CUT_MIN), kind: 'cut' }])
+    setSel((markers || []).length)
+  }
+  // Set a marker's kind. Cut/Speed need width — widen a line into a ~1.5s chunk. Speed gets a default rate.
+  const setKind = (i, kind) => {
+    const m = markers[i]; const s = Math.min(m.s, m.e ?? m.s); let e = Math.max(m.s, m.e ?? m.s)
+    const patch = { kind }
+    if ((kind === 'cut' || kind === 'speed') && (e - s) < CUT_MIN) { e = snap(Math.min(M, s + 1.5)); patch.s = s; patch.e = Math.max(e, s + CUT_MIN) }
+    if (kind === 'speed' && !m.speed) patch.speed = 0.5
+    setM(i, patch)
+  }
+  // Jump the preview to the previous / next marker start relative to the playhead.
+  const gotoAdj = (dir) => {
+    const now = getTime?.() ?? 0
+    const starts = [...new Set(markers.map(m => snap(Math.min(m.s, m.e ?? m.s))))].sort((a, b) => a - b)
+    let target = null
+    if (dir > 0) target = starts.find(s => s > now + 0.08)
+    else { const before = starts.filter(s => s < now - 0.08); target = before.length ? before[before.length - 1] : null }
+    if (target != null) onScrub?.(Math.max(0, target), 'seek')
   }
   // Trim (start/end) is drawn on this SAME track when onTrim is provided — one timeline, not two.
   const hasTrim = typeof onTrim === 'function'
@@ -604,14 +681,17 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
       const r = trackRef.current?.getBoundingClientRect() || r0
       const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
       const t = snapM(frac * Md)
+      let scrubTo = t
       onChange(stateRef.current.markers.map((m, j) => {
         if (j !== i) return m
-        if (which === 's') return { ...m, s: Math.min(t, m.e) }
-        if (which === 'e') return { ...m, e: Math.max(t, m.s) }
+        if (which === 's') { scrubTo = Math.min(t, m.e); return { ...m, s: scrubTo } }
+        if (which === 'e') { scrubTo = Math.max(t, m.s); return { ...m, e: scrubTo } }
         // 'move' — slide the whole cut, keeping its width, clamped to [0, M]
         let s = Math.max(0, Math.min(Md - width, snapM(t - width / 2)))
+        scrubTo = s
         return { ...m, s, e: snapM(s + width) }
       }))
+      onScrub?.(scrubTo, 'seek')   // live preview: see the exact frame at the edge you're dragging
     }
     const up = () => {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
@@ -619,8 +699,18 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
     }
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
   }
-  // Click empty track → scrub the preview there (and deselect any marker).
-  const onTrackDown = (ev) => { setSel(null); if (ev.button === 0) onScrub?.(snap((Math.max(0, Math.min(1, (ev.clientX - trackRef.current.getBoundingClientRect().left) / trackRef.current.getBoundingClientRect().width))) * M), 'seek') }
+  // JOG: press the empty track and drag to scrub the playhead — the preview follows the cursor live so you
+  // can eyeball the exact frame. A plain click just seeks there. Deselects any marker.
+  const onTrackDown = (ev0) => {
+    if (ev0.button !== 0) return
+    setSel(null)
+    const Md = stateRef.current.M
+    const timeAt = (clientX) => { const r = trackRef.current.getBoundingClientRect(); return snap(Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * Md) }
+    const t0 = timeAt(ev0.clientX); setJogT(t0); onScrub?.(t0, 'seek')
+    const move = ev => { const t = timeAt(ev.clientX); setJogT(t); onScrub?.(t, 'seek') }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); setJogT(null) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
   const TimeField = ({ value, onCommit, title }) => (
     <input defaultValue={fmtTime(value, 1)} key={value} title={title}
       onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
@@ -629,7 +719,8 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
       style={{ width: 54, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '2px 4px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
   )
   const iconBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
-  const phPct = playhead != null && playhead >= 0 && playhead <= M ? pct(playhead) : null
+  const ph = jogT != null ? jogT : playhead
+  const phPct = ph != null && ph >= 0 && ph <= M ? pct(ph) : null
   const selM = sel != null ? markers[sel] : null
   const H = 26   // full marker height — the middle of a cut is this tall, same as the edges
   const tsPct = pct(ts), tePct = pct(te)
@@ -646,30 +737,34 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
           {tePct < 100 && <div style={{ position: 'absolute', top: 9, left: `${tePct}%`, right: 0, height: H, background: 'rgba(6,6,18,0.6)', borderRadius: '0 3px 3px 0', pointerEvents: 'none' }} />}
           <div style={{ position: 'absolute', top: 9 + H / 2 - 2, left: `${tsPct}%`, width: `${Math.max(0, tePct - tsPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0', pointerEvents: 'none' }} />
         </>}
-        {phPct != null && <div style={{ position: 'absolute', top: 9, left: `calc(${phPct}% - 1px)`, width: 2, height: H, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 4 }} />}
+        {phPct != null && <>
+          <div style={{ position: 'absolute', top: 9, left: `calc(${phPct}% - 1px)`, width: 2, height: H, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 6 }} />
+          {/* Jog knob at the top of the playhead — drag it (or anywhere on the track) to scrub the frame. */}
+          <div onMouseDown={onTrackDown} title="Drag to jog through the video"
+            style={{ position: 'absolute', top: 0, left: `calc(${phPct}% - 6px)`, width: 12, height: 10, background: '#ffd166', borderRadius: 3, cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 7, boxShadow: '0 0 5px rgba(255,209,102,0.8)' }} />
+        </>}
         {markers.map((m, i) => {
-          const a = pct(Math.min(m.s, m.e)), bb = pct(Math.max(m.s, m.e)); const wide = isCut(m)
-          const on = i === sel
-          const stopCol = m.stop ? '#ffb454' : '#8a94c0'
+          const a = pct(Math.min(m.s, m.e)), bb = pct(Math.max(m.s, m.e)); const wide = isWide(m); const k = markerKind(m)
+          const on = i === sel; const col = kindColor(k)
+          const badge = k === 'cut' ? '✂' : k === 'speed' ? `⏩${(m.speed || 1)}×` : '⏸'
           return (
             <div key={m.id || i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
               {wide
-                // Cut: a full-height band. Its body is the MOVE grip (same height as the edges).
-                ? <div onMouseDown={dragHandle(i, 'move')} title={m.stop ? 'Cut + pause — drag to slide' : 'Drag to slide this cutout'}
+                // Range/chunk: a full-height band (cut = red, pause = amber, speed = violet). Body = slide grip.
+                ? <div onMouseDown={dragHandle(i, 'move')} title={`${k} — drag to slide`}
                     style={{ position: 'absolute', top: 9, left: `${a}%`, width: `${Math.max(0.4, bb - a)}%`, height: H, borderRadius: 3,
-                      background: m.stop ? 'rgba(255,180,84,0.28)' : 'rgba(248,113,113,0.34)',
-                      border: `1px solid ${m.stop ? '#ffb454' : '#f87171'}`, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : 'none',
+                      background: kindFill(k), border: `1px solid ${col}`, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : 'none',
                       cursor: 'grab', pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                    {m.stop && <span style={{ fontSize: 13, lineHeight: 1, color: '#ffcf8a', pointerEvents: 'none' }}>⏸</span>}
+                    <span style={{ fontSize: 11, lineHeight: 1, color: col, pointerEvents: 'none', whiteSpace: 'nowrap' }}>{badge}</span>
                   </div>
-                // Stop line: a thin vertical bar (always a pause — no icon needed).
-                : <div onMouseDown={dragHandle(i, 'move')} title="Drag to move this stop"
+                // Pause line: a thin vertical bar.
+                : <div onMouseDown={dragHandle(i, 'move')} title="Pause point — drag to move"
                     style={{ position: 'absolute', top: 9, left: `calc(${a}% - 2px)`, width: 4, height: H, borderRadius: 2,
-                      background: stopCol, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : '0 0 4px rgba(255,180,84,0.7)',
+                      background: col, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : '0 0 4px rgba(255,180,84,0.7)',
                       cursor: 'grab', pointerEvents: 'auto' }} />}
               {/* Triangle grips pointing down at the track */}
-              <TriGrip left={a} color={wide ? (m.stop ? '#ffb454' : '#f87171') : stopCol} onMouseDown={dragHandle(i, 's')} title="Drag the start" dim={!on} />
-              {wide && <TriGrip left={bb} color="#f87171" onMouseDown={dragHandle(i, 'e')} title="Drag the end" dim={!on} />}
+              <TriGrip left={a} color={col} onMouseDown={dragHandle(i, 's')} title="Drag the start" dim={!on} />
+              {wide && <TriGrip left={bb} color={col} onMouseDown={dragHandle(i, 'e')} title="Drag the end" dim={!on} />}
             </div>
           )
         })}
@@ -680,26 +775,46 @@ function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange
               borderRadius: w === 'start' ? '0 0 0 4px' : '0 0 4px 0', cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 5 }} />
         ))}
       </div>
-      {/* Selected-marker inline editor (when one is selected) + an always-visible, evident Add button. */}
+      {/* Prev / next marker — jog the playhead between marker starts. */}
+      {onScrub && markers.length > 0 && (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button style={iconBtn} title="Jump to previous marker" onClick={() => gotoAdj(-1)}>◀｜</button>
+          <button style={iconBtn} title="Jump to next marker" onClick={() => gotoAdj(1)}>｜▶</button>
+        </div>
+      )}
+      {/* Selected-marker inline editor: kind (Cut / Pause / Speed) + range fields. */}
       {selM && (() => {
-        const cs = Math.min(selM.s, selM.e), ce = Math.max(selM.s, selM.e); const wide = isCut(selM)
+        const cs = Math.min(selM.s, selM.e), ce = Math.max(selM.s, selM.e); const k = markerKind(selM)
+        const kindBtn = (val, label) => (
+          <button onClick={() => setKind(sel, val)} title={val === 'cut' ? 'Skip this range' : val === 'pause' ? 'Pause here until →' : 'Play this range at a set speed'}
+            style={{ background: k === val ? kindColor(val) : 'transparent', border: `1px solid ${k === val ? kindColor(val) : '#2d3a6a'}`, color: k === val ? '#0f0f22' : '#9aa8d8', borderRadius: 5, padding: '2px 7px', cursor: 'pointer', fontSize: 11, fontWeight: k === val ? 700 : 500, whiteSpace: 'nowrap' }}>{label}</button>
+        )
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8' }}>
-            <span style={{ color: wide ? '#ffb0c0' : '#ffcf8a', fontWeight: 600, whiteSpace: 'nowrap' }}>{wide ? `${selM.stop ? '⏸✂' : '✂'} ${fmtTime(ce - cs, 1)}` : '⏸ stop'}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap' }}>
+            {kindBtn('cut', '✂ Cut')}{kindBtn('pause', '⏸ Pause')}{kindBtn('speed', '⏩ Speed')}
+            {k === 'speed' && (
+              <select value={selM.speed || 0.5} onChange={e => setM(sel, { speed: parseFloat(e.target.value) })}
+                onMouseDown={e => e.stopPropagation()}
+                style={{ background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11, padding: '2px 4px' }}>
+                {MARKER_SPEEDS.map(r => <option key={r} value={r}>{r}×</option>)}
+              </select>
+            )}
             <TimeField value={cs} title="Start (m:ss.s)" onCommit={v => setM(sel, { s: Math.min(v, ce) })} />
             {getTime && <button style={iconBtn} title="Set start to the playhead" onClick={() => setM(sel, { s: Math.min(snap(getTime()), ce) })}>⇤</button>}
             <span style={{ color: '#7c86ad' }}>–</span>
-            <TimeField value={ce} title="End (m:ss.s) — later than start = a cutout" onCommit={v => setM(sel, { e: Math.max(v, cs) })} />
+            <TimeField value={ce} title="End (m:ss.s)" onCommit={v => setM(sel, { e: Math.max(v, cs) })} />
             {getTime && <button style={iconBtn} title="Set end to the playhead" onClick={() => setM(sel, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
             {onScrub && <button style={iconBtn} title="Preview from just before this marker" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
-            <button title={wide ? 'Also pause here until → is pressed' : 'Stop point'} onClick={() => setM(sel, { stop: !selM.stop })}
-              style={{ background: selM.stop ? '#3a2c10' : 'transparent', border: `1px solid ${selM.stop ? '#8a6a2f' : '#2d3a6a'}`, color: selM.stop ? '#ffcf8a' : '#7d84a4', borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 11, fontWeight: selM.stop ? 700 : 500, whiteSpace: 'nowrap' }}>⏸</button>
             <button onClick={() => { commit(markers.filter((_, j) => j !== sel)); setSel(null) }} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a', padding: '2px 7px' }}>✕</button>
           </div>
         )
       })()}
-      <button onClick={addMarker} title="Drop a stop marker at the playhead — drag its right edge to widen it into a cut"
-        style={{ background: '#232a5c', border: '1px solid #4a5bb8', color: '#dbe4ff', borderRadius: 6, padding: '5px 11px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>＋ Add marker</button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={addMarker} title="Drop a pause marker at the playhead (won't interrupt the running preview)"
+          style={{ background: '#232a5c', border: '1px solid #4a5bb8', color: '#dbe4ff', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>＋ Pause</button>
+        <button onClick={addChunk} title="Drop a range/chunk at the playhead — switch it to Cut, Pause or Speed"
+          style={{ background: 'transparent', border: '1px solid #4a5bb8', color: '#aeb8ff', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>＋ Chunk</button>
+      </div>
     </div>
   )
 }
