@@ -1645,6 +1645,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // (the deck order). Each frame carries its contents — the same membership rule as a frame drag:
   // nodes marked containedIn OR geometrically inside, plus free images/text inside the frame box.
   // Undoable (Ctrl+Z restores the previous layout). Positions only — never topology or slide order.
+  const lastLayoutRef = useRef(null)         // pre-layout snapshot to restore via "Undo layout"
+  const [hasLayoutUndo, setHasLayoutUndo] = useState(false)
   const layoutFramesToGrid = useCallback((orderedIds) => {
     const vp = viewNodePropsRef.current
     const sim = simNodesRef.current
@@ -1683,19 +1685,43 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const originX = Math.min(...boxes.map(b => b.cx))
     const originY = Math.min(...boxes.map(b => b.cy))
 
+    // Snapshot every element's pre-move position + anchored state, so "Undo layout" can restore it exactly.
+    const revert = []
     pushUndo()
     ids.forEach((id, i) => {
       const b = boxes[i]
       const tx = originX + (i % cols) * pitchX, ty = originY + Math.floor(i / cols) * pitchY
       const dx = tx - b.cx, dy = ty - b.cy
-      const fn = byId[id]; if (fn) { fn.x = tx; fn.y = ty; fn.fx = tx; fn.fy = ty }
+      const fn = byId[id]
+      revert.push({ id, x: b.cx, y: b.cy, anchored: fn ? fn.fx != null : true })
+      if (fn) { fn.x = tx; fn.y = ty; fn.fx = tx; fn.fy = ty }
       setAnchor(id, tx, ty)
-      owners[id].nodes.forEach(nd => { const nx = (nd.fx ?? nd.x ?? 0) + dx, ny = (nd.fy ?? nd.y ?? 0) + dy; nd.x = nx; nd.y = ny; nd.fx = nx; nd.fy = ny; setAnchor(nd.id, nx, ny) })
-      owners[id].imgs.forEach(im => updateImage(im.id, { x: im.x + dx, y: im.y + dy }))
+      owners[id].nodes.forEach(nd => {
+        revert.push({ id: nd.id, x: nd.fx ?? nd.x ?? 0, y: nd.fy ?? nd.y ?? 0, anchored: nd.fx != null })
+        const nx = (nd.fx ?? nd.x ?? 0) + dx, ny = (nd.fy ?? nd.y ?? 0) + dy; nd.x = nx; nd.y = ny; nd.fx = nx; nd.fy = ny; setAnchor(nd.id, nx, ny)
+      })
+      owners[id].imgs.forEach(im => { revert.push({ img: true, id: im.id, x: im.x, y: im.y }); updateImage(im.id, { x: im.x + dx, y: im.y + dy }) })
     })
+    lastLayoutRef.current = revert; setHasLayoutUndo(true)
     simRef.current?.alpha(0.15).restart()
     scheduleRender()
   }, [setAnchor, updateImage]) // eslint-disable-line -- pushUndo/scheduleRender declared later (TDZ), refs are stable
+
+  // Restore the exact positions captured before the last "Lay out on canvas".
+  const undoLastLayout = useCallback(() => {
+    const rev = lastLayoutRef.current; if (!rev) return
+    const byId = Object.fromEntries(simNodesRef.current.map(n => [n.id, n]))
+    pushUndo()
+    rev.forEach(r => {
+      if (r.img) { updateImage(r.id, { x: r.x, y: r.y }); return }
+      const nd = byId[r.id]
+      if (r.anchored) { if (nd) { nd.x = r.x; nd.y = r.y; nd.fx = r.x; nd.fy = r.y } setAnchor(r.id, r.x, r.y) }
+      else { if (nd) { nd.x = r.x; nd.y = r.y; nd.fx = null; nd.fy = null } releaseAnchor(r.id) }
+    })
+    lastLayoutRef.current = null; setHasLayoutUndo(false)
+    simRef.current?.alpha(0.3).restart()
+    scheduleRender()
+  }, [setAnchor, updateImage, releaseAnchor]) // eslint-disable-line -- pushUndo/scheduleRender declared later (TDZ)
 
   const activeView    = views.find(v => v.id === activeViewId) || views[0]
   const viewNodeProps = activeView?.nodeProps || {}
@@ -8259,6 +8285,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {!isPresenting && showSlideSidebar && (frameSimNodes.length > 0 || slideSimNodes.length > 0) && (
         <SlideSidebar
           slideSimNodes={slideSimNodes}
+          selectedSlideId={selected?.type === 'node' ? selected.id : null}
           allSimNodes={simNodesRef.current}
           frameSimNodes={frameSimNodes}
           storeNodeById={storeNodeById}
@@ -8315,6 +8342,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           onPresent={(idx) => { setShowSlideGrid(false); presentSlide(idx, 'fwd') }}
           onJump={(idx) => { setShowSlideGrid(false); zoomToFrame(slideSimNodes[idx]) }}
           onLayout={() => layoutFramesToGrid(slideSimNodes.map(n => n.id))}
+          onUndoLayout={hasLayoutUndo ? undoLastLayout : null}
           onClose={() => setShowSlideGrid(false)}
         />
       )}
@@ -8839,7 +8867,7 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
 
 // ─── SlideGrid — full-screen "slide sorter" (PowerPoint-style). Big thumbnails in a wrapping grid,
 // drag any card to reorder, double-click to jump to that slide on the canvas, or Present. ──────────
-function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onLayout, onClose, interimSlideId = null }) {
+function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onLayout, onUndoLayout, onClose, interimSlideId = null }) {
   const gridRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)   // index of the tile being lifted
   const [dropIdx, setDropIdx] = useState(null)   // insertion index (0..n) it would land at
@@ -8938,9 +8966,13 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
         <span style={{ fontSize:T_FS.sm, color:T_C.tx3 }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · double-click to open</span>
         <div style={{ flex:1 }} />
         {onLayout && (
-          <button onClick={() => { if (slideSimNodes.length >= 2 && window.confirm('Lay the real frames out on the canvas in a grid matching this order? (Undo with Ctrl+Z.)')) onLayout() }}
+          <button onClick={() => { if (slideSimNodes.length >= 2 && window.confirm('Lay the real frames out on the canvas in a grid matching this order? You can undo it with the “Undo layout” button, Ctrl+Z, or a duplicated view.')) onLayout() }}
             disabled={slideSimNodes.length < 2} title="Reposition the actual frames on the canvas into this grid order"
             style={T_BTN('default', slideSimNodes.length >= 2 ? { padding:`${T_SP[4]}px ${T_SP[5]}px` } : { padding:`${T_SP[4]}px ${T_SP[5]}px`, opacity:0.5, cursor:'not-allowed' })}>⤢ Lay out on canvas</button>
+        )}
+        {onUndoLayout && (
+          <button onClick={() => onUndoLayout()} title="Put the frames back where they were before the last layout"
+            style={T_BTN('ghost', { padding:`${T_SP[4]}px ${T_SP[5]}px`, color:T_C.warn, borderColor:'#5a4a2a' })}>↩ Undo layout</button>
         )}
         <button onClick={() => slideSimNodes.length && onPresent?.(0)} disabled={!slideSimNodes.length}
           style={T_BTN('primary', slideSimNodes.length ? { padding:`${T_SP[4]}px ${T_SP[6]}px` } : { padding:`${T_SP[4]}px ${T_SP[6]}px`, background:T_C.bg3, borderColor:'transparent', color:T_C.tx3, cursor:'not-allowed' })}>▶ Present</button>
@@ -9026,7 +9058,7 @@ function PresentLogPanel({ sessions = [], onDelete, onClear, onClose }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, selectedSlideId = null, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -9048,6 +9080,16 @@ function SlideSidebar({ slideSimNodes, allSimNodes, frameSimNodes, storeNodeById
 
   // Clear multi-selection when switching slideshows (ids belong to the other show).
   useEffect(() => { setSelectedIds(new Set()) }, [activeSlideshowId])
+
+  // When a frame is selected on the canvas (or the presented slide advances), scroll its thumbnail into view.
+  useEffect(() => {
+    const id = selectedSlideId || (presentingSlideIdx != null ? slideSimNodes[presentingSlideIdx]?.id : null)
+    if (!id || !containerRef.current) return
+    const idx = slideSimNodes.findIndex(n => n.id === id)
+    if (idx < 0) return
+    const el = containerRef.current.querySelector(`[data-slide-idx="${idx}"]`)
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [selectedSlideId, presentingSlideIdx]) // eslint-disable-line
 
   // Whole-card drag with click threshold â€" click zooms, drag reorders.
   // Ctrl/Cmd/Shift click toggles the card in the multi-selection (no zoom, no drag).
