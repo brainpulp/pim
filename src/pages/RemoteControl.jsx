@@ -252,21 +252,28 @@ export default function RemoteControl({ code }) {
 
 // Clean pasted notes to a tiny allowed set (line breaks, bold, italic, bullet/numbered lists); strip
 // tabs, margins/indent styles, fonts and everything else — so pasted text stays clean on the phone too.
-const RC_ALLOWED = { B: 'b', STRONG: 'b', I: 'i', EM: 'i', UL: 'ul', OL: 'ol', LI: 'li' }
+function rcBold(el) { const fw = el.style && el.style.fontWeight; if (fw) { if (fw === 'bold' || fw === 'bolder') return true; if (fw === 'normal' || fw === 'lighter') return false; const n = parseInt(fw, 10); if (!isNaN(n)) return n >= 600 } return null }
+function rcItalic(el) { const fs = el.style && el.style.fontStyle; if (fs) return fs === 'italic' || fs === 'oblique'; return null }
 function rcSanitizeHtml(html) {
   const root = document.createElement('div'); root.innerHTML = html || ''
   const walk = node => {
     let out = ''
     node.childNodes.forEach(ch => {
-      if (ch.nodeType === 3) out += (ch.nodeValue || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      else if (ch.nodeType === 1) {
-        const tag = ch.tagName
-        if (tag === 'BR') { out += '<br>'; return }
-        const inner = walk(ch)
-        if (RC_ALLOWED[tag]) { const t = RC_ALLOWED[tag]; out += `<${t}>${inner}</${t}>` }
-        else if (tag === 'P' || tag === 'DIV' || tag === 'TR' || tag === 'H1' || tag === 'H2' || tag === 'H3') out += inner + '<br>'
-        else out += inner
+      if (ch.nodeType === 3) { out += (ch.nodeValue || '').replace(/[\t ]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); return }
+      if (ch.nodeType !== 1) return
+      const tag = ch.tagName
+      if (tag === 'BR') { out += '<br>'; return }
+      if (tag === 'UL' || tag === 'OL') { const t = tag.toLowerCase(); out += `<${t}>${walk(ch)}</${t}>`; return }
+      if (tag === 'LI') { out += `<li>${walk(ch)}</li>`; return }
+      let inner = walk(ch)
+      if (inner) {
+        let bold = rcBold(ch); if (bold === null) bold = (tag === 'B' || tag === 'STRONG')
+        let ital = rcItalic(ch); if (ital === null) ital = (tag === 'I' || tag === 'EM')
+        if (bold) inner = `<b>${inner}</b>`
+        if (ital) inner = `<i>${inner}</i>`
       }
+      if (tag === 'P' || tag === 'DIV' || tag === 'TR' || tag === 'H1' || tag === 'H2' || tag === 'H3') out += inner + '<br>'
+      else out += inner
     })
     return out
   }

@@ -8992,7 +8992,19 @@ const NOTES_IS_HTML = s => /<[a-z/][^>]*>/i.test(s || '')
 // Clean pasted content down to a tiny allowed set: line breaks, bold, italic, and bullet/numbered lists.
 // Everything else (tabs, margins/indent styles, fonts, colors, spans, tables, links…) is stripped, so
 // pasting from Word/Docs/web doesn't drag in indentation or spacing that then shows on the phone.
-const NOTES_ALLOWED = { B: 'b', STRONG: 'b', I: 'i', EM: 'i', UL: 'ul', OL: 'ol', LI: 'li' }
+// Bold/italic can come as tags (<b>/<strong>) OR inline style — Google Docs uses <span style=
+// "font-weight:700"> and wraps the whole paste in <b style="font-weight:normal">. Read both; an explicit
+// inline style overrides the tag. Returns true/false, or null when the element declares nothing.
+function noteStyleBold(el) {
+  const fw = el.style && el.style.fontWeight
+  if (fw) { if (fw === 'bold' || fw === 'bolder') return true; if (fw === 'normal' || fw === 'lighter') return false; const n = parseInt(fw, 10); if (!isNaN(n)) return n >= 600 }
+  return null
+}
+function noteStyleItalic(el) {
+  const fs = el.style && el.style.fontStyle
+  if (fs) return fs === 'italic' || fs === 'oblique'
+  return null
+}
 function sanitizePastedNotes(html) {
   const root = document.createElement('div')
   root.innerHTML = html || ''
@@ -9004,10 +9016,17 @@ function sanitizePastedNotes(html) {
       } else if (ch.nodeType === 1) {
         const tag = ch.tagName
         if (tag === 'BR') { out += '<br>'; return }
-        const inner = walk(ch)
-        if (NOTES_ALLOWED[tag]) { const t = NOTES_ALLOWED[tag]; out += `<${t}>${inner}</${t}>` }
-        else if (tag === 'P' || tag === 'DIV' || tag === 'TR' || tag === 'H1' || tag === 'H2' || tag === 'H3') out += inner + '<br>'
-        else out += inner   // unwrap anything else, keep its (already-cleaned) text/children
+        if (tag === 'UL' || tag === 'OL') { const t = tag.toLowerCase(); out += `<${t}>${walk(ch)}</${t}>`; return }
+        if (tag === 'LI') { out += `<li>${walk(ch)}</li>`; return }
+        let inner = walk(ch)
+        if (inner) {
+          let bold = noteStyleBold(ch); if (bold === null) bold = (tag === 'B' || tag === 'STRONG')
+          let ital = noteStyleItalic(ch); if (ital === null) ital = (tag === 'I' || tag === 'EM')
+          if (bold) inner = `<b>${inner}</b>`
+          if (ital) inner = `<i>${inner}</i>`
+        }
+        if (tag === 'P' || tag === 'DIV' || tag === 'TR' || tag === 'H1' || tag === 'H2' || tag === 'H3') out += inner + '<br>'
+        else out += inner   // unwrap anything else, keep its (already-formatted) children
       }
     })
     return out
