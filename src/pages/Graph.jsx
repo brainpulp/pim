@@ -8401,8 +8401,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         />
       )}
 
-      {/* Canvas speaker-notes inspector — floating VERTICAL panel (phone-shaped) at the bottom-right when a
-          single FRAME is selected (whether or not it's in the slideshow). Rich text (B/I/U); shows on phone. */}
+      {/* Canvas speaker-notes inspector — floating HORIZONTAL bar along the bottom when a single FRAME is
+          selected (whether or not it's in the slideshow). Rich text (B/I/U); shows on the phone. */}
       {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node'
         && (frameSimNodes.some(n => n.id === selected.id) || slideIds.includes(selected.id)) && (() => {
         const sn = storeNodeById[selected.id] || {}
@@ -8410,26 +8410,24 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         const slideNo = slideIds.indexOf(selected.id) + 1   // 0 when the frame isn't in the slideshow
         return (
           <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-            style={{ position:'fixed', right:T_SP[5], bottom:T_SP[5], zIndex:60, ...T_PANEL(),
-              width:'min(320px, 88vw)', maxHeight:'62vh', padding:`${T_SP[4]}px ${T_SP[4]}px`,
-              display:'flex', flexDirection:'column', gap:T_SP[3] }}>
-            <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:T_SP[2] }}>
-                <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
-                  SPEAKER NOTES{slideNo > 0 ? ` · SLIDE ${slideNo}` : ''}
-                </span>
-                <div style={{ flex:1 }} />
-                <span style={{ fontSize:'0.62rem', color:T_C.tx3 }}>on your phone</span>
-              </div>
+            style={{ position:'fixed', left:'50%', bottom:T_SP[5], transform:'translateX(-50%)', zIndex:60, ...T_PANEL(),
+              width:'min(720px, 94vw)', maxHeight:'42vh', padding:`${T_SP[4]}px ${T_SP[5]}px`,
+              display:'flex', flexDirection:'column', gap:T_SP[2] }}>
+            <div style={{ display:'flex', alignItems:'baseline', gap:T_SP[3] }}>
+              <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
+                SPEAKER NOTES{slideNo > 0 ? ` · SLIDE ${slideNo}` : ''}
+              </span>
               <span style={{ fontSize:T_FS.sm, fontWeight:T_FW.bold, color:T_C.tx, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
+              <div style={{ flex:1 }} />
+              {slideNo === 0 && (
+                <button onClick={() => addSlide(selected.id)}
+                  style={T_BTN('subtle', { padding:`2px ${T_SP[3]}px`, fontSize:T_FS.xs, color:T_C.tx2 })}>+ Add to slideshow</button>
+              )}
+              <span style={{ fontSize:'0.62rem', color:T_C.tx3 }}>on your phone</span>
             </div>
-            <RichNotes key={selected.id} html={sn.speakerNotes || ''} flex
+            <RichNotes key={selected.id} html={sn.speakerNotes || ''}
               onChange={v => setSpeakerNotes?.(selected.id, v)}
-              placeholder={`Notes for “${label}”…`} minHeight={140} />
-            {slideNo === 0 && (
-              <button onClick={() => addSlide(selected.id)}
-                style={T_BTN('subtle', { padding:`${T_SP[2]}px ${T_SP[3]}px`, fontSize:T_FS.sm, color:T_C.tx2 })}>+ Add to slideshow</button>
-            )}
+              placeholder={`Notes for “${label}”…`} minHeight={72} />
           </div>
         )
       })()}
@@ -9410,20 +9408,8 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, 
           style={T_BTN('ghost', { flex:1, padding:`${T_SP[3]}px ${T_SP[3]}px`, fontSize:T_FS.sm, ...(slideSimNodes[activeIdx] ? {} : { opacity:0.5, cursor:'not-allowed' }) })}>⟳ Update</button>
       </div>
 
-      {/* Speaker notes for the selected/current slide — shown on the phone remote while presenting. */}
-      {(() => {
-        const nid = (selectedSlideId && slideSimNodes.some(n => n.id === selectedSlideId)) ? selectedSlideId : slideSimNodes[activeIdx]?.id
-        if (!nid) return null
-        const label = (slideSimNodes.find(n => n.id === nid)?.label) || 'slide'
-        return (
-          <div style={{ display:'flex', flexDirection:'column', gap:T_SP[2] }}>
-            <span style={{ fontSize:T_FS.xs, color:T_C.tx3, letterSpacing:'0.06em', fontWeight:T_FW.bold }}>SPEAKER NOTES</span>
-            <RichNotes key={nid} html={storeNodeById[nid]?.speakerNotes || ''}
-              onChange={v => setSpeakerNotes?.(nid, v)}
-              placeholder={`Notes for “${label}” (show on your phone)…`} minHeight={80} />
-          </div>
-        )
-      })()}
+      {/* Speaker notes live in the on-canvas inspector (shown when a slide is selected), not here — keeps
+          the thumbnail sidebar compact. */}
 
       {/* Interim slide status: the designated bounce-to frame (often not a deck slide). ⤾ toggles per gap. */}
       {interimSlideId && (() => {
