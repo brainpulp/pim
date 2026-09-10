@@ -122,7 +122,9 @@ export default function RemoteControl({ code }) {
           overflowY: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative', zIndex: 6 }}>
           <div style={{ fontSize: '1.0rem', fontWeight: 700, color: '#c5d0ff', marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</div>
           {state?.note
-            ? <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>
+            ? (/[<][a-z/]/i.test(state.note)
+                ? <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', wordBreak: 'break-word' }} dangerouslySetInnerHTML={{ __html: state.note }} />
+                : <div style={{ fontSize: '1.08rem', lineHeight: 1.5, color: '#dbe4ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{state.note}</div>)
             : <div style={{ fontSize: '0.92rem', color: '#6b7699', fontStyle: 'italic' }}>No notes for this slide.</div>}
         </div>
       )}

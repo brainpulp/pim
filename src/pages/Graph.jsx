@@ -8400,31 +8400,28 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         />
       )}
 
-      {/* Canvas speaker-notes inspector — floating at the bottom when a single slide node is selected.
-          Same notes that show on the phone; mirrors the one in the Arrange-slides grid. */}
+      {/* Canvas speaker-notes inspector — floating VERTICAL panel (phone-shaped) at the bottom-right when a
+          single slide node is selected. Same notes that show on the phone; rich text (B/I/U). */}
       {!isPresenting && !readOnly && !showSlideGrid && selected?.type === 'node' && slideIds.includes(selected.id) && (() => {
         const sn = storeNodeById[selected.id] || {}
         const label = sn.label || selectedNode?.label || 'Slide'
         const slideNo = slideIds.indexOf(selected.id) + 1
         return (
           <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-            style={{ position:'fixed', left:'50%', bottom:T_SP[5], transform:'translateX(-50%)',
-              width:'min(680px, 92vw)', zIndex:60, ...T_PANEL(), padding:`${T_SP[4]}px ${T_SP[5]}px`,
-              display:'flex', flexDirection:'column', gap:T_SP[2] }}>
-            <div style={{ display:'flex', alignItems:'baseline', gap:T_SP[3] }}>
-              <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
-                SPEAKER NOTES · SLIDE {slideNo}
-              </span>
-              <span style={{ fontSize:T_FS.sm, color:T_C.tx2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
-              <div style={{ flex:1 }} />
-              <span style={{ fontSize:T_FS.xs, color:T_C.tx3 }}>shows on your phone</span>
+            style={{ position:'fixed', right:T_SP[5], bottom:T_SP[5], zIndex:60, ...T_PANEL(),
+              width:'min(320px, 88vw)', maxHeight:'62vh', padding:`${T_SP[4]}px ${T_SP[4]}px`,
+              display:'flex', flexDirection:'column', gap:T_SP[3] }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:T_SP[2] }}>
+                <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>SPEAKER NOTES · SLIDE {slideNo}</span>
+                <div style={{ flex:1 }} />
+                <span style={{ fontSize:'0.62rem', color:T_C.tx3 }}>on your phone</span>
+              </div>
+              <span style={{ fontSize:T_FS.sm, fontWeight:T_FW.bold, color:T_C.tx, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
             </div>
-            <textarea key={selected.id} defaultValue={sn.speakerNotes || ''}
-              onChange={e => setSpeakerNotes?.(selected.id, e.target.value)}
-              onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
-              placeholder={`Notes for “${label}”…`} rows={3}
-              style={T_INPUT({ width:'100%', boxSizing:'border-box', resize:'vertical', minHeight:56,
-                lineHeight:1.5, fontFamily:'inherit', fontSize:T_FS.md })} />
+            <RichNotes key={selected.id} html={sn.speakerNotes || ''} flex
+              onChange={v => setSpeakerNotes?.(selected.id, v)}
+              placeholder={`Notes for “${label}”…`} minHeight={140} />
           </div>
         )
       })()}
@@ -8955,6 +8952,47 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
   )
 }
 
+// ─── RichNotes — small rich-text editor for speaker notes (bold / italic / underline). ────────────
+// Notes are stored as HTML. Uncontrolled contentEditable: seed innerHTML once on mount (parent keys it
+// by slide id so it remounts per slide), write innerHTML back on input. Legacy plain-text notes (no
+// tags) are shown with newlines preserved.
+const NOTES_IS_HTML = s => /<[a-z/][^>]*>/i.test(s || '')
+function RichNotes({ html = '', onChange, placeholder = '', minHeight = 64, flex = false }) {
+  const ref = useRef(null)
+  const [empty, setEmpty] = useState(true)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    el.innerHTML = NOTES_IS_HTML(html)
+      ? html
+      : (html || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    setEmpty(!el.textContent.trim())
+  }, [])   // seed once; component is keyed by slide id upstream
+  const sync = () => { const el = ref.current; if (!el) return; setEmpty(!el.textContent.trim()); onChange?.(el.innerHTML) }
+  const exec = cmd => { document.execCommand(cmd, false, null); ref.current?.focus(); sync() }
+  const fmtBtn = (cmd, glyph) => (
+    <button type="button" title={cmd} onMouseDown={e => { e.preventDefault(); e.stopPropagation(); exec(cmd) }}
+      style={T_BTN('ghost', { padding:`2px ${T_SP[3]}px`, fontSize:T_FS.sm, minWidth:28, lineHeight:1.2 })}>{glyph}</button>
+  )
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:T_SP[2], ...(flex ? { flex:1, minHeight:0 } : {}) }}>
+      <div style={{ display:'flex', gap:T_SP[2] }}>
+        {fmtBtn('bold', <b>B</b>)}{fmtBtn('italic', <i>I</i>)}{fmtBtn('underline', <u>U</u>)}
+      </div>
+      <div style={{ position:'relative', ...(flex ? { flex:1, minHeight:0, display:'flex' } : {}) }}>
+        <div ref={ref} contentEditable suppressContentEditableWarning
+          onInput={sync} onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+          style={T_INPUT({ width:'100%', minHeight, boxSizing:'border-box', overflowY:'auto', resize:'none',
+            lineHeight:1.5, fontFamily:'inherit', fontSize:T_FS.md, textAlign:'left', cursor:'text',
+            ...(flex ? { flex:1 } : {}) })} />
+        {empty && (
+          <div style={{ position:'absolute', top:9, left:11, right:11, color:T_C.tx3, pointerEvents:'none',
+            fontSize:T_FS.md, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{placeholder}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── SlideGrid — full-screen "slide sorter" (PowerPoint-style). Big thumbnails in a wrapping grid,
 // drag any card to reorder, double-click to jump to that slide on the canvas, or Present. ──────────
 function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, setSpeakerNotes, onPresent, onJump, onLayout, onUndoLayout, onClose, interimSlideId = null }) {
@@ -9097,12 +9135,9 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
               <div style={{ flex:1 }} />
               <span style={{ fontSize:T_FS.xs, color:T_C.tx3 }}>shows on your phone</span>
             </div>
-            <textarea key={selNode.id} defaultValue={storeNodeById[selNode.id]?.speakerNotes || ''}
-              onChange={e => setSpeakerNotes?.(selNode.id, e.target.value)}
-              onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
-              placeholder={`Notes for “${selNode.label || 'Slide'}”…`} rows={3}
-              style={T_INPUT({ width:'100%', boxSizing:'border-box', resize:'vertical', minHeight:64,
-                lineHeight:1.5, fontFamily:'inherit', fontSize:T_FS.md })} />
+            <RichNotes key={selNode.id} html={storeNodeById[selNode.id]?.speakerNotes || ''}
+              onChange={v => setSpeakerNotes?.(selNode.id, v)}
+              placeholder={`Notes for “${selNode.label || 'Slide'}”…`} minHeight={72} />
           </div>
         </div>
       )}
@@ -9367,11 +9402,9 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, 
         return (
           <div style={{ display:'flex', flexDirection:'column', gap:T_SP[2] }}>
             <span style={{ fontSize:T_FS.xs, color:T_C.tx3, letterSpacing:'0.06em', fontWeight:T_FW.bold }}>SPEAKER NOTES</span>
-            <textarea key={nid} defaultValue={storeNodeById[nid]?.speakerNotes || ''}
-              onChange={e => setSpeakerNotes?.(nid, e.target.value)}
-              onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
-              placeholder={`Notes for “${label}” (show on your phone)…`} rows={4}
-              style={T_INPUT({ width:'100%', boxSizing:'border-box', resize:'vertical', minHeight:64, lineHeight:1.4, fontFamily:'inherit' })} />
+            <RichNotes key={nid} html={storeNodeById[nid]?.speakerNotes || ''}
+              onChange={v => setSpeakerNotes?.(nid, v)}
+              placeholder={`Notes for “${label}” (show on your phone)…`} minHeight={80} />
           </div>
         )
       })()}
