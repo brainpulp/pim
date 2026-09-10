@@ -1719,8 +1719,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     // top-left-most cell so the whole set stays roughly where it already is.
     const n = cells.length
     const cols = Math.max(1, Math.round(Math.sqrt(n * 1.7)))
-    const pitchX = Math.max(...cells.map(c => c.hw * 2)) + 90
-    const pitchY = Math.max(...cells.map(c => c.hh * 2)) + 110
+    // Pitch = largest cell + half a cell of gap (was a loose fixed +90/+110 margin).
+    const maxW = Math.max(...cells.map(c => c.hw * 2))
+    const maxH = Math.max(...cells.map(c => c.hh * 2))
+    const pitchX = maxW * 1.5
+    const pitchY = maxH * 1.5
     const originX = Math.min(...cells.map(c => c.cx))
     const originY = Math.min(...cells.map(c => c.cy))
 
