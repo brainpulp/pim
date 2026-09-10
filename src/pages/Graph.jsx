@@ -1763,6 +1763,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }
   }, [projectId, readOnly])
 
+  // Backfill a poster frame for uploaded video clips that don't have one — so the phone remote and the
+  // slide grid show a real still instead of a ▶. Captures one clip per pass (the resulting store change
+  // re-runs this), tracks attempts so it never retries the same clip, and persists via the normal autosave.
+  const posterTriedRef = useRef(new Set())
+  useEffect(() => {
+    if (loading || readOnly) return
+    let cancelled = false
+    const t = setTimeout(async () => {
+      const st = useGraphStore.getState()
+      for (const n of st.nodes) {
+        for (const c of (n.ytss?.clips || [])) {
+          const kind = c.kind || (c.youtubeId ? 'youtube' : c.driveId ? 'gdrive' : c.src ? 'video' : null)
+          if (kind !== 'video' || !c.src || c.src.startsWith('blob:') || c.poster || posterTriedRef.current.has(c.id)) continue
+          posterTriedRef.current.add(c.id)
+          const data = await captureVideoPoster(c.src)
+          if (cancelled || !data) return
+          const url = await uploadImageDataUrl(data, projectId).catch(() => null)
+          if (cancelled) return
+          const poster = (url && url.startsWith('http')) ? url : data
+          const cur = useGraphStore.getState().nodes.find(x => x.id === n.id)
+          if (cur?.ytss) setYtssClips(n.id, cur.ytss.clips.map(cc => cc.id === c.id ? { ...cc, poster } : cc))
+          return   // one per pass
+        }
+      }
+    }, 1500)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [storeNodes, projectId, loading, readOnly, setYtssClips])
+
   // ── Live auto-styling ────────────────────────────────────────────────────────
   // A node can carry `meta.autoStyle = { maps:[{propId,channel}], rules:[{tags:[],styleId}] }`.
   // It styles that node's DIRECT CHILDREN, live: property→channel maps set a visual channel from each
@@ -8656,6 +8684,32 @@ function ThreeDWrapper({ children, onFocus }) {
   return <div ref={ref} data-3d-canvas="true" style={{ width:'100%', height:'100%', borderRadius:12, overflow:'hidden' }}>{children}</div>
 }
 
+// Grab a still frame from a video URL as a JPEG data URL (for use as a poster). Needs the video to be
+// CORS-readable to draw it to a canvas — Supabase public storage is (allow-origin *); on any failure
+// (CORS taint, decode error, timeout) it resolves null and the caller keeps the ▶ placeholder.
+function captureVideoPoster(url) {
+  return new Promise(resolve => {
+    if (!url || url.startsWith('blob:')) return resolve(null)   // blob won't survive anyway
+    const v = document.createElement('video')
+    let done = false
+    const finish = (r) => { if (done) return; done = true; try { v.removeAttribute('src'); v.load() } catch { /* */ } resolve(r) }
+    v.crossOrigin = 'anonymous'; v.muted = true; v.preload = 'metadata'; v.playsInline = true
+    v.addEventListener('error', () => finish(null))
+    v.addEventListener('loadeddata', () => { try { v.currentTime = Math.min(0.8, (v.duration || 2) / 3) } catch { finish(null) } })
+    v.addEventListener('seeked', () => {
+      try {
+        const vw = v.videoWidth || 16, vh = v.videoHeight || 9
+        const w = 360, h = Math.max(1, Math.round(w * vh / vw))
+        const c = document.createElement('canvas'); c.width = w; c.height = h
+        c.getContext('2d').drawImage(v, 0, 0, w, h)
+        finish(c.toDataURL('image/jpeg', 0.62))
+      } catch { finish(null) }
+    })
+    setTimeout(() => finish(null), 9000)
+    v.src = url
+  })
+}
+
 // A static image URL suitable for an SVG <image> poster, or null. Videos/audio have NO still image, and an
 // <image href="…mp4"> paints decode-noise (the "garbage thumbnail" bug), so those return null → the caller
 // draws a clean ▶ placeholder instead. YouTube/Drive clips use their thumbnail; image clips use their src.
@@ -8666,7 +8720,7 @@ function clipPoster(c) {
   if (k === 'youtube') return c.youtubeId ? ytThumb(c.youtubeId) : null
   if (k === 'gdrive') return c.driveId ? driveThumbUrl(c.driveId) : null
   if (k === 'image') return c.src || null
-  return c.poster && IMG_URL_RE.test(c.poster) ? c.poster : null   // uploaded video/audio: poster image only
+  return c.poster && (IMG_URL_RE.test(c.poster) || /^https?:\/\//.test(c.poster)) ? c.poster : null   // uploaded video/audio: a captured poster frame, if any
 }
 
 // ─── SlideThumbSVG — the miniature render of one slide (frame), shared by the sidebar and the grid ──
