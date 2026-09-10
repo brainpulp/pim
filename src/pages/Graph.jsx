@@ -8390,6 +8390,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           getVP={getVP}
           reorderSlides={reorderSlides}
           removeSlide={removeSlide}
+          setSpeakerNotes={setSpeakerNotes}
           interimSlideId={activeSlideshow?.interimSlideId || null}
           onPresent={(idx) => { setShowSlideGrid(false); presentSlide(idx, 'fwd') }}
           onJump={(idx) => { setShowSlideGrid(false); zoomToFrame(slideSimNodes[idx]) }}
@@ -8927,11 +8928,14 @@ function SlideThumbSVG({ fn, getVP, viewImages = [], allSimNodes = [], storeNode
 
 // ─── SlideGrid — full-screen "slide sorter" (PowerPoint-style). Big thumbnails in a wrapping grid,
 // drag any card to reorder, double-click to jump to that slide on the canvas, or Present. ──────────
-function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, onPresent, onJump, onLayout, onUndoLayout, onClose, interimSlideId = null }) {
+function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages = [], getVP, reorderSlides, removeSlide, setSpeakerNotes, onPresent, onJump, onLayout, onUndoLayout, onClose, interimSlideId = null }) {
   const gridRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)   // index of the tile being lifted
   const [dropIdx, setDropIdx] = useState(null)   // insertion index (0..n) it would land at
   const [ghost, setGhost] = useState(null)       // { x, y, w, h, dx, dy, fn } — the lifted tile that follows the cursor
+  const [selId, setSelId] = useState(null)       // id of the tile selected for the notes inspector
+  // Keep the selection valid as slides get added/removed/reordered; default to the first slide.
+  const selNode = slideSimNodes.find(n => n.id === selId) || slideSimNodes[0] || null
 
   const handleDown = (e, idx) => {
     if (e.button !== 0 || e.target.closest('[data-grid-remove]')) return
@@ -8963,7 +8967,7 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       setGhost(null)
-      if (!dragging) { setDragIdx(null); setDropIdx(null); return }
+      if (!dragging) { setDragIdx(null); setDropIdx(null); setSelId(slideSimNodes[idx]?.id ?? null); return }
       const fromIdx = idx
       setDragIdx(null)
       setDropIdx(dp => {
@@ -8992,7 +8996,8 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
         {/* Snap guide: a highlighted rail on the cell the lifted tile will drop before. */}
         {dropHere && <div style={{ position:'absolute', left:-11, top:0, bottom:0, width:4, borderRadius:T_R.pill, background:T_C.accentH, boxShadow:`0 0 10px ${T_C.accent}` }} />}
         <div style={{ borderRadius:T_R.lg, overflow:'hidden', background:T_C.bg2,
-          border:`2px solid ${fn.id === interimSlideId ? '#7a5a2a' : T_C.border}`, boxShadow:T_SH.sm,
+          border:`2px solid ${selNode?.id === fn.id ? T_C.accent : fn.id === interimSlideId ? '#7a5a2a' : T_C.border}`,
+          boxShadow: selNode?.id === fn.id ? `0 0 0 2px ${T_C.accentBg}, ${T_SH.sm}` : T_SH.sm,
           opacity: lifted ? 0.25 : 1, outline: lifted ? `2px dashed ${T_C.border2}` : 'none', outlineOffset:-2 }}>
           <div style={{ position:'relative' }}>
             <SlideThumbSVG fn={fn} getVP={getVP} viewImages={viewImages} allSimNodes={allSimNodes}
@@ -9023,7 +9028,7 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
       style={{ position:'fixed', inset:0, zIndex:5000, background:T_C.canvas, display:'flex', flexDirection:'column', fontFamily:'-apple-system, sans-serif' }}>
       <div style={{ display:'flex', alignItems:'center', gap:T_SP[5], padding:`${T_SP[5]}px ${T_SP[7]}px`, borderBottom:`1px solid ${T_C.line}`, flexShrink:0 }}>
         <span style={{ fontSize:T_FS.lg, fontWeight:T_FW.bold, color:T_C.tx }}>Arrange slides</span>
-        <span style={{ fontSize:T_FS.sm, color:T_C.tx3 }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · double-click to open</span>
+        <span style={{ fontSize:T_FS.sm, color:T_C.tx3 }}>{slideSimNodes.length} slide{slideSimNodes.length === 1 ? '' : 's'} · drag to reorder · click for notes · double-click to open</span>
         <div style={{ flex:1 }} />
         {onLayout && (
           <button onClick={() => { if (slideSimNodes.length >= 2 && window.confirm('Lay the real frames out on the canvas in a grid matching this order? You can undo it with the “Undo layout” button, Ctrl+Z, or a duplicated view.')) onLayout() }}
@@ -9048,6 +9053,30 @@ function SlideGrid({ slideSimNodes, allSimNodes, storeNodeById = {}, ytssIdxMap 
           <div style={{ color:T_C.tx3, fontSize:T_FS.md, padding:T_SP[7] }}>No slides yet — add frames to the slideshow first.</div>
         )}
       </div>
+      {/* Speaker-notes inspector — pinned to the bottom, edits the selected slide's notes (shown on the phone). */}
+      {selNode && (
+        <div style={{ flexShrink:0, borderTop:`1px solid ${T_C.line}`, background:T_C.bg,
+          padding:`${T_SP[5]}px ${T_SP[7]}px`, display:'flex', justifyContent:'center' }}>
+          <div style={{ width:'100%', maxWidth:680, display:'flex', flexDirection:'column', gap:T_SP[3] }}>
+            <div style={{ display:'flex', alignItems:'baseline', gap:T_SP[3] }}>
+              <span style={{ fontSize:T_FS.xs, fontWeight:T_FW.bold, color:T_C.tx3, letterSpacing:'0.04em' }}>
+                SPEAKER NOTES · SLIDE {slideSimNodes.findIndex(n => n.id === selNode.id) + 1}
+              </span>
+              <span style={{ fontSize:T_FS.sm, color:T_C.tx2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                {selNode.label || 'Slide'}
+              </span>
+              <div style={{ flex:1 }} />
+              <span style={{ fontSize:T_FS.xs, color:T_C.tx3 }}>shows on your phone</span>
+            </div>
+            <textarea key={selNode.id} defaultValue={storeNodeById[selNode.id]?.speakerNotes || ''}
+              onChange={e => setSpeakerNotes?.(selNode.id, e.target.value)}
+              onKeyDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+              placeholder={`Notes for “${selNode.label || 'Slide'}”…`} rows={3}
+              style={T_INPUT({ width:'100%', boxSizing:'border-box', resize:'vertical', minHeight:64,
+                lineHeight:1.5, fontFamily:'inherit', fontSize:T_FS.md })} />
+          </div>
+        </div>
+      )}
       {/* Lifted tile following the cursor. */}
       {ghost && (
         <div style={{ position:'fixed', left:ghost.x, top:ghost.y, width:ghost.w, height:ghost.h, zIndex:5100, pointerEvents:'none',
