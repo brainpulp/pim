@@ -267,6 +267,12 @@ export const clipKind = (c) => c?.kind || (c?.driveId ? 'gdrive' : (c?.youtubeId
 // gdrive embeds are dumb iframes with no JS player API, so they're NOT time-controllable (no trim/markers).
 export const isTimeMedia = (c) => { const k = clipKind(c); return k === 'youtube' || k === 'video' || k === 'audio' }
 
+// The clip an "on previous" overlay text paints over: the nearest EARLIER clip that isn't itself an overlay.
+export const overlayBaseClip = (clips, idx) => {
+  for (let i = (idx || 0) - 1; i >= 0; i--) { const c = clips[i]; if (c && !(clipKind(c) === 'text' && c.overlayPrev)) return c }
+  return null
+}
+
 // Compact trim readout for a slideshow chip: the kept length (end−start) when trimmed to an end,
 // or the start offset alone if only the head is trimmed. null when the clip isn't time-media or
 // has no trim set (its full duration isn't known here for an unselected clip).
@@ -573,9 +579,13 @@ function ImageReframe({ clip, onPatch }) {
         <span style={{ fontSize: 11, color: '#aeb8ff', fontWeight: 600 }}>Reframe <span style={{ color: '#7d84a4', fontWeight: 400 }}>drag to pan</span></span>
         {framed ? <button onClick={() => onPatch({ frame: undefined })} style={{ background: 'transparent', border: 'none', color: '#8fa0d8', cursor: 'pointer', fontSize: 10.5, textDecoration: 'underline' }}>Reset</button> : null}
       </div>
-      <div ref={boxRef} onMouseDown={onDown} title="Drag to reposition the image within the slide"
-        style={{ position: 'relative', width: '100%', height: 118, borderRadius: 6, overflow: 'hidden', cursor: 'grab', background: '#000', border: '1px solid #2a3358', userSelect: 'none' }}>
-        <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`, transform: tf, transformOrigin: 'center center', pointerEvents: 'none' }} />
+      <div ref={boxRef} onMouseDown={onDown} title="Drag to reposition within the slide"
+        style={{ position: 'relative', width: '100%', height: 118, borderRadius: 6, overflow: 'hidden', cursor: 'grab', background: clipKind(clip) === 'text' && clip.overlayPrev ? '#111' : '#000', border: '1px solid #2a3358', userSelect: 'none' }}>
+        {clipKind(clip) === 'text'
+          ? <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: clip.align === 'left' ? 'flex-start' : clip.align === 'right' ? 'flex-end' : 'center', background: clip.overlayPrev ? 'transparent' : (clip.bg || '#0c0c1a'), transform: tf, transformOrigin: 'center center', pointerEvents: 'none' }}>
+              <div style={{ maxWidth: '92%', padding: '0 6px', color: clip.color || '#e8ecff', fontWeight: clip.bold === false ? 400 : 600, fontSize: 13, textAlign: clip.align || 'center', lineHeight: 1.2, overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{(clip.text || 'Text').slice(0, 90)}</div>
+            </div>
+          : <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`, transform: tf, transformOrigin: 'center center', pointerEvents: 'none' }} />}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <span style={{ fontSize: 11, color: '#8fa0d8' }}>Zoom</span>
@@ -606,12 +616,20 @@ function TextSlide({ clip, autoplay = false, onReady, onEnded, style }) {
   }, [clip.text, clip.duration, clip.loop, autoplay]) // eslint-disable-line
   const align = clip.align || 'center'
   const justify = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+  // Reframe: scale + pan the text block within the slide (both ways, like images). Absent → unchanged.
+  const fr = clip.frame
+  const frameTf = (fr && ((fr.z && fr.z !== 1) || fr.x || fr.y))
+    ? { transform: `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`, transformOrigin: 'center center' }
+    : null
+  // Overlay ("on previous") → transparent ground so the clip underneath shows through.
+  const bg = clip.overlayPrev ? 'transparent' : (clip.bg || '#0c0c1a')
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', background: clip.bg || '#0c0c1a', overflow: 'hidden',
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: bg, overflow: 'hidden',
       containerType: 'size', display: 'flex', alignItems: 'center', justifyContent: justify, ...style }}>
       <div style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: clip.bold === false ? 400 : 600,
-        fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        textShadow: clip.overlayPrev ? '0 1px 6px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.9)' : 'none', ...(frameTf || {}) }}>
         {clip.text || 'Text'}
       </div>
     </div>
@@ -634,8 +652,20 @@ function GDrivePlayer({ clip, autoplay = false, interactive = true, onReady, sty
 }
 
 // ── Polymorphic slide player: dispatches to the right engine by kind, one uniform handle ──────
-export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, coverOnPause = false, onReady, onEnded, style }) {
+// `baseClip` is only used for an "on previous" text overlay: the previous clip is painted underneath
+// (static, muted, non-interactive) and the transparent text rides on top, driven by the text's own handle.
+export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, coverOnPause = false, onReady, onEnded, style, baseClip = null }) {
   const kind = clipKind(clip)
+  if (kind === 'text' && clip.overlayPrev && baseClip) return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <div style={{ position: 'absolute', inset: 0 }}>
+        <SlidePlayer clip={baseClip} autoplay={false} muted interactive={false} />
+      </div>
+      <div style={{ position: 'absolute', inset: 0 }}>
+        <TextSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} />
+      </div>
+    </div>
+  )
   if (kind === 'text') return <TextSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
   if (kind === 'image') return <ImageSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
   if (kind === 'gdrive') return <GDrivePlayer clip={clip} autoplay={autoplay} interactive={interactive} onReady={onReady} style={style} />
@@ -1176,7 +1206,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                     onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
                 </div>
               )}
-              {k === 'image' && <ImageReframe clip={cur} onPatch={p => patch(sel, p)} />}
+              {(k === 'image' || k === 'text') && <ImageReframe clip={cur} onPatch={p => patch(sel, p)} />}
               {timed && (
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 12px' }}>
                   {(k === 'youtube' || k === 'video') && (
@@ -1261,8 +1291,13 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                     {a === 'left' ? '⯇' : a === 'right' ? '⯈' : '≡'}</button>
                 ))}
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}>
-                <input type="checkbox" checked={cur.bold !== false} onChange={e => patch(sel, { bold: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Bold</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}>
+                  <input type="checkbox" checked={cur.bold !== false} onChange={e => patch(sel, { bold: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Bold</label>
+                {/* Superimpose this text over the PREVIOUS clip instead of showing it on its own frame. */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }} title="Show this text on top of the previous clip (transparent background) instead of its own full slide">
+                  <input type="checkbox" checked={!!cur.overlayPrev} onChange={e => patch(sel, { overlayPrev: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> On previous</label>
+              </div>
             </div>
           </div>
         )}
@@ -1581,7 +1616,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       <div style={{ position: 'relative', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
         {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
         {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
-          <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} autoplay muted={cur.muted === true || sound === false} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
+          <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} baseClip={cur.overlayPrev ? overlayBaseClip(clips, idx) : null} autoplay muted={cur.muted === true || sound === false} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
         </div>}
       </div>
       {/* While PRESENTING: a transparent full-screen catcher over the clip. It (a) advances on click/tap so
@@ -1689,7 +1724,7 @@ export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, m
             ? <>
                 {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
                 <div key={'fade' + cur.id} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
-                  <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true || ytss?.sound === false} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
+                  <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} baseClip={cur.overlayPrev ? overlayBaseClip(ytss?.clips || [], currentIdx) : null} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true || ytss?.sound === false} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
                 </div>
               </>
             : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
