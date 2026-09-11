@@ -42,6 +42,21 @@ function fmtDur(ms) {
   if (m) return `${m}m ${sec}s`
   return `${sec}s`
 }
+// Presentation timing: seconds → m:ss (or h:mm:ss). Parse "3", "3:30", "1:05:00" back to seconds.
+function fmtSec(sec) {
+  const s = Math.max(0, Math.round(sec || 0))
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60
+  const pad = n => String(n).padStart(2, '0')
+  return h ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`
+}
+function parseTimeToSec(str) {
+  const t = String(str || '').trim(); if (!t) return null
+  if (/^\d+(\.\d+)?$/.test(t)) return Math.round(parseFloat(t) * 60)   // bare number = minutes
+  const parts = t.split(':').map(p => parseInt(p, 10))
+  if (parts.some(isNaN)) return null
+  let s = 0; for (const p of parts) s = s * 60 + p
+  return s
+}
 
 // ── Auto-styling: derive a visual channel from a property value ──────────────────
 // Channels the parent can map a property to (label + the view prop each writes).
@@ -1565,6 +1580,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     }, 0)
   }, [addNode, setNodeViewProp, addSlide]) // eslint-disable-line
 
+  // A "time board" frame — a big total-time readout you can park anywhere (not a slide).
+  const addTimeBoardToCenter = useCallback(() => {
+    if (!svgRef.current) return
+    const [cx, cy] = zoomTransformRef.current.invert([svgRef.current.clientWidth / 2, svgRef.current.clientHeight / 2])
+    const id = addNode('Total time', null, cx, cy)
+    setNodeViewProp(id, 'shape', 'frame')
+    setNodeViewProp(id, 'fillColor', 'none')
+    setNodeViewProp(id, 'timeboard', true)
+    setNodeViewProp(id, 'frameHalfW', 220)
+    setNodeViewProp(id, 'frameHalfH', 140)
+    setSelected({ id, type: 'node' })
+    setTimeout(() => { const sn = simNodesRef.current.find(n => n.id === id); if (sn) { sn.x = cx; sn.y = cy; sn.fx = cx; sn.fy = cy } scheduleRender() }, 0)
+  }, [addNode, setNodeViewProp]) // eslint-disable-line
+
   // Blank container at viewport center — toss nodes into it afterwards.
   const addContainerToCenter = useCallback(() => {
     if (!svgRef.current) return
@@ -1968,6 +1997,23 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const getVP = useCallback((nodeId) => ({
     ...DEFAULT_NODE_PROPS, ...(viewNodeProps[nodeId] || {}), ...(autoStyleOverlay[nodeId] || {}),
   }), [viewNodeProps, autoStyleOverlay])
+
+  // ── Presentation timing ── per-frame last-presented time (seconds) from the saved log (most recent
+  // visit wins), plus the total intended vs total last across all slides — for the frame stats, the slide
+  // toolbar readout, and the big "time board" frame.
+  const lastTimesById = useMemo(() => {
+    const m = {}
+    for (const sess of (presentLog || [])) for (const v of (sess.visits || [])) { if (v?.ms != null && m[v.slideId] == null) m[v.slideId] = Math.round(v.ms / 1000) }
+    return m
+  }, [presentLog])
+  const timeTotals = useMemo(() => {
+    let intended = 0, last = 0
+    for (const id of (activeSlideshow?.slides || [])) {
+      const iv = viewNodeProps[id]?.intendedSec; if (iv) intended += iv
+      const lm = lastTimesById[id]; if (lm != null) last += lm
+    }
+    return { intended, last }
+  }, [activeSlideshow, viewNodeProps, lastTimesById])
 
   // BFS hop-distance from a focal node (undirected — follows edges both ways)
   const expandHops = useMemo(() => {
@@ -7035,6 +7081,12 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 onLabelChange={updateLabel}
                 onToggleSlide={id => slideIds.includes(id) ? removeSlide(id) : addSlide(id)}
                 hideOutline={hideFrameOutlines || autoHideFrames}
+                lastSec={lastTimesById[n.id]}
+                intendedSec={getVP(n.id).intendedSec}
+                timeboard={!!getVP(n.id).timeboard}
+                totalIntendedSec={timeTotals.intended}
+                totalLastSec={timeTotals.last}
+                onSetIntended={(id, sec) => setNodeViewProp(id, 'intendedSec', sec)}
               />
             ))}
 
@@ -8348,6 +8400,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             ['▦', 'Table', () => { pushUndo(); const c = cSim(); const id = addTableNode(c[0], c[1]); if (drillRoot) addEdge(drillRoot, id); setSelected({ id, type: 'node' }); place(id, c[0], c[1]) }],
             ['🗂️', 'Kanban board', () => { pushUndo(); const c = cSim(); const id = addKanbanNode(c[0], c[1]); if (drillRoot) addEdge(drillRoot, id); setSelected({ id, type: 'node' }); place(id, c[0], c[1]) }],
             ['⬭', 'Container', () => addContainerToCenter()],
+            ['◷', 'Time board', () => addTimeBoardToCenter()],
             ['🖼️', 'Image…', () => { const c = cSim(); addImageFileAt(c[0], c[1]) }],
             ['🎬', 'Video (upload)', () => { const c = cSim(); addVideoFileAt(c[0], c[1]) }],
             ['🎵', 'Audio (upload)', () => { const c = cSim(); addAudioFileAt(c[0], c[1]) }],
@@ -8622,6 +8675,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       {!isPresenting && showSlideSidebar && (frameSimNodes.length > 0 || slideSimNodes.length > 0) && (
         <SlideSidebar
           slideSimNodes={slideSimNodes}
+          timeTotals={timeTotals}
           setSpeakerNotes={setSpeakerNotes}
           selectedSlideId={selected?.type === 'node' ? selected.id : null}
           allSimNodes={simNodesRef.current}
@@ -9587,7 +9641,7 @@ function PresentLogPanel({ sessions = [], onDelete, onClear, onClose }) {
 }
 
 // â"€â"€â"€ SlideSidebar â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
+function SlideSidebar({ slideSimNodes, timeTotals = { intended: 0, last: 0 }, selectedSlideId = null, setSpeakerNotes, allSimNodes, frameSimNodes, storeNodeById = {}, ytssIdxMap = {}, viewImages, slideIds, slideshows, activeSlideshowId, presentingSlideIdx, getVP, zoomToFrame, setPresentingSlideIdx, onPresent, onOpenGrid, onOpenRemote, onOpenLog, onSelectSlideIdx, remoteOn = false, removeSlide, addSlide, reorderSlides, groupSlides, ungroupSlides, renameSlideGroup, toggleSlideGroupCollapsed, setInterimSlide, toggleInterimAfter, interimSlideId = null, interimAfter = {}, addSlideshow, deleteSlideshow, renameSlideshow, setActiveSlideshowId, setSlideBgColor, onAddSlideFromView, onUpdateSlideToView, onClose, canvasBtnStyle }) {
   const activeSlideshow = slideshows.find(ss => ss.id === activeSlideshowId) || slideshows[0]
   const activeSlideBgColors = activeSlideshow?.slideBgColors || {}
   const slideGroup = activeSlideshow?.slideGroup || {}   // { frameId: groupId }
@@ -9705,6 +9759,12 @@ function SlideSidebar({ slideSimNodes, selectedSlideId = null, setSpeakerNotes, 
         <button onClick={onClose} title="Hide panel"
           style={{ background:'transparent', border:'none', color:T_C.tx2, cursor:'pointer', fontSize:16, padding:0, lineHeight:1 }}>‹</button>
         <span style={{ fontSize:T_FS.xs, color:T_C.tx3, letterSpacing:'0.1em', fontWeight:T_FW.bold }}>SLIDES</span>
+        <span style={{ flex:1 }} />
+        {/* Total intended time (and last run — red if over). */}
+        <span title="Total intended time · last run" style={{ fontSize:T_FS.sm, fontWeight:600, color:'#c5d0ff', fontVariantNumeric:'tabular-nums' }}>
+          ◷ {fmtSec(timeTotals.intended)}
+          {timeTotals.last > 0 && <span style={{ color: (timeTotals.last > timeTotals.intended && timeTotals.intended > 0) ? '#f87171' : '#6ee7a8' }}> · {fmtSec(timeTotals.last)}</span>}
+        </span>
       </div>
 
       {/* Prominent Present button. Starts from the highlighted slide (F5 does too). */}
@@ -12827,10 +12887,12 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
 }
 
 // â"€â"€â"€ FrameNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline }) {
+function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline, lastSec, intendedSec, timeboard, totalIntendedSec = 0, totalLastSec = 0, onSetIntended }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [hover, setHover] = useState(false)
+  const [editTime, setEditTime] = useState(false)
+  const [timeDraft, setTimeDraft] = useState('')
   const inputRef = useRef()
 
   useEffect(() => { if (!editing) setDraft(node.label) }, [node.label, editing])
@@ -12901,17 +12963,48 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
         </>
       })()}
 
-      {/* Title at top-left */}
-      {!editing && !isPresenting && !hideOutline && (
-        <text x={-halfW + 12} y={-halfH + titleFontSize + 6}
-          fill={viewProps.textColor || '#88b4e8'}
-          fontSize={titleFontSize}
-          fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
-          fontWeight="600"
-          style={{ userSelect: 'none', pointerEvents: 'none' }}
-        >
-          {node.label}
-        </text>
+      {/* Time board: a big total readout, sized to the frame so it stays legible when zoomed out. */}
+      {timeboard && !isPresenting && (() => {
+        const big = Math.max(14, halfH * 0.6)
+        const over = totalLastSec > totalIntendedSec && totalIntendedSec > 0
+        return (
+          <g style={{ pointerEvents: 'none' }}>
+            <text x={0} y={-halfH + Math.max(11, halfH * 0.15)} textAnchor="middle" fontFamily="-apple-system, sans-serif" fontWeight="600" fontSize={Math.max(9, halfH * 0.11)} fill="#8090b8" style={{ letterSpacing: '0.08em' }}>{(node.label || 'TOTAL TIME').toUpperCase()}</text>
+            <text x={0} y={-halfH * 0.06} textAnchor="middle" dominantBaseline="middle" fontFamily="-apple-system, sans-serif" fontWeight="800" fontSize={big} fill="#c5d0ff" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtSec(totalIntendedSec)}</text>
+            <text x={0} y={halfH * 0.46} textAnchor="middle" dominantBaseline="middle" fontFamily="-apple-system, sans-serif" fontWeight="700" fontSize={big * 0.48} fill={over ? '#f87171' : '#6ee7a8'} style={{ fontVariantNumeric: 'tabular-nums' }}>◷ {fmtSec(totalLastSec)}</text>
+          </g>
+        )
+      })()}
+
+      {/* Title — OUTSIDE the frame, top-left. */}
+      {!timeboard && !editing && !isPresenting && !hideOutline && (
+        <text x={-halfW + 2} y={-halfH - 7}
+          fill={viewProps.textColor || '#88b4e8'} fontSize={titleFontSize}
+          fontFamily="-apple-system, BlinkMacSystemFont, sans-serif" fontWeight="600"
+          style={{ userSelect: 'none', pointerEvents: 'none' }}>{node.label}</text>
+      )}
+
+      {/* Time stat — OUTSIDE the frame, top-right: last · intended (red when last exceeds intended). Click to set the intended time. */}
+      {!timeboard && !editTime && !isPresenting && !hideOutline && (
+        <g transform={`translate(${halfW},${-halfH - 7})`} style={{ cursor: 'pointer' }}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); setTimeDraft(intendedSec ? fmtSec(intendedSec) : ''); setEditTime(true) }}>
+          <text x={0} textAnchor="end" fontSize={Math.max(10, Math.round(11 * scale))} fontFamily="-apple-system, sans-serif" fontWeight="600" style={{ userSelect: 'none', fontVariantNumeric: 'tabular-nums' }}>
+            {lastSec != null && <tspan fill={(intendedSec && lastSec > intendedSec) ? '#f87171' : '#6ee7a8'}>{fmtSec(lastSec)}</tspan>}
+            {lastSec != null && <tspan fill="#5a6488"> · </tspan>}
+            <tspan fill="#9aa8d8">{intendedSec ? fmtSec(intendedSec) : '＋ time'}</tspan>
+          </text>
+        </g>
+      )}
+      {!timeboard && editTime && (
+        <foreignObject x={halfW - 90} y={-halfH - titleFontSize - 12} width={90} height={titleFontSize + 14}
+          onMouseDown={e => e.stopPropagation()}>
+          <input autoFocus value={timeDraft} placeholder="m:ss"
+            onChange={e => setTimeDraft(e.target.value)}
+            onBlur={() => { onSetIntended?.(node.id, parseTimeToSec(timeDraft) || undefined); setEditTime(false) }}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); onSetIntended?.(node.id, parseTimeToSec(timeDraft) || undefined); setEditTime(false) } if (e.key === 'Escape') { e.preventDefault(); setEditTime(false) } }}
+            style={{ width: '100%', background: 'rgba(10,20,40,0.92)', border: '1.5px solid #5b6af0', borderRadius: 4, color: '#c5d0ff', fontSize: Math.max(10, Math.round(11 * scale)), fontWeight: 600, padding: '1px 5px', outline: 'none', boxSizing: 'border-box', textAlign: 'right' }} />
+        </foreignObject>
       )}
 
       {/* Title edit input */}
@@ -12948,7 +13041,7 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
       )}
 
       {/* Slide toggle (top-right, left of delete) */}
-      {isSelected && (
+      {isSelected && !timeboard && (
         <g transform={`translate(${halfW - 36},${-halfH + 12})`}
           onClick={e => { e.stopPropagation(); onToggleSlide(node.id) }}
           style={{ cursor: 'pointer' }}
