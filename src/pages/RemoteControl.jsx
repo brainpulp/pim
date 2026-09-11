@@ -58,6 +58,18 @@ export default function RemoteControl({ code }) {
   useEffect(() => {
     if (editNotes && !noteFocusRef.current) { seedNote(); requestAnimationFrame(focusNoteEnd) }
   }, [editNotes, state?.noteId, state?.note]) // eslint-disable-line
+  // Advancing to a DIFFERENT slide ends note-editing. Without this, tapping ✎ once left the phone stuck in
+  // edit mode on every following slide — the editor (and the mobile keyboard) kept popping up, re-seeded and
+  // re-focused each slide. Editing is per-slide; moving on drops back to clean read mode. Sub-slides/builds
+  // keep the same noteId, so they don't disturb an in-progress edit.
+  const prevNoteIdRef = useRef(state?.noteId)
+  useEffect(() => {
+    if (state?.noteId === prevNoteIdRef.current) return
+    prevNoteIdRef.current = state?.noteId
+    noteFocusRef.current = false
+    setEditNotes(false)
+    try { noteRef.current?.blur() } catch { /* ignore */ }
+  }, [state?.noteId])
 
   // Short confirmation beep so you can HEAR that a press registered and the deck actually advanced (a ghost
   // click that doesn't advance makes no sound). Web Audio needs a user gesture to start — unlocked on tap.
