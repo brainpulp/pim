@@ -18,7 +18,7 @@ import { arrangeSubtree, arrangeNodes, SUBTREE_LAYOUTS, FLAT_LAYOUTS } from '../
 import { outlineHTML, svgToPng, buildDocumentHTML, downloadDoc, printPDF } from '../lib/exportDoc'
 import { graphToMermaid, parseMermaid, layeredLayout } from '../lib/flowchart'
 import { EMOJIS } from '../components/Drawing'
-import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget, clipKind, ytThumb } from '../components/YTSlideshow'
+import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptions, cutSkipTarget, clipKind, ytThumb, resolveMarkers } from '../components/YTSlideshow'
 import { driveThumbUrl } from '../lib/gdrive'
 import { playDrop } from '../lib/sound'
 import PresenterRemote from '../components/PresenterRemote'
@@ -2852,6 +2852,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const videoEndLoopRef = useRef(null)                         // interval looping the last ~2s while dragging the END handle
   const clearVideoEndLoop = () => { if (videoEndLoopRef.current) { clearInterval(videoEndLoopRef.current); videoEndLoopRef.current = null } }
   const videoEditSelRef = useRef({ start: 0, end: 0 })            // current trim of the video being edited
+  const videoEditMarkersRef = useRef(null)                       // marker list of the video being edited → ←/→ jump between them
   // While dragging a trim handle: show a paused frame at that exact time on the node (frame-accurate).
   const videoScrubTo = useCallback((t) => { const h = videoPreviewHandleRef.current; if (!h) return; clearVideoEndLoop(); h.seek?.(t); h.pause?.() }, [])
   // On release (and on open): play the trimmed selection on a loop so the selection stays visible.
@@ -2866,7 +2867,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     videoPreviewHandleRef.current = h
     if (h) { const sel = videoEditSelRef.current; setTimeout(() => videoLoopSel(sel.start || 0, sel.end || 0), 350) }
   }, [videoLoopSel])
-  useEffect(() => { if (!videoEdit) { clearVideoEndLoop(); videoPreviewHandleRef.current = null } }, [videoEdit])
+  useEffect(() => { if (!videoEdit) { clearVideoEndLoop(); videoPreviewHandleRef.current = null; videoEditMarkersRef.current = null } }, [videoEdit])
   const ytssIdxMapRef = useRef(ytssIdxMap); useEffect(() => { ytssIdxMapRef.current = ytssIdxMap }, [ytssIdxMap])
   const ytssPlayingRef = useRef(false)
   const ytssActiveRef = useRef(null); useEffect(() => { ytssActiveRef.current = ytssActiveId }, [ytssActiveId])
@@ -3462,6 +3463,26 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         window.dispatchEvent(new Event('pim-reassert-mute'))
       }
       if (readOnly) return   // shared read-only view: no keyboard mutations
+
+      // Single-video editor open: ←/→ jump the PREVIEW playhead to the previous / next marker on the
+      // timeline (pause / cut / speed — every orange marker). Runs before the canvas-focus / nav bails so it
+      // works whether or not the canvas holds focus, but yields to a focused time field so typing a trim
+      // value can still use the arrows.
+      if (videoEditMarkersRef.current && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+        const ae = document.activeElement?.tagName
+        if (ae === 'INPUT' || ae === 'TEXTAREA') return
+        const h = videoPreviewHandleRef.current
+        const starts = [...new Set((videoEditMarkersRef.current || []).map(m => Math.min(m.s, m.e ?? m.s)))].sort((a, b) => a - b)
+        if (h && starts.length) {
+          e.preventDefault(); e.stopPropagation()
+          const now = h.time?.() || 0
+          const target = e.key === 'ArrowRight'
+            ? starts.find(s => s > now + 0.2)
+            : [...starts].reverse().find(s => s < now - 0.2)
+          if (target != null) { clearVideoEndLoop(); h.seek?.(target); h.pause?.() }
+        }
+        return
+      }
       // A fullscreen slideshow overlay owns ALL keys (its own window/capture handler drives it). Without
       // this, arrows here would ALSO fire (advancing the deck) and fight the player. Let Esc through so it
       // can still bubble if the player didn't handle it, but block the nav/build keys.
@@ -9110,6 +9131,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           if (sn && rect) anchor = { x: rect.left + T.x + (sn.x + (m.width || 0) / 2) * T.k + 14, y: rect.top + T.y + sn.y * T.k }
         }
         videoEditSelRef.current = { start: video?.start || 0, end: video?.end || 0 }
+        videoEditMarkersRef.current = resolveMarkers(video)   // keep ←/→ marker jump in sync with the timeline
         return (<>
           {/* Click-away backdrop — clicking anywhere outside the panel closes it. */}
           <div onMouseDown={() => setVideoEdit(null)} style={{ position: 'fixed', inset: 0, zIndex: 499 }} />
