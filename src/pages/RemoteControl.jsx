@@ -150,14 +150,20 @@ export default function RemoteControl({ code }) {
             {(state?.steps ?? 0) > 1 && <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#6ee7a8' }}>·{(state.step ?? 0) + 1}/{state.steps}<span style={{ fontSize: '0.52rem', color: '#8090b8' }}> SUB</span></span>}
             {(state?.stages ?? 0) > 1 && <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#7c8cff' }}>·{(state.stage ?? 0) + 1}/{state.stages}<span style={{ fontSize: '0.52rem', color: '#8090b8' }}> BUILD</span></span>}
             <div style={{ flex: 1 }} />
-            <span style={{ fontSize: '0.9rem', color: '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>⏱ {fmtClock(state?.slideMs)}</span>
-            <span style={{ fontSize: '0.78rem', color: '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
+            <span style={{ fontSize: '0.9rem', color: state?.timerPaused ? '#f6ad55' : '#c5d0ff', fontVariantNumeric: 'tabular-nums' }}>{state?.timerPaused ? '⏸' : '⏱'} {fmtClock(state?.slideMs)}</span>
+            <span style={{ fontSize: '0.78rem', color: state?.timerPaused ? '#f6ad55' : '#6ee7a8', fontVariantNumeric: 'tabular-nums' }}>{fmtClock(state?.totalMs)}</span>
           </>
         ) : (
           <>
             <span style={{ fontSize: '0.85rem', color: '#a9b6e8' }}>{statusText}{status === 'live' ? ' · not presenting' : ''}</span>
             <div style={{ flex: 1 }} />
           </>
+        )}
+        {presenting && (
+          <button onClick={() => send('timerPause')} title={state?.timerPaused ? 'Resume the clock' : 'Pause the clock'}
+            style={{ background: state?.timerPaused ? '#3a2140' : 'transparent', border: `1px solid ${state?.timerPaused ? '#7c5a2a' : '#2a3358'}`,
+              color: state?.timerPaused ? '#f6ad55' : '#c5d0ff', borderRadius: 8, padding: '4px 9px', fontSize: '0.82rem', cursor: 'pointer',
+              WebkitTapHighlightColor: 'transparent', flexShrink: 0 }}>{state?.timerPaused ? '▶' : '⏸'}</button>
         )}
         <button onClick={toggleMute} title={muted ? 'Unmute beep' : 'Mute beep'}
           style={{ background: muted ? 'transparent' : '#12291d', border: `1px solid ${muted ? '#2a3358' : '#2f7a4a'}`, color: muted ? '#8090b8' : '#6ee7a8',

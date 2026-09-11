@@ -1268,6 +1268,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [presentLogOpen, setPresentLogOpen] = useState(false)
   const [presentLog, setPresentLog] = useState([])
   const [presentElapsed, setPresentElapsed] = useState(0)   // live elapsed ms during a run (for the nav-bar timer)
+  const [presTimerPaused, setPresTimerPaused] = useState(false)   // phone can pause the presentation clock
+  const timerPausedAtRef = useRef(null)   // timestamp of the current pause (null = running)
+  // ms to subtract from any elapsed reading so a paused clock freezes; baked into the refs on resume.
+  const pausedSub = () => (timerPausedAtRef.current != null ? Date.now() - timerPausedAtRef.current : 0)
   // The on-screen control/slide-count bar during a presentation is optional (persisted). When hidden, a tiny
   // restore handle remains so the on-stage control is never fully lost. Keyboard/phone always drive the deck.
   const remoteThumbRef = useRef({ sig: '', val: null })   // cache for the phone-preview thumbnail (rebuilt only on slide/clip change)
@@ -1344,7 +1348,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Live elapsed timer while presenting (drives the nav-bar clock).
   useEffect(() => {
     if (presentingSlideIdx === null) return
-    const iv = setInterval(() => { const s = presentSessionRef.current; if (s) setPresentElapsed(Date.now() - s.startedAt) }, 1000)
+    const iv = setInterval(() => { const s = presentSessionRef.current; if (s) setPresentElapsed(Date.now() - s.startedAt - pausedSub()) }, 1000)
     return () => clearInterval(iv)
   }, [presentingSlideIdx])
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
@@ -6464,6 +6468,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const beginPresentSession = () => {
     presentSessionRef.current = { id: (crypto.randomUUID?.() || String(Date.now())), startedAt: Date.now(), visits: [] }
     setPresentElapsed(0)
+    timerPausedAtRef.current = null; setPresTimerPaused(false)   // fresh run → clock running
   }
   const recordSlideEnter = (slideId, label) => {
     const s = presentSessionRef.current; if (!s) return
@@ -6683,6 +6688,21 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return on
       })
     },
+    // Pause / resume the presentation clock (both the slide timer and the total). On resume the paused span
+    // is baked into the reference timestamps so the clock continues seamlessly from where it froze.
+    timerPause: () => {
+      if (presentingSlideIdxRef.current === null) return
+      setPresTimerPaused(prev => {
+        if (!prev) { timerPausedAtRef.current = Date.now() }   // pause → freeze
+        else {                                                  // resume → shift refs forward by the paused span
+          const delta = Date.now() - (timerPausedAtRef.current || Date.now())
+          const s = presentSessionRef.current
+          if (s) { s.startedAt += delta; const v = s.visits?.[s.visits.length - 1]; if (v) v.enteredAt += delta }
+          timerPausedAtRef.current = null
+        }
+        return !prev
+      })
+    },
   }
   const curSlideNode = presentingSlideIdx !== null ? slideSimNodes[presentingSlideIdx] : null
   // Current slideshow step (ytss clip) on this slide, if a slideshow is active/fullscreen — shown on the phone.
@@ -6697,7 +6717,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Live timers for the phone: total elapsed (session) + time on the current slide. presentElapsed ticks
   // once/sec while presenting (see the interval effect), so these re-broadcast at 1 Hz.
   const _curVisit = presentSessionRef.current?.visits?.[presentSessionRef.current.visits.length - 1]
-  const slideMs = (presentingSlideIdx !== null && _curVisit) ? Math.max(0, Date.now() - _curVisit.enteredAt) : 0
+  const slideMs = (presentingSlideIdx !== null && _curVisit) ? Math.max(0, Date.now() - _curVisit.enteredAt - pausedSub()) : 0
   const remoteState = {
     presenting: presentingSlideIdx !== null,
     idx: presentingSlideIdx ?? 0,
@@ -6712,6 +6732,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     totalMs: presentingSlideIdx !== null ? presentElapsed : 0,
     slideMs: Math.round(slideMs / 1000) * 1000,
     muted: presMuted,
+    timerPaused: presTimerPaused,
   }
 
   // Phone canvas preview: the current + next slide rendered to a compact SVG string (plus the currently
