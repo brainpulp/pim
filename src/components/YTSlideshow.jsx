@@ -179,6 +179,16 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
     },
   })
 
+  // Honor the Sound switch (per-clip `muted` OR slideshow master) reactively — the create-once effect only
+  // muted at onReady, so a later toggle was ignored. 'pim-reassert-mute' lets the phone panic-mute hand
+  // control back to this clip's own state instead of blanket-unmuting.
+  useEffect(() => {
+    const apply = () => { const p = playerRef.current; if (!p || !p.mute) return; try { muted ? p.mute() : p.unMute() } catch { /* */ } }
+    apply()
+    window.addEventListener('pim-reassert-mute', apply)
+    return () => window.removeEventListener('pim-reassert-mute', apply)
+  }, [muted, ready])
+
   // When the clip changes (id/trim), reload it in the existing player. Skipped when the parent drives
   // clip switching through the handle (externalControl) — avoids a double-load.
   useEffect(() => {
@@ -391,11 +401,22 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
     //                    presentations while preview (a calm single mount) kept its sound.
     //   • NotAllowedError → the browser genuinely blocked UNMUTED autoplay. Only then fall back to
     //                    muted so the slide still plays rather than freezing.
+    // If the browser blocks UNMUTED autoplay we must NOT silence the clip for good — that made the first
+    // play of a talk come out muted while a manual replay had sound (the "erratic" bug). Start it muted so
+    // the slide isn't frozen, then restore sound the instant the presenter's next key/click arrives (always
+    // imminent in a driven talk). AbortErrors (a re-render/seek interrupted play) just retry with sound.
+    let gestureUnmute = null
+    const disarmGesture = () => { if (!gestureUnmute) return; window.removeEventListener('pointerdown', gestureUnmute, true); window.removeEventListener('keydown', gestureUnmute, true); gestureUnmute = null }
     if (autoplay) {
       el.muted = !!muted
-      const tryPlay = (left) => el.play().catch(err => {
-        if (err && err.name === 'AbortError') { if (left > 0) setTimeout(() => { if (ref.current === el) tryPlay(left - 1) }, 60); return }
-        el.muted = true; el.play().catch(() => {})   // autoplay-with-sound blocked → last-resort muted
+      const tryPlay = (left) => el.play().then(() => disarmGesture()).catch(err => {
+        if (err && err.name === 'AbortError') { if (left > 0) setTimeout(() => { if (ref.current === el) tryPlay(left - 1) }, 80); return }
+        el.muted = true; el.play().catch(() => {})   // blocked → play muted so the slide isn't stuck…
+        if (!muted && !gestureUnmute) {              // …then bring sound back on the very next user gesture
+          gestureUnmute = () => { el.muted = false; el.play().catch(() => {}); disarmGesture() }
+          window.addEventListener('pointerdown', gestureUnmute, true)
+          window.addEventListener('keydown', gestureUnmute, true)
+        }
       })
       tryPlay(4)
     } else el.muted = !!muted
@@ -420,8 +441,23 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
       setRate: (r) => { el.playbackRate = r || 1 },
       duration: () => el.duration || 0, time: () => el.currentTime || 0,
     })
-    return () => { el.removeEventListener('playing', onPlaying); el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
+    return () => { disarmGesture(); el.removeEventListener('playing', onPlaying); el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
   }, [clip.src, clip.start, clip.end, clip.speed, clip.loop]) // eslint-disable-line
+
+  // Honor the Sound switch (per-clip `muted` OR the slideshow master) reactively — the load effect above
+  // deliberately doesn't re-run on `muted`, so without this a clip switched to muted mid-play kept its
+  // sound. We SKIP the mount run (the load effect + its autoplay handling own the initial mute, and
+  // unmuting a just-started clip here could make the browser pause it) and only act on later toggles.
+  // 'pim-reassert-mute' lets the phone panic-mute hand control back to each clip's own state.
+  const mutedInitRef = useRef(false)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    if (mutedInitRef.current) el.muted = !!muted     // a real toggle after mount → apply immediately
+    else mutedInitRef.current = true                  // mount → leave the initial state to the load effect
+    const reassert = () => { const e = ref.current; if (e) e.muted = !!muted }
+    window.addEventListener('pim-reassert-mute', reassert)
+    return () => window.removeEventListener('pim-reassert-mute', reassert)
+  }, [muted])
 
   if (kind === 'audio') {
     return (

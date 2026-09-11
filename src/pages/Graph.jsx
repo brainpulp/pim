@@ -1293,7 +1293,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     if (presentingSlideIdx === null && (presMuteTimerRef.current || presMuted)) {
       if (presMuteTimerRef.current) { clearInterval(presMuteTimerRef.current); presMuteTimerRef.current = null }
       setPresMuted(false)
-      try { document.querySelectorAll('video,audio').forEach(el => { el.muted = false }) } catch { /* */ }
+      try { window.dispatchEvent(new Event('pim-reassert-mute')) } catch { /* */ }   // restore each clip's own Sound state
     }
   }, [presentingSlideIdx]) // eslint-disable-line
   const [revealCounts, setRevealCounts] = useState({})   // unfolding text boxes: {[imgId]: shown line count}
@@ -6633,13 +6633,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     mute: () => {
       setPresMuted(prev => {
         const on = !prev
-        const sweep = () => {
-          try { document.querySelectorAll('video,audio').forEach(el => { el.muted = on }) } catch { /* */ }
-          try { document.querySelectorAll('iframe').forEach(f => { try { f.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: on ? 'mute' : 'unMute', args: [] }), '*') } catch { /* */ } }) } catch { /* */ }
+        const muteSweep = () => {
+          try { document.querySelectorAll('video,audio').forEach(el => { el.muted = true }) } catch { /* */ }
+          try { document.querySelectorAll('iframe').forEach(f => { try { f.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*') } catch { /* */ } }) } catch { /* */ }
         }
-        sweep()
         if (presMuteTimerRef.current) { clearInterval(presMuteTimerRef.current); presMuteTimerRef.current = null }
-        if (on) presMuteTimerRef.current = setInterval(sweep, 300)
+        if (on) { muteSweep(); presMuteTimerRef.current = setInterval(muteSweep, 300) }
+        // Unmute = hand control back to each clip's OWN Sound switch (never blanket-unmute an
+        // intentionally-muted clip). Players re-assert their intended state on this event.
+        else { try { window.dispatchEvent(new Event('pim-reassert-mute')) } catch { /* */ } }
         return on
       })
     },
