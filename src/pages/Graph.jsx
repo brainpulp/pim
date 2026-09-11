@@ -216,7 +216,9 @@ function elementToSlide(o, label) {
   // A text box → text slide: flatten its HTML to text, keep its background/colour.
   if (t === 'text' || o.html != null) {
     const text = String(o.html || '').replace(/<\/(div|p)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim()
-    return { kind: 'text', text, title: title || 'Text', bg: o.bg || o.bgColor || '#0c0c1a', color: o.textColor || o.color || '#e8ecff', fontSize: 9, align: o.align || 'center', trigger: 'click', duration: 5 }
+    // Keep the rich HTML so the step reads like the original text box (bold/italic/colour survive); the
+    // flattened `text` is a fallback for older renderers.
+    return { kind: 'text', html: o.html || undefined, text, title: title || 'Text', bg: o.bg || o.bgColor || '#0c0c1a', color: o.textColor || o.color || '#e8ecff', fontSize: 9, align: o.align || 'center', trigger: 'click', duration: 5 }
   }
   // Free image → image slide: keep its look (blur, edge/contour blur, colour tint, opacity) AND its
   // dimensions/rotation, so it presents the same in the slideshow and comes back out unchanged.

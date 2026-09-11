@@ -631,12 +631,58 @@ function TextSlide({ clip, autoplay = false, onReady, onEnded, style }) {
       {/* The reframe transform rides on a FULL-FRAME layer (not the small text block) so pan % is relative
           to the slide — the text can be registered anywhere, matching the inspector preview 1:1. */}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: justify, ...(frameTf || {}) }}>
-        <div style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
+        <div data-richtext="1" style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: clip.bold === false ? 400 : 600,
           fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          textShadow: clip.overlayPrev ? '0 1px 6px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.9)' : 'none' }}>
-          {clip.text || 'Text'}
+          textShadow: clip.overlayPrev ? '0 1px 6px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.9)' : 'none' }}
+          {...(clip.html ? { dangerouslySetInnerHTML: { __html: clip.html } } : {})}>
+          {clip.html ? undefined : (clip.text || 'Text')}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Rich editor for a text step — opened by double-clicking the step's chip. Edit the text AND style
+//    (bold / italic / underline / inline colour), just like a canvas text box. Stores HTML in clip.html.
+function TextClipEditor({ clip, onPatch, onClose }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    el.innerHTML = clip.html || (clip.text ? String(clip.text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') : '')
+    el.focus()
+    try { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r) } catch { /* */ }
+  }, []) // eslint-disable-line
+  const sync = () => onPatch({ html: ref.current?.innerHTML || '', text: undefined })
+  const exec = (cmd) => { document.execCommand(cmd, false, null); ref.current?.focus(); sync() }
+  const setColor = (c) => { try { document.execCommand('styleWithCSS', false, true) } catch { /* */ } document.execCommand('foreColor', false, c); ref.current?.focus(); sync() }
+  const align = clip.align || 'center'
+  const justify = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+  const btn = { background: '#232a5c', border: '1px solid #3a4a8a', color: '#dbe4ff', borderRadius: 6, padding: '4px 9px', cursor: 'pointer', fontSize: 13, minWidth: 30, lineHeight: 1.1 }
+  return (
+    <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(4,6,16,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onMouseDown={e => e.stopPropagation()} style={{ width: 'min(720px,92vw)', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.6)', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <button onMouseDown={e => { e.preventDefault(); exec('bold') }} style={{ ...btn, fontWeight: 800 }}>B</button>
+          <button onMouseDown={e => { e.preventDefault(); exec('italic') }} style={{ ...btn, fontStyle: 'italic' }}>I</button>
+          <button onMouseDown={e => { e.preventDefault(); exec('underline') }} style={{ ...btn, textDecoration: 'underline' }}>U</button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8fa0d8', fontSize: 12 }}>Colour <SwatchButton title="Selected text colour" size={20} value={clip.color || '#e8ecff'} onChange={setColor} /></span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8fa0d8', fontSize: 12 }}>BG <SwatchButton title="Slide background" size={20} value={clip.bg || '#0c0c1a'} onChange={c => onPatch({ bg: c })} /></span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#8fa0d8', fontSize: 12 }}>Size
+            <button onMouseDown={e => { e.preventDefault(); onPatch({ fontSize: Math.max(3, (clip.fontSize || 9) - 1) }) }} style={btn}>−</button>
+            <span style={{ minWidth: 22, textAlign: 'center', color: '#c5d0ff' }}>{clip.fontSize || 9}</span>
+            <button onMouseDown={e => { e.preventDefault(); onPatch({ fontSize: Math.min(40, (clip.fontSize || 9) + 1) }) }} style={btn}>+</button></span>
+          {['left', 'center', 'right'].map(a => <button key={a} onMouseDown={e => { e.preventDefault(); onPatch({ align: a }) }} style={{ ...btn, background: align === a ? '#2a3358' : '#232a5c' }}>{a === 'left' ? '⯇' : a === 'right' ? '⯈' : '≡'}</button>)}
+          <span style={{ flex: 1 }} />
+          <button onClick={onClose} style={{ ...btn, background: '#1f6f43', border: '1px solid #2f9a5f', fontWeight: 700 }}>Done</button>
+        </div>
+        <div style={{ background: clip.bg || '#0c0c1a', borderRadius: 8, minHeight: 180, display: 'flex', alignItems: 'center', justifyContent: justify, padding: '18px 20px', overflow: 'auto' }}>
+          <div ref={ref} data-richtext="1" contentEditable suppressContentEditableWarning
+            onInput={sync} onBlur={sync} onKeyDown={e => e.stopPropagation()}
+            onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t); sync() }}
+            style={{ maxWidth: '100%', width: '100%', outline: 'none', color: clip.color || '#e8ecff', textAlign: align, fontWeight: clip.bold === false ? 400 : 600, fontSize: Math.max(15, (clip.fontSize || 9) * 2.2), lineHeight: 1.3, fontFamily: '-apple-system, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+        </div>
+        <div style={{ fontSize: 11, color: '#7d84a4' }}>Select text, then B / I / U or the Colour swatch for inline styling. Size, alignment and background apply to the whole slide.</div>
       </div>
     </div>
   )
@@ -1005,6 +1051,7 @@ function Collapsible({ label, defaultOpen = false, children }) {
 // ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
 export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, transition = 'fade', fadeMs = 1000, onSetTransition, onSetFadeMs, sound, onToggleSound, captions, onToggleCaptions, onUpload, onPickDrive, onReplaceClipFile }) {
   const [sel, setSel] = useState(0)
+  const [editTextIdx, setEditTextIdx] = useState(null)   // a text step opened for rich editing (double-click)
   const [urlInput, setUrlInput] = useState('')
   const [dur, setDur] = useState(0)
   const [dragIdx, setDragIdx] = useState(null)
@@ -1147,7 +1194,8 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
               const ck = clipKind(c)
               const thumbSrc = ck === 'youtube' ? ytThumb(c.youtubeId) : (ck === 'gdrive' ? driveThumbUrl(c.driveId) : (ck === 'image' ? c.src : null))
               return (
-                <div key={c.id} data-cliprow onMouseDown={rowDrag(i)} title={c.title || ck}
+                <div key={c.id} data-cliprow onMouseDown={rowDrag(i)} title={ck === 'text' ? 'Double-click to edit text & style' : (c.title || ck)}
+                  onDoubleClick={e => { if (ck === 'text') { e.stopPropagation(); setSel(i); setEditTextIdx(i) } }}
                   style={{ position: 'relative', flex: '0 0 auto', width: 108, borderRadius: 7, cursor: 'grab', overflow: 'hidden',
                     opacity: dragIdx === i ? 0.4 : 1, background: i === sel ? '#1c2148' : '#0e0e1c',
                     borderLeft: `2px solid ${dropIdx === i && dragIdx != null ? '#5b6af0' : 'transparent'}`,
@@ -1275,9 +1323,11 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         {/* Text step editor: the text itself + look (colour, background, size, alignment). */}
         {cur && k === 'text' && (
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginTop: 4, flexWrap: 'wrap' }}>
-            <textarea value={cur.text || ''} onChange={e => patch(sel, { text: e.target.value })}
-              onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()} placeholder="Type the text…" rows={3}
-              style={{ flex: 1, minWidth: 300, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#e8ecff', borderRadius: 6, fontSize: 14, padding: '8px 10px', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }} />
+            {/* Rich editing (bold/italic/underline/inline colour) happens in the pop-out editor — open it by
+                double-clicking the step's chip, or with this button. The controls at right set slide-wide look. */}
+            <button onClick={() => setEditTextIdx(sel)} style={{ flex: 1, minWidth: 220, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 6, fontSize: 13, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', overflow: 'hidden' }}>
+              ✎ Edit text & style<span style={{ color: '#7d84a4', marginLeft: 8, fontSize: 11 }}>— {((cur.html ? cur.html.replace(/<[^>]+>/g, ' ') : cur.text) || 'Text').replace(/\s+/g, ' ').trim().slice(0, 40) || 'empty'}</span>
+            </button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11.5, color: '#8fa0d8', minWidth: 210 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Text
@@ -1309,6 +1359,9 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
         )}
         {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No steps yet. Paste a YouTube link, upload media, or add text above.</div>}
       </div>
+      {editTextIdx != null && clips[editTextIdx] && clipKind(clips[editTextIdx]) === 'text' && (
+        <TextClipEditor clip={clips[editTextIdx]} onPatch={p => patch(editTextIdx, p)} onClose={() => setEditTextIdx(null)} />
+      )}
     </div>
   )
 }
