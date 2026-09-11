@@ -8704,6 +8704,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 <div style={{ fontSize:'0.66rem', color:'#8090b8', fontVariantNumeric:'tabular-nums' }}>⏱ {fmtDur(presentElapsed)}</div>
               </span>
               <button style={{ ...navBtn, background:'linear-gradient(180deg,#5b6af0,#4652d6)', border:'none', color:'#fff' }} onClick={() => remoteKey('ArrowRight')} title="Next (→ / Space)">Next ›</button>
+              {/* Manual fullscreen toggle — a real on-screen click is a guaranteed user gesture, so this always
+                  engages device fullscreen even when the show was started from the phone (which can't grant it). */}
+              <button style={{ ...navBtn, minWidth:0, padding:'12px 12px', fontSize:'1rem', color:'#c5d0ff' }}
+                onClick={() => { if (document.fullscreenElement || document.webkitFullscreenElement) exitDeviceFullscreen(); else enterDeviceFullscreen() }}
+                title="Enter / exit full screen">⛶</button>
               <button style={{ ...navBtn, minWidth:0, padding:'12px 10px', fontSize:'0.9rem', color:'#8090b8' }} onClick={() => togglePresentBar(true)} title="Hide this bar (keyboard/phone still work)">⌄</button>
               <button style={{ ...navBtn, minWidth:0, padding:'12px 14px', color:'#f9b4b4', background:'#241318', border:'1px solid #5a2a2a' }} onClick={() => exitPresentation()} title="Exit (Esc)">✕</button>
             </div>
