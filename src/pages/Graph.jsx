@@ -3636,6 +3636,41 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return
       }
 
+      // ── Arrow NUDGE (edit mode only) — move the selected element(s) by 1 unit, Shift = 5×. ──
+      // Safe by construction: presentation, slideshow, and slide-scrub arrow handling all returned
+      // above; plain arrows are otherwise free here (tree-nav below needs Ctrl/Cmd). Only fires when
+      // something is actually selected, so keyboard-nav depth (Shift+↑/↓ with nothing selected) is
+      // untouched. Never runs while presenting.
+      {
+        const _nudgeArrow = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'
+        if (_nudgeArrow && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          const step = e.shiftKey ? 5 : 1
+          const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+          const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
+          // Free images + text boxes (view.images) — move their centre coords.
+          if (selectedImageIds.size > 0) {
+            e.preventDefault()
+            const imgs = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
+            selectedImageIds.forEach(id => { const im = imgs.find(i => i.id === id); if (im) updateImage(id, { x: (im.x || 0) + dx, y: (im.y || 0) + dy }) })
+            return
+          }
+          // Node(s) — nudging pins the node at its new spot (same as a drag would).
+          const nudgeNodeIds = selectedNodeIds.size > 0 ? [...selectedNodeIds] : (selected?.type === 'node' ? [selected.id] : [])
+          if (nudgeNodeIds.length > 0) {
+            e.preventDefault()
+            nudgeNodeIds.forEach(id => {
+              const sn = simNodesRef.current.find(n => n.id === id)
+              if (!sn) return
+              const nx = (sn.x || 0) + dx, ny = (sn.y || 0) + dy
+              sn.x = nx; sn.y = ny; sn.fx = nx; sn.fy = ny
+              setAnchor(id, nx, ny)
+            })
+            scheduleRender()
+            return
+          }
+        }
+      }
+
       // ── Keyboard tree navigation — changes ONLY the pan/zoom, never the selection ──
       //   ← / →   siblings (arcs out through the sibling group, then into the target)
       //   ↑ parent · ↓ first child · Ctrl/Cmd+↑ jump to root
