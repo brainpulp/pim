@@ -149,6 +149,29 @@ export default function App() {
   // graph, table, pack, board, lab — reflects the project you opened. Loading it only inside
   // Graph meant switching projects while on a non-graph tab left the previous project on screen.
   const loadProjectData = useGraphStore(s => s.loadProjectData)
+  const saveConflict = useGraphStore(s => s.saveConflict)
+  const [conflictBusy, setConflictBusy] = useState(false)
+  // Another device saved newer work while this tab had the project open. Rather than silently overwrite
+  // (which lost work before), autosave is paused and the user chooses: take the latest, or force-push theirs.
+  const resolveConflictReload = async () => {
+    if (!project?.id) return
+    setConflictBusy(true)
+    try {
+      const d = await loadProject(project.id)
+      loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles, loadedProjectId: project.id, loadedUpdatedAt: d.updated_at })
+    } catch (e) { console.error('Reload failed:', e) } finally { setConflictBusy(false) }
+  }
+  const resolveConflictOverwrite = async () => {
+    if (!project?.id) return
+    setConflictBusy(true)
+    try {
+      const s = useGraphStore.getState()
+      useGraphStore.getState().setSaveConflict(false)   // clear first so the forced write isn't re-blocked
+      const res = await saveProject(project.id, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles }, null)   // null = force unconditional
+      useGraphStore.getState().setLoadedUpdatedAt(res.updatedAt)
+      useGraphStore.getState().setSaveConflict(false)
+    } catch (e) { console.error('Overwrite failed:', e) } finally { setConflictBusy(false) }
+  }
   const [projectLoadErr, setProjectLoadErr] = useState(null)
   useEffect(() => {
     if (!project?.id || shareToken) return
@@ -158,15 +181,17 @@ export default function App() {
       loadProject(project.id)
         .then(async d => {
           if (cancelled) return
-          loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles, loadedProjectId: project.id })
+          loadProjectData({ nodes: d.nodes, edges: d.edges, views: d.views, activeViewId: d.active_view_id, propertyDefs: d.property_defs, styles: d.styles, loadedProjectId: project.id, loadedUpdatedAt: d.updated_at })
           // One-time compaction: offload any embedded base64 images to Storage so the project row
           // shrinks — this is what was making loads slow and oversized saves silently fail.
           try {
             const { views: v2, changed } = await compactProjectViews(project.id, d.views)
             if (changed && !cancelled && useGraphStore.getState().loadedProjectId === project.id) {
               const s = useGraphStore.getState()
-              loadProjectData({ nodes: s.nodes, edges: s.edges, views: v2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles, loadedProjectId: project.id })
-              await saveProject(project.id, { nodes: s.nodes, edges: s.edges, views: v2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles })
+              loadProjectData({ nodes: s.nodes, edges: s.edges, views: v2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles, loadedProjectId: project.id, loadedUpdatedAt: d.updated_at })
+              const res = await saveProject(project.id, { nodes: s.nodes, edges: s.edges, views: v2, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles }, d.updated_at)
+              if (res?.conflict) useGraphStore.getState().setSaveConflict(true)
+              else useGraphStore.getState().setLoadedUpdatedAt(res.updatedAt)
             }
           } catch (e) { console.warn('Compaction skipped:', e?.message || e) }
         })
@@ -224,6 +249,22 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
+      {saveConflict && !presenting && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100000, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          padding: '10px 16px', background: '#3a1e10', borderBottom: '1px solid #7a4a22', color: '#ffd9b0', fontSize: '0.86rem',
+          fontFamily: '-apple-system, sans-serif', boxShadow: '0 6px 24px rgba(0,0,0,0.5)' }}>
+          <span style={{ fontSize: '1.1rem' }}>⚠️</span>
+          <span style={{ flex: 1, minWidth: 220, color: '#ffe6cc' }}>
+            <b>This project was changed on another device.</b> Your edits here haven't been saved — to avoid overwriting the newer version, pick one:
+          </span>
+          <button disabled={conflictBusy} onClick={resolveConflictReload}
+            style={{ background: '#1f6f43', border: '1px solid #2f9a5f', color: '#eafff2', borderRadius: 8, padding: '7px 12px', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem' }}>
+            ↻ Load the latest (discard my recent edits)</button>
+          <button disabled={conflictBusy} onClick={resolveConflictOverwrite}
+            style={{ background: '#5a2a2a', border: '1px solid #8a3a3a', color: '#ffd9d9', borderRadius: 8, padding: '7px 12px', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem' }}>
+            ⇪ Keep mine (overwrite the other device)</button>
+        </div>
+      )}
       {!presenting && <nav style={navStyle}>
         <button className="pim-nav-btn" style={backBtnStyle} onClick={closeProject} title="All projects">
           <span style={{ fontSize: '1em', opacity: 0.7 }}>‹</span> Projects

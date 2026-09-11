@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import useGraphStore from './graphStore'
 
 // Table lives in public schema as pim_projects to avoid PostgREST schema-exposure issues
 const tb = () => supabase.from('pim_projects')
@@ -54,18 +55,38 @@ export async function loadProject(id) {
   return data
 }
 
-export async function saveProject(id, { nodes, edges, views, activeViewId, propertyDefs, styles }) {
+// Save the project — CONDITIONAL on the row still being at the version we loaded, so a stale tab on
+// another device can't silently clobber newer work (this is the save-conflict guard for EVERY save
+// surface). By default the expected version is the store's loaded baseline; pass `expectedUpdatedAt`
+// to override, or `null` to force an unconditional overwrite (used by the "Keep mine" escape hatch).
+// On conflict the store's saveConflict flag is raised centrally (so the app banner appears no matter
+// which surface triggered it) and nothing is written. On success the baseline advances. Returns
+// { conflict, updatedAt }.
+export async function saveProject(id, { nodes, edges, views, activeViewId, propertyDefs, styles }, expectedUpdatedAt) {
+  let store = null; try { store = useGraphStore.getState() } catch { /* not ready */ }
+  const sameProject = !!store && store.loadedProjectId === id
+  // undefined → default to the loaded baseline (guarded); null → force unconditional; a value → use it.
+  const expected = expectedUpdatedAt === undefined ? (sameProject ? store.loadedUpdatedAt : null) : expectedUpdatedAt
+  const nextUpdatedAt = new Date().toISOString()
   const patch = {
     nodes: sanitizeNodes(nodes),
     edges,
     views: sanitizeViews(views),
     active_view_id: activeViewId,
-    updated_at: new Date().toISOString(),
+    updated_at: nextUpdatedAt,
   }
   if (propertyDefs !== undefined) patch.property_defs = propertyDefs
   if (styles !== undefined) patch.styles = styles
-  const { error } = await tb().update(patch).eq('id', id)
+  let q = tb().update(patch).eq('id', id)
+  if (expected) q = q.eq('updated_at', expected)
+  const { data, error } = await q.select('id, updated_at')
   if (error) throw error
+  if (expected && (!data || data.length === 0)) {
+    if (sameProject) { try { store.setSaveConflict(true) } catch { /* */ } }
+    return { conflict: true }
+  }
+  if (sameProject) { try { store.setLoadedUpdatedAt(nextUpdatedAt) } catch { /* */ } }
+  return { conflict: false, updatedAt: nextUpdatedAt }
 }
 
 // Strategy tab: { text, positions, pinned } stored in the jsonb `strategy` column

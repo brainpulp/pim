@@ -87,6 +87,13 @@ const saveLastStyle = (obj) => { try { localStorage.setItem(LS_KEY, JSON.stringi
 const useGraphStore = create((set, get) => ({
   // Which project's snapshot is currently in the store (guards loads + gates autosave across all tabs).
   loadedProjectId: null,
+  // The cloud version this snapshot was loaded from — the baseline for the save-conflict guard. Advances
+  // on each successful save. `saveConflict` goes true when the cloud copy is newer than our baseline
+  // (another device saved), which blocks autosave from clobbering it until the user reloads or forces it.
+  loadedUpdatedAt: null,
+  saveConflict: false,
+  setLoadedUpdatedAt: (ts) => set({ loadedUpdatedAt: ts || null }),
+  setSaveConflict: (v) => set({ saveConflict: !!v }),
 
   // â”€â”€ View-independent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   nodes: [],
@@ -134,8 +141,10 @@ const useGraphStore = create((set, get) => ({
 
 
   // â”€â”€ Load a full project snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs, styles, loadedProjectId }) => set({
+  loadProjectData: ({ nodes, edges, views, activeViewId, propertyDefs, styles, loadedProjectId, loadedUpdatedAt }) => set({
     loadedProjectId: loadedProjectId ?? null,
+    loadedUpdatedAt: loadedUpdatedAt ?? null,
+    saveConflict: false,
     nodes: nodes || [],
     edges: edges || [],
     propertyDefs: propertyDefs || [],

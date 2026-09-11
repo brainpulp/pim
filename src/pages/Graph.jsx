@@ -1858,12 +1858,17 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const saveDirtyRef = useRef(false)
   useEffect(() => {
     if (loading || readOnly || !loadOkRef.current) return   // never autosave unless the project loaded OK (a failed load must not blank it)
+    if (useGraphStore.getState().saveConflict) return        // another device saved newer work → don't clobber it
     setSaveStatus('saving')
     saveDirtyRef.current = true
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       try {
-        await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId, propertyDefs: storePropertyDefs, styles: storeStyles })
+        // Conditional on the version we loaded: if the cloud copy is newer (edited elsewhere), the write
+        // is refused and we surface a conflict instead of overwriting.
+        const res = await saveProject(projectId, { nodes: storeNodes, edges: storeEdges, views, activeViewId, propertyDefs: storePropertyDefs, styles: storeStyles }, useGraphStore.getState().loadedUpdatedAt)
+        if (res?.conflict) { useGraphStore.getState().setSaveConflict(true); setSaveStatus('error'); return }
+        useGraphStore.getState().setLoadedUpdatedAt(res.updatedAt)   // advance our baseline
         saveDirtyRef.current = false
         setSaveStatus('saved')
       } catch (e) { console.error('Save:', e); setSaveStatus('error') }
@@ -1877,8 +1882,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     return () => {
       if (!saveDirtyRef.current || readOnly) return
       const s = useGraphStore.getState()
-      if (s.loadedProjectId !== projectId) return
-      saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles }).catch(() => {})
+      if (s.loadedProjectId !== projectId || s.saveConflict) return   // don't clobber newer work on flush
+      saveProject(projectId, { nodes: s.nodes, edges: s.edges, views: s.views, activeViewId: s.activeViewId, propertyDefs: s.propertyDefs, styles: s.styles }, s.loadedUpdatedAt)
+        .then(res => { if (res?.conflict) useGraphStore.getState().setSaveConflict(true); else useGraphStore.getState().setLoadedUpdatedAt(res.updatedAt) })
+        .catch(() => {})
     }
   }, [projectId, readOnly])
 
