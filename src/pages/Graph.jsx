@@ -7086,9 +7086,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 lastSec={lastTimesById[n.id]}
                 intendedSec={getVP(n.id).intendedSec}
                 timeboard={!!getVP(n.id).timeboard}
+                desiredTotalSec={getVP(n.id).desiredTotalSec}
                 totalIntendedSec={timeTotals.intended}
                 totalLastSec={timeTotals.last}
                 onSetIntended={(id, sec) => setNodeViewProp(id, 'intendedSec', sec)}
+                onSetDesired={(id, sec) => setNodeViewProp(id, 'desiredTotalSec', sec)}
               />
             ))}
 
@@ -12889,7 +12891,7 @@ function ImageNode({ img, isSelected, isCropping, onMouseDown, onCaption, mediaP
 }
 
 // â"€â"€â"€ FrameNode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline, lastSec, intendedSec, timeboard, totalIntendedSec = 0, totalLastSec = 0, onSetIntended }) {
+function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected, inSlides, isPresenting, onMouseDown, onResizeMouseDown, onDelete, onLabelChange, onToggleSlide, hideOutline, lastSec, intendedSec, timeboard, desiredTotalSec, totalIntendedSec = 0, totalLastSec = 0, onSetIntended, onSetDesired }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.label)
   const [hover, setHover] = useState(false)
@@ -12965,15 +12967,36 @@ function FrameNode({ node, viewProps, zoomK = 1, ground = '#0c0c1a', isSelected,
         </>
       })()}
 
-      {/* Time board: a big total readout, sized to the frame so it stays legible when zoomed out. */}
+      {/* Time board: ONE editable number — the DESIRED total time for the talk — big enough to read when
+          zoomed out. Beneath it, read-only references: Σ = your slides' intended total, ◷ = last run.
+          Each turns red when it exceeds the desired total. Click the big number (or ＋set) to edit. */}
       {timeboard && !isPresenting && (() => {
-        const big = Math.max(14, halfH * 0.6)
-        const over = totalLastSec > totalIntendedSec && totalIntendedSec > 0
+        const big = Math.max(16, halfH * 0.55)
+        const sub = Math.max(10, halfH * 0.13)
+        const overSum = desiredTotalSec && totalIntendedSec > desiredTotalSec
+        const overLast = desiredTotalSec && totalLastSec > 0 && totalLastSec > desiredTotalSec
         return (
-          <g style={{ pointerEvents: 'none' }}>
-            <text x={0} y={-halfH + Math.max(11, halfH * 0.15)} textAnchor="middle" fontFamily="-apple-system, sans-serif" fontWeight="600" fontSize={Math.max(9, halfH * 0.11)} fill="#8090b8" style={{ letterSpacing: '0.08em' }}>{(node.label || 'TOTAL TIME').toUpperCase()}</text>
-            <text x={0} y={-halfH * 0.06} textAnchor="middle" dominantBaseline="middle" fontFamily="-apple-system, sans-serif" fontWeight="800" fontSize={big} fill="#c5d0ff" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtSec(totalIntendedSec)}</text>
-            <text x={0} y={halfH * 0.46} textAnchor="middle" dominantBaseline="middle" fontFamily="-apple-system, sans-serif" fontWeight="700" fontSize={big * 0.48} fill={over ? '#f87171' : '#6ee7a8'} style={{ fontVariantNumeric: 'tabular-nums' }}>◷ {fmtSec(totalLastSec)}</text>
+          <g>
+            <text x={0} y={-halfH + Math.max(11, halfH * 0.15)} textAnchor="middle" fontFamily="-apple-system, sans-serif" fontWeight="600" fontSize={Math.max(9, halfH * 0.1)} fill="#8090b8" style={{ letterSpacing: '0.08em', pointerEvents: 'none' }}>{(node.label || 'DESIRED TIME').toUpperCase()}</text>
+            {editTime ? (
+              <foreignObject x={-halfW * 0.7} y={-big * 0.72} width={halfW * 1.4} height={big * 1.5} onMouseDown={e => e.stopPropagation()}>
+                <input autoFocus value={timeDraft} placeholder="m:ss"
+                  onChange={e => setTimeDraft(e.target.value)}
+                  onBlur={() => { onSetDesired?.(node.id, parseTimeToSec(timeDraft) || undefined); setEditTime(false) }}
+                  onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); onSetDesired?.(node.id, parseTimeToSec(timeDraft) || undefined); setEditTime(false) } if (e.key === 'Escape') { e.preventDefault(); setEditTime(false) } }}
+                  style={{ width: '100%', height: '100%', background: 'rgba(10,20,40,0.92)', border: '2px solid #5b6af0', borderRadius: 8, color: '#c5d0ff', fontSize: big * 0.7, fontWeight: 800, textAlign: 'center', outline: 'none', boxSizing: 'border-box', fontVariantNumeric: 'tabular-nums' }} />
+              </foreignObject>
+            ) : (
+              <text x={0} y={-halfH * 0.02} textAnchor="middle" dominantBaseline="middle" fontFamily="-apple-system, sans-serif" fontWeight="800" fontSize={big} fill={desiredTotalSec ? '#c5d0ff' : '#7080a0'} style={{ fontVariantNumeric: 'tabular-nums', cursor: 'pointer' }}
+                onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setTimeDraft(desiredTotalSec ? fmtSec(desiredTotalSec) : ''); setEditTime(true) }}>
+                {desiredTotalSec ? fmtSec(desiredTotalSec) : '＋ set'}
+              </text>
+            )}
+            <text x={0} y={halfH * 0.52} textAnchor="middle" dominantBaseline="middle" fontFamily="-apple-system, sans-serif" fontWeight="700" fontSize={sub} style={{ fontVariantNumeric: 'tabular-nums', pointerEvents: 'none' }}>
+              <tspan fill={overSum ? '#f87171' : '#9aa8d8'}>Σ {fmtSec(totalIntendedSec)}</tspan>
+              {totalLastSec > 0 && <tspan fill="#5a6488">   </tspan>}
+              {totalLastSec > 0 && <tspan fill={overLast ? '#f87171' : '#6ee7a8'}>◷ {fmtSec(totalLastSec)}</tspan>}
+            </text>
           </g>
         )
       })()}
