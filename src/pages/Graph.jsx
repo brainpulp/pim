@@ -1396,6 +1396,22 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs)
     return () => { document.removeEventListener('fullscreenchange', onFs); document.removeEventListener('webkitfullscreenchange', onFs) }
   }, [])
+  // Self-heal fullscreen on a local CLICK too (many presenters click to advance). A show started/advanced
+  // from the phone gives the laptop no user gesture, so the browser refused device-fullscreen — but the
+  // first local pointer press IS a gesture we can spend on it. No-op once already fullscreen. Capture phase
+  // so it runs regardless of what the click landed on.
+  useEffect(() => {
+    const root = document.documentElement
+    const onPtr = () => {
+      if (presentingSlideIdxRef.current === null) return
+      window.dispatchEvent(new Event('pim-reassert-mute'))   // first local click brings sound back too
+      if (document.fullscreenElement || document.webkitFullscreenElement) return
+      const req = root.requestFullscreen || root.webkitRequestFullscreen
+      if (req) { try { const p = req.call(root); if (p && p.catch) p.catch(() => {}) } catch { /* windowed is fine */ } }
+    }
+    window.addEventListener('pointerdown', onPtr, true)
+    return () => window.removeEventListener('pointerdown', onPtr, true)
+  }, [])
   const slideNavFocusRef = useRef(false)   // true when the slide sidebar was the last thing clicked → arrows scrub slides
   const slideCursorRef = useRef(0)         // which slide the arrow-scrub cursor is on (edit mode, not presenting)
   const presentStageIdxRef = useRef(0)     // which build/stage of the current slide is showing while presenting
@@ -3436,6 +3452,15 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const onKey = e => {
       if (presentingSlideIdxRef.current !== null && ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', ' ', 'Escape'].includes(e.key))
         plog(`deckKD ${e.key === ' ' ? 'Space' : e.key} fs=${ytssFullscreenIdRef.current ? 'Y' : 'n'} act=${ytssActiveRef.current ? 'Y' : 'n'} cf=${canvasFocused.current ? 1 : 0} ae=${document.activeElement?.tagName || '?'}`)
+      // Self-heal fullscreen + audio: a show started/advanced from the PHONE gives the laptop no user
+      // gesture, so the browser refuses device-fullscreen and blocks unmuted autoplay. This local keypress
+      // IS a gesture — spend it on (re)entering fullscreen (no-op once already fullscreen) and re-asserting
+      // each player's stored sound state (uploaded videos also carry their own one-shot unmute; this covers
+      // YouTube, whose sound comes back via 'pim-reassert-mute').
+      if (presentingSlideIdxRef.current !== null && e.key !== 'Escape') {
+        enterDeviceFullscreen()
+        window.dispatchEvent(new Event('pim-reassert-mute'))
+      }
       if (readOnly) return   // shared read-only view: no keyboard mutations
       // A fullscreen slideshow overlay owns ALL keys (its own window/capture handler drives it). Without
       // this, arrows here would ALSO fire (advancing the deck) and fight the player. Let Esc through so it
