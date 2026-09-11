@@ -6390,7 +6390,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     const _ov = imageStageOverlay?.[img0.id]
     const img = _ov ? { ...img0, ..._ov } : img0
     let mediaPlay = false
-    if ((img.type === 'audio' || img.type === 'video') && (img.autoplayOnZoom || img.autoplayOnSlide)) {
+    // While a fullscreen video / slideshow overlay owns the screen, the inline copy must NOT also play — two
+    // instances of the same audio a beat apart is the "echo" you hear. The overlay is the sole audio source.
+    if ((img.type === 'audio' || img.type === 'video') && (img.autoplayOnZoom || img.autoplayOnSlide) && !videoFullscreen && !ytssFullscreenId) {
       const t = zoomTransformRef.current, k = t.k || 1
       const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
       if (vw > 0) {
@@ -7499,7 +7501,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               // Autoplay-on-focus: a video/audio NODE plays when this node fills the viewport (e.g. arrow-nav
               // zoomed to it) or when its containing frame is presented. Flags live on node.meta.
               let mediaPlay = false
-              if ((mediaImg.type === 'video' || mediaImg.type === 'audio') && (meta.autoplayOnZoom || meta.autoplayOnSlide)) {
+              // Silence the inline copy while a fullscreen overlay owns the audio (prevents the echo).
+              if ((mediaImg.type === 'video' || mediaImg.type === 'audio') && (meta.autoplayOnZoom || meta.autoplayOnSlide) && !videoFullscreen && !ytssFullscreenId) {
                 const t = zoomTransformRef.current, k = t.k || 1
                 const vw = svgRef.current?.clientWidth || 0, vh = svgRef.current?.clientHeight || 0
                 if (vw > 0) {
