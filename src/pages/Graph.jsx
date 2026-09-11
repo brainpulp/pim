@@ -6655,16 +6655,33 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       }
     }
 
-    // A free video on this slide flagged "Play fullscreen when presented" → jump to the clean
-    // fullscreen player automatically (YouTube OR uploaded file). Esc returns to the slide.
+    // A video on this slide flagged "Play fullscreen when presented" → jump to the clean fullscreen player
+    // automatically (YouTube OR uploaded file). Esc returns to the slide. Covers ALL four combinations:
+    // a free-image video or a media-NODE video, and a framed slide (video sitting inside the frame) or an
+    // element slide that IS the video. (It previously only handled a framed slide's free images — so a
+    // video dropped straight onto the deck as its own slide, or a video node, never went fullscreen.)
     const frameF = slideSimNodes[idx]
-    if (frameF && !frameF.__elementSlide) {
-      const fvpF = { ...DEFAULT_NODE_PROPS, ...(getVP(frameF.id) || {}) }
-      const { halfW: fHWd, halfH: fHHd } = shapeDims('frame', NODE_R * (fvpF.scale || 1))
-      const fhwF = fvpF.frameHalfW ?? fHWd, fhhF = fvpF.frameHalfH ?? fHHd
-      const imgsF = useGraphStore.getState().views.find(v => v.id === useGraphStore.getState().activeViewId)?.images || []
-      const fsVid = imgsF.find(im => im.fullscreenOnSlide && im.type === 'video' && (im.youtubeId || im.src) && im.visible !== false &&
-        Math.abs((im.x || 0) - (frameF.x || 0)) <= fhwF && Math.abs((im.y || 0) - (frameF.y || 0)) <= fhhF)
+    if (frameF) {
+      const st = useGraphStore.getState()
+      const isElSlide = !!frameF.__elementSlide
+      let fhwF = 0, fhhF = 0
+      if (!isElSlide) {
+        const fvpF = { ...DEFAULT_NODE_PROPS, ...(getVP(frameF.id) || {}) }
+        const { halfW: fHWd, halfH: fHHd } = shapeDims('frame', NODE_R * (fvpF.scale || 1))
+        fhwF = fvpF.frameHalfW ?? fHWd; fhhF = fvpF.frameHalfH ?? fHHd
+      }
+      const inFrame = (x, y) => !isElSlide && Math.abs((x || 0) - (frameF.x || 0)) <= fhwF && Math.abs((y || 0) - (frameF.y || 0)) <= fhhF
+      const imgs = st.views.find(v => v.id === st.activeViewId)?.images || []
+      let fsVid = imgs.find(im => im.type === 'video' && im.fullscreenOnSlide && (im.youtubeId || im.src) && im.visible !== false &&
+        (isElSlide ? im.id === frameF.id : inFrame(im.x, im.y)))
+      if (!fsVid) {
+        // media-node video (node.media.kind === 'video', fullscreenOnSlide stored on the media object)
+        for (const n of st.nodes) {
+          const m = n.media; if (!m || m.kind !== 'video' || !m.fullscreenOnSlide || !(m.youtubeId || m.src)) continue
+          const sn = simNodesRef.current.find(x => x.id === n.id)
+          if (isElSlide ? n.id === frameF.id : inFrame(sn?.x, sn?.y)) { fsVid = m; break }
+        }
+      }
       if (fsVid) setTimeout(() => setVideoFullscreen(fsVid.youtubeId
         ? { youtubeId: fsVid.youtubeId, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1, captions: fsVid.captions === true }
         : { src: fsVid.src, start: fsVid.start || 0, end: fsVid.end || 0, muted: fsVid.muted === true, speed: fsVid.speed || 1 }), 200)
