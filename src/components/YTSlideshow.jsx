@@ -504,8 +504,9 @@ function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
     maskImage: `linear-gradient(to right, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent), linear-gradient(to bottom, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent)`,
     WebkitMaskComposite: 'source-in', maskComposite: 'intersect',
   } : null
-  // Reframe: an optional per-clip scale+pan applied over the base `contain` fit. z = zoom (≥1),
-  // x/y = pan in % of the frame. Absent frame → identical to the old plain `contain` render.
+  // Reframe: an optional per-clip scale+pan applied over the base `contain` fit. z = zoom (both ways:
+  // <1 shrinks the image within the slide, >1 fills/crops), x/y = pan in % of the frame. Absent frame →
+  // identical to the old plain `contain` render.
   const fr = clip.frame
   const frameTf = (fr && ((fr.z && fr.z !== 1) || fr.x || fr.y))
     ? { transform: `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`, transformOrigin: 'center center' }
@@ -554,7 +555,7 @@ function ImageReframe({ clip, onPatch }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <span style={{ fontSize: 11, color: '#8fa0d8' }}>Zoom</span>
-        <input type="range" min={1} max={4} step={0.02} value={fr.z || 1} onChange={e => setZoom(parseFloat(e.target.value))}
+        <input type="range" min={0.25} max={4} step={0.02} value={fr.z || 1} onChange={e => setZoom(parseFloat(e.target.value))}
           style={{ flex: 1, accentColor: '#5b6af0', cursor: 'pointer' }} />
         <span style={{ fontSize: 10.5, color: '#c5d0ff', minWidth: 30, textAlign: 'right' }}>{(fr.z || 1).toFixed(2)}×</span>
       </div>
