@@ -1091,7 +1091,7 @@ function MenuFlyout({ icon, label, children, minWidth = 168 }) {
   )
 }
 
-export default function Graph({ projectId, projectName, readOnly = false, sharedData = null }) {
+export default function Graph({ projectId, projectName, readOnly = false, sharedData = null, onPresentingChange }) {
   const svgRef = useRef()
   const simRef = useRef(null)
   const zoomBehaviorRef = useRef(null)
@@ -1287,6 +1287,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const presentingSlideIdxRef = useRef(null)
   const [presMuted, setPresMuted] = useState(false)   // phone "panic mute": silence all media during a talk
   const presMuteTimerRef = useRef(null)
+  // Tell App we're presenting so it hides all app chrome (top nav, project name, floating controls/menus).
+  useEffect(() => { onPresentingChange?.(presentingSlideIdx !== null) }, [presentingSlideIdx]) // eslint-disable-line
+  useEffect(() => () => onPresentingChange?.(false), []) // reset on unmount (leaving the Graph tab) // eslint-disable-line
   // When the presentation ends, never leave the panic-mute loop running (it would keep silencing canvas
   // media). Stop the loop, clear the flag, and unmute in one sweep.
   useEffect(() => {

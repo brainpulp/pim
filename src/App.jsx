@@ -81,6 +81,7 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem('pim_outline_dock', outlineDock ? '1' : '0') } catch { /* ignore */ } }, [outlineDock])
   // Maximize the docked outliner: slide the graph/outliner divider fully right so the outliner is the only visible panel.
   const [outlineMax, setOutlineMax] = useState(false)
+  const [presenting, setPresenting] = useState(false)   // Graph is in presentation mode → hide all app chrome
   useEffect(() => { if (!outlineDock) setOutlineMax(false) }, [outlineDock])
   // "View" dropdown (next to the tabs) — one place to toggle the canvas panels: Outline / Draw / Slides / Views.
   const [viewMenuOpen, setViewMenuOpen] = useState(false)
@@ -223,7 +224,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f0f0f' }}>
-      <nav style={navStyle}>
+      {!presenting && <nav style={navStyle}>
         <button className="pim-nav-btn" style={backBtnStyle} onClick={closeProject} title="All projects">
           <span style={{ fontSize: '1em', opacity: 0.7 }}>‹</span> Projects
         </button>
@@ -313,7 +314,7 @@ export default function App() {
           Share
         </button>
         <button className="pim-nav-btn" style={signOutStyle} onClick={() => supabase.auth.signOut()} title="Sign out">⏻</button>
-      </nav>
+      </nav>}
       {showShare && (
         <ShareDialog projectId={project.id} projectName={project.name} tab={view} onClose={() => setShowShare(false)} />
       )}
@@ -360,6 +361,7 @@ export default function App() {
               projectId={project.id}
               projectName={project.name}
               onBack={() => setProject(null)}
+              onPresentingChange={setPresenting}
             />
             </AppErrorBoundary>
           )}
