@@ -103,6 +103,26 @@ export async function saveStrategy(id, strategy) {
   if (error) throw error
 }
 
+// Deep-copy a project into a brand-new row (name + " (copy)"). Storage-hosted images/models are shared by
+// public URL, so the copy is independent of the original for all editable content.
+export async function duplicateProject(id) {
+  const src = await loadProject(id)
+  const { data: { user } } = await supabase.auth.getUser()
+  const { data, error } = await tb().insert({
+    user_id: user.id,
+    name: `${src.name || 'Untitled'} (copy)`,
+    nodes: src.nodes || [],
+    edges: src.edges || [],
+    views: src.views || [],
+    active_view_id: src.active_view_id,
+    property_defs: src.property_defs || [],
+    styles: src.styles || [],
+    strategy: src.strategy ?? null,
+  }).select().single()
+  if (error) throw error
+  return data
+}
+
 export async function renameProject(id, name) {
   const { error } = await tb().update({ name }).eq('id', id)
   if (error) throw error

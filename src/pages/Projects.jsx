@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { listProjects, createProject, renameProject, deleteProject, importNotionDatabase } from '../lib/db'
+import { listProjects, createProject, renameProject, deleteProject, duplicateProject, importNotionDatabase } from '../lib/db'
 
 // TAREAS database — prefilled default; user can paste any Notion database URL/id.
 const DEFAULT_NOTION_DB = '24175793-2621-8009-a5d6-eb4291e12655'
@@ -61,6 +61,17 @@ export default function Projects({ onOpen, onSignOut }) {
     }
   }
 
+  const [dupingId, setDupingId] = useState(null)
+  const handleDuplicate = async (id) => {
+    setDupingId(id); setError(null)
+    try {
+      const p = await duplicateProject(id)
+      setProjects(ps => [{ id: p.id, name: p.name, updated_at: p.updated_at }, ...(ps || [])])
+    } catch (e) {
+      setError('Duplicate failed: ' + e.message)
+    } finally { setDupingId(null) }
+  }
+
   const handleDelete = async (id) => {
     if (!confirm('Delete this project? This cannot be undone.')) return
     try {
@@ -96,6 +107,8 @@ export default function Projects({ onOpen, onSignOut }) {
                 project={p}
                 onOpen={() => onOpen(p.id, p.name)}
                 onRename={name => handleRename(p.id, name)}
+                onDuplicate={() => handleDuplicate(p.id)}
+                duplicating={dupingId === p.id}
                 onDelete={() => handleDelete(p.id)}
               />
             ))}
@@ -154,7 +167,7 @@ export default function Projects({ onOpen, onSignOut }) {
   )
 }
 
-function ProjectRow({ project, onOpen, onRename, onDelete }) {
+function ProjectRow({ project, onOpen, onRename, onDuplicate, duplicating, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(project.name)
   const inputRef = useRef()
@@ -195,6 +208,8 @@ function ProjectRow({ project, onOpen, onRename, onDelete }) {
         onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
         <button style={styles.iconBtn} title="Rename"
           onClick={() => setEditing(true)}>✎</button>
+        <button style={styles.iconBtn} title="Duplicate" disabled={duplicating}
+          onClick={e => { e.stopPropagation(); onDuplicate() }}>{duplicating ? '…' : '⧉'}</button>
         <button style={{ ...styles.iconBtn, color: '#f87171' }} title="Delete"
           onClick={e => { e.stopPropagation(); onDelete() }}>×</button>
       </div>
