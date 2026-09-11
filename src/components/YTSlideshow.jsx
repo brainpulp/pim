@@ -561,11 +561,14 @@ function ImageReframe({ clip, onPatch }) {
     const w = box.clientWidth || 210, h = box.clientHeight || 118
     const z = fr.z || 1
     const sx = e.clientX, sy = e.clientY, ox = fr.x || 0, oy = fr.y || 0
+    // Text needs to travel much further than an image (change registration — push it to any edge/corner or
+    // even fully off), so give it a generous range; an image only needs to reframe within its own bounds.
+    const LIM = clipKind(clip) === 'text' ? 500 : 120
     const move = (me) => {
       // Track the cursor 1:1: on-screen pan = x% · z, so divide the pixel delta by z.
       const nx = ox + ((me.clientX - sx) / w) * 100 / z
       const ny = oy + ((me.clientY - sy) / h) * 100 / z
-      onPatch({ frame: { z, x: Math.max(-90, Math.min(90, nx)), y: Math.max(-90, Math.min(90, ny)) } })
+      onPatch({ frame: { z, x: Math.max(-LIM, Math.min(LIM, nx)), y: Math.max(-LIM, Math.min(LIM, ny)) } })
     }
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
@@ -624,13 +627,16 @@ function TextSlide({ clip, autoplay = false, onReady, onEnded, style }) {
   // Overlay ("on previous") → transparent ground so the clip underneath shows through.
   const bg = clip.overlayPrev ? 'transparent' : (clip.bg || '#0c0c1a')
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', background: bg, overflow: 'hidden',
-      containerType: 'size', display: 'flex', alignItems: 'center', justifyContent: justify, ...style }}>
-      <div style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: clip.bold === false ? 400 : 600,
-        fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-        textShadow: clip.overlayPrev ? '0 1px 6px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.9)' : 'none', ...(frameTf || {}) }}>
-        {clip.text || 'Text'}
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: bg, overflow: 'hidden', containerType: 'size', ...style }}>
+      {/* The reframe transform rides on a FULL-FRAME layer (not the small text block) so pan % is relative
+          to the slide — the text can be registered anywhere, matching the inspector preview 1:1. */}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: justify, ...(frameTf || {}) }}>
+        <div style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: clip.bold === false ? 400 : 600,
+          fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          textShadow: clip.overlayPrev ? '0 1px 6px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.9)' : 'none' }}>
+          {clip.text || 'Text'}
+        </div>
       </div>
     </div>
   )
