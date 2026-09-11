@@ -12182,12 +12182,22 @@ function RichTextBox({ html, editable, selected, bgColor, borderColor, textShado
   // Auto-height: the box grows DOWNWARD to fit its content (no manual height handle). Measure the content's
   // natural height and report it up; the parent keeps the top edge pinned. Runs on type and whenever the
   // wrap width / font scale / html changes (all of which re-wrap and change the height).
+  //
+  // ONLY while editing. Auto-grow is a typing affordance — running it on every render of a non-editable box
+  // (e.g. during presentation, where reveal rewrites the html each step) turns measure→updateImage→re-render
+  // into an infinite setState loop (React #185 "max update depth"). The `lastReportedRef` guard is a hard
+  // stop against any measurement that fails to converge: we never report the same height twice, so a
+  // ping-pong between two values can fire at most once each and then settles.
+  const lastReportedRef = useRef(null)
   const measure = () => {
-    const el = ref.current; if (!el || !onAutoHeight) return
+    const el = ref.current; if (!el || !onAutoHeight || !editable) return
     const h = el.scrollHeight   // full content height incl. padding, even when clipped (SVG user units)
-    if (h && boxH != null && Math.abs(h - boxH) > 2) onAutoHeight(h)
+    if (!h || boxH == null || Math.abs(h - boxH) <= 2) return
+    if (lastReportedRef.current != null && Math.abs(h - lastReportedRef.current) <= 2) return
+    lastReportedRef.current = h
+    onAutoHeight(h)
   }
-  useLayoutEffect(() => { measure() })   // after every render (cheap; only fires onAutoHeight past a 2u threshold)
+  useLayoutEffect(() => { if (editable) measure() })   // after every render, only while editing
   const shadows = []
   if (halo) { const c = typeof halo === 'string' ? halo : 'rgba(0,0,0,0.9)'; shadows.push(`0 0 2px ${c}`, `0 0 2px ${c}`, `0 0 5px ${c}`) }
   if (textShadow) shadows.push('2px 2px 4px rgba(0,0,0,0.55)')
