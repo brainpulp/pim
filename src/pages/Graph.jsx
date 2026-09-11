@@ -3496,12 +3496,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           e.preventDefault()
           const frame = slideSimNodes[presentingSlideIdx ?? 0]
           if (frame) {
-            const fvp = getVP(frame.id)
-            const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
-            const hw = fvp.frameHalfW ?? dHW, hh = fvp.frameHalfH ?? dHH
-            const ytssIn = simNodesRef.current.find(n => ytssNodeSet.has(n.id) && visibleNodeIdsRef.current.has(n.id) &&
-              ((getVP(n.id).containedIn === frame.id) || (Math.abs((n.x || 0) - (frame.x || 0)) < hw && Math.abs((n.y || 0) - (frame.y || 0)) < hh)))
-            if (ytssIn) { ytssHandlesRef.current[ytssIn.id]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(ytssIn.id) }
+            const ytssInId = frameYtss(frame)   // owner-frame resolution, so 'f' never grabs another frame's show
+            if (ytssInId) { ytssHandlesRef.current[ytssInId]?.pause?.(); setYtssActiveId(null); setYtssEndedId(null); setYtssFullscreenId(ytssInId) }
           }
           return
         }
@@ -6439,15 +6435,34 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     setImageStageOverlay(null)
   }
   const slideStages = (idx) => { const f = slideSimNodes[idx]; return f ? (getVP(f.id).stages || []) : [] }
-  // The YouTube slideshow (if any) whose centre sits inside a frame's box.
+  // The slideshow this frame OWNS. Slideshows never carry `containedIn` (cards are excluded from
+  // containment), so ownership is purely geometric — and a naive "centre inside the box" test grabbed a
+  // slideshow belonging to a neighbouring/overlapping frame, which let one slide drive another's show.
+  // Fix: a slideshow belongs to the frame whose CENTRE is nearest among all frames whose box contains it
+  // (ties → the tightest box). frameYtss returns a slideshow only when THIS frame is that owner.
+  const _frameBox = (fr) => {
+    const vp = { ...DEFAULT_NODE_PROPS, ...(getVP(fr.id) || {}) }
+    const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (vp.scale || 1))
+    return { hw: vp.frameHalfW ?? dHW, hh: vp.frameHalfH ?? dHH }
+  }
+  const _inBox = (n, fr, b) => Math.abs((n.x || 0) - (fr.x || 0)) <= b.hw && Math.abs((n.y || 0) - (fr.y || 0)) <= b.hh
+  const ownerFrameOfYtss = (ss) => {
+    const frames = simNodesRef.current.filter(n => getVP(n.id).shape === 'frame' && visibleNodeIdsRef.current.has(n.id))
+    let best = null
+    for (const f of frames) {
+      const b = _frameBox(f)
+      if (!_inBox(ss, f, b)) continue
+      const d = Math.hypot((ss.x || 0) - (f.x || 0), (ss.y || 0) - (f.y || 0)), area = b.hw * b.hh
+      if (!best || d < best.d - 1e-6 || (Math.abs(d - best.d) <= 1e-6 && area < best.area)) best = { id: f.id, d, area }
+    }
+    return best?.id || null
+  }
   const frameYtss = (frame) => {
     if (!frame) return null
-    const fvp = { ...DEFAULT_NODE_PROPS, ...(getVP(frame.id) || {}) }
-    const { halfW: dHW, halfH: dHH } = shapeDims('frame', NODE_R * (fvp.scale || 1))
-    const fhw = fvp.frameHalfW ?? dHW, fhh = fvp.frameHalfH ?? dHH
-    const y = simNodesRef.current.find(n => ytssNodeSet.has(n.id) && visibleNodeIdsRef.current.has(n.id) &&
-      Math.abs((n.x || 0) - (frame.x || 0)) <= fhw && Math.abs((n.y || 0) - (frame.y || 0)) <= fhh)
-    return y?.id || null
+    const fbox = _frameBox(frame)
+    const cand = simNodesRef.current.find(n => ytssNodeSet.has(n.id) && visibleNodeIdsRef.current.has(n.id) &&
+      _inBox(n, frame, fbox) && ownerFrameOfYtss(n) === frame.id)
+    return cand?.id || null
   }
   // Real device fullscreen for presenting (Fullscreen API). Enter when the show starts, leave on exit/Esc.
   const enterDeviceFullscreen = () => {
