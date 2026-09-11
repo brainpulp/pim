@@ -12205,14 +12205,15 @@ function RichTextBox({ html, editable, selected, bgColor, borderColor, textShado
     })
   }, [editable])
   // Auto-height: the box grows DOWNWARD to fit its content (no manual height handle). Measure the content's
-  // natural height and report it up; the parent keeps the top edge pinned. Runs on type and whenever the
-  // wrap width / font scale / html changes (all of which re-wrap and change the height).
+  // natural height and report it up; the parent keeps the top edge pinned.
   //
-  // ONLY while editing. Auto-grow is a typing affordance — running it on every render of a non-editable box
-  // (e.g. during presentation, where reveal rewrites the html each step) turns measure→updateImage→re-render
-  // into an infinite setState loop (React #185 "max update depth"). The `lastReportedRef` guard is a hard
-  // stop against any measurement that fails to converge: we never report the same height twice, so a
-  // ping-pong between two values can fire at most once each and then settles.
+  // CRITICAL — this must NEVER run render-driven. A measure() in a per-render layout effect feeds
+  // updateImage → re-render → measure again; if two measurements don't converge (rounding, a min-height
+  // clamp, reveal rewriting the html mid-presentation) it becomes an unbounded setState loop and crashes
+  // the app with React #185 ("max update depth"), mid-talk. So measure ONLY in response to a discrete user
+  // action — a keystroke or paste while editing — and never on render. That is impossible to loop: one
+  // setState per real edit, full stop. A box that isn't being typed into keeps its stored height untouched
+  // (presentation included). `lastReportedRef` additionally suppresses a duplicate report of the same value.
   const lastReportedRef = useRef(null)
   const measure = () => {
     const el = ref.current; if (!el || !onAutoHeight || !editable) return
@@ -12222,7 +12223,6 @@ function RichTextBox({ html, editable, selected, bgColor, borderColor, textShado
     lastReportedRef.current = h
     onAutoHeight(h)
   }
-  useLayoutEffect(() => { if (editable) measure() })   // after every render, only while editing
   const shadows = []
   if (halo) { const c = typeof halo === 'string' ? halo : 'rgba(0,0,0,0.9)'; shadows.push(`0 0 2px ${c}`, `0 0 2px ${c}`, `0 0 5px ${c}`) }
   if (textShadow) shadows.push('2px 2px 4px rgba(0,0,0,0.55)')
