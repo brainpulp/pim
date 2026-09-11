@@ -162,6 +162,17 @@ export function YTPlayer({ clip, autoplay = false, muted = false, captions = fal
       try { p.seekTo(Math.max(0, best.s), true); p.playVideo() } catch { /* */ }
       return true
     },
+    // Back = step to the PREVIOUS pause marker within this clip; false when none earlier (caller → prev clip).
+    skipToPrevStop: () => {
+      const now = p.getCurrentTime?.() || 0
+      let best = null
+      for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s < now - 0.6 && (!best || s > best.s)) best = { id: m.id, s } }
+      if (!best) return false
+      consumedRef.current.clear(); seenRef.current.clear(); lastTRef.current = best.s
+      consumedRef.current.add(best.id); waitingRef.current = false
+      try { p.seekTo(Math.max(0, best.s), true); p.playVideo() } catch { /* */ }
+      return true
+    },
     seekBy: (d) => { try { p.seekTo(Math.max(0, (p.getCurrentTime?.() || 0) + d), true) } catch { /* */ } },
     seekTo: (t) => { if (t <= (clipRef.current?.start || 0) + 0.5) consumedRef.current.clear(); try { p.seekTo(Math.max(0, t), true) } catch { /* */ } },
     mute: () => { try { p.mute() } catch { /* */ } },
@@ -432,6 +443,19 @@ function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interact
         if (!best) return false
         consumed.add(best.id); waiting = false
         try { el.currentTime = best.s } catch { /* */ }
+        el.play().catch(() => {})
+        return true
+      },
+      // Back = step to the PREVIOUS pause marker within this clip (so a marked video rewinds one marker,
+      // not a whole clip). Returns false when there's no earlier marker → the caller falls back to prev clip.
+      skipToPrevStop: () => {
+        const now = el.currentTime || 0
+        let best = null
+        for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s < now - 0.6 && (!best || s > best.s)) best = { id: m.id, s } }
+        if (!best) return false
+        consumed.clear(); seen.clear(); waiting = false
+        try { el.currentTime = best.s } catch { /* */ }
+        lastT = best.s; consumed.add(best.id)   // don't immediately re-pause at the marker we landed on
         el.play().catch(() => {})
         return true
       },
@@ -1540,6 +1564,7 @@ export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, 
       if (e.key === 'ArrowRight') { e.preventDefault(); goRight(); return }
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
+        if (handleRef.current?.skipToPrevStop?.()) { fsPlaying.current = true; return }   // step back one marker within the clip
         const cb = cbRef.current
         const act = fsArrowAction('left', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
         if (act === 'clip-prev') goto(idxRef.current - 1)

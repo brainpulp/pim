@@ -1270,6 +1270,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [presentElapsed, setPresentElapsed] = useState(0)   // live elapsed ms during a run (for the nav-bar timer)
   const [presTimerPaused, setPresTimerPaused] = useState(false)   // phone can pause the presentation clock
   const timerPausedAtRef = useRef(null)   // timestamp of the current pause (null = running)
+  const [resumeIdx, setResumeIdx] = useState(null)   // slide we were on when the show was interrupted (for Resume)
+  const resumeSlideIdxRef = useRef(null)
   // ms to subtract from any elapsed reading so a paused clock freezes; baked into the refs on resume.
   const pausedSub = () => (timerPausedAtRef.current != null ? Date.now() - timerPausedAtRef.current : 0)
   // The on-screen control/slide-count bar during a presentation is optional (persisted). When hidden, a tiny
@@ -3459,7 +3461,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             else { h?.pause?.(); ytssPlayingRef.current = false; setYtssActiveId(null); setYtssEndedId(null) }   // → show the node on canvas
             return
           }
-          if (e.key === 'ArrowLeft') { e.preventDefault(); if (atEnd) { setYtssEndedId(null); h?.play?.(); ytssPlayingRef.current = true } else if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
+          if (e.key === 'ArrowLeft') { e.preventDefault(); if (atEnd) { setYtssEndedId(null); h?.play?.(); ytssPlayingRef.current = true } else if (h?.skipToPrevStop?.()) { ytssPlayingRef.current = true } else if (cur > 0) goClip(cur - 1); else if (presenting) advanceBuild(-1); return }
           if (e.key === 'ArrowUp') { e.preventDefault(); jumpSlide(-1); return }
           if (e.key === 'ArrowDown') { e.preventDefault(); jumpSlide(1); return }
           return
@@ -6665,7 +6667,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     presentSlide(idx ?? 0, 'fwd')
   }
 
-  const exitPresentation = () => { endPresentSession(); if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setFsVeil(false); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60) }
+  const exitPresentation = () => {
+    // Remember where we were so a later Start can RESUME from the same screen (with a Restart option).
+    const wasIdx = presentingSlideIdxRef.current
+    if (wasIdx != null) { resumeSlideIdxRef.current = wasIdx; setResumeIdx(wasIdx) }
+    endPresentSession(); if (ytssActiveRef.current) { ytssHandlesRef.current[ytssActiveRef.current]?.pause?.(); setYtssActiveId(null) } clearFades(); restoreOverlayInstant(); setFsVeil(false); setPresentingSlideIdx(null); exitDeviceFullscreen(); setTimeout(() => simRef.current?.alpha(0.2).restart(), 60)
+  }
+  // Resume the show from where it was interrupted (falls back to a normal start if there's no resume point).
+  const resumePresent = () => {
+    const r = resumeSlideIdxRef.current
+    if (r != null && r >= 0 && r < slideSimNodes.length) presentSlide(r, 'fwd')
+    else startPresent()
+  }
+  // Restart the show from the very first slide, clearing any resume point.
+  const restartPresent = () => { resumeSlideIdxRef.current = null; setResumeIdx(null); if (slideSimNodes.length) presentSlide(0, 'fwd') }
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
   exitPresentationRef.current = exitPresentation
 
@@ -6682,7 +6697,8 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     prev: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) remoteKey('ArrowLeft') },
     nextSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) { if (ytssFullscreenIdRef.current) setYtssFullscreenId(null); jumpSlide(1) } },
     prevSlide: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) { if (ytssFullscreenIdRef.current) setYtssFullscreenId(null); jumpSlide(-1) } },
-    present: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) startPresent() },
+    present: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) resumePresent() },   // resume from where we left off
+    restart: () => { setBlackScreen(false); if (presentingSlideIdxRef.current === null) restartPresent() },   // start over from slide 1
     exit: () => { setBlackScreen(false); if (presentingSlideIdxRef.current !== null) exitPresentation() },
     black: () => { if (presentingSlideIdxRef.current !== null) setBlackScreen(b => !b) },
     // Panic mute: silence every playing video/audio (and YouTube iframe) from the phone, and keep new
@@ -6748,6 +6764,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     slideMs: Math.round(slideMs / 1000) * 1000,
     muted: presMuted,
     timerPaused: presTimerPaused,
+    resumeIdx: presentingSlideIdx === null ? resumeIdx : null,   // slide to resume at when not presenting
   }
 
   // Phone canvas preview: the current + next slide rendered to a compact SVG string (plus the currently

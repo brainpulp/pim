@@ -296,8 +296,16 @@ export default function RemoteControl({ code }) {
           <button onPointerDown={() => send('exit')} style={{ ...smallBtn, flex: '0 0 auto', color: '#f9b4b4', borderColor: '#5a2a2a', background: '#241318', padding: '9px 8px' }}>■ End presentation</button>
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 12px 16px' }}>
-          <button onPointerDown={() => send('present')} style={{ ...smallBtn, color: '#fff', border: 'none', background: 'linear-gradient(180deg,#5b6af0,#4652d6)', fontWeight: 700, fontSize: '1rem', padding: '16px 22px' }}>▶ Start presentation</button>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '12px 12px 16px' }}>
+          {state?.resumeIdx != null ? (<>
+            {/* Interrupted earlier → resume from the same screen, or restart from the top. */}
+            <button onPointerDown={() => send('present')} style={{ ...smallBtn, color: '#fff', border: 'none', background: 'linear-gradient(180deg,#5b6af0,#4652d6)', fontWeight: 700, fontSize: '1rem', padding: '16px 22px' }}>
+              ▶ Resume — slide {(state.resumeIdx ?? 0) + 1}{state?.total ? ` / ${state.total}` : ''}
+            </button>
+            <button onPointerDown={() => send('restart')} style={{ ...smallBtn, color: '#c5d0ff', padding: '10px 16px' }}>⟲ Restart from the beginning</button>
+          </>) : (
+            <button onPointerDown={() => send('present')} style={{ ...smallBtn, color: '#fff', border: 'none', background: 'linear-gradient(180deg,#5b6af0,#4652d6)', fontWeight: 700, fontSize: '1rem', padding: '16px 22px' }}>▶ Start presentation</button>
+          )}
         </div>
       )}
     </div>
