@@ -22,6 +22,11 @@ export default function RemoteControl({ code }) {
   const [notesMode, setNotesMode] = useState(() => { try { return localStorage.getItem('pim_remote_notes_mode') === 'highlights' ? 'highlights' : 'full' } catch { return 'full' } })
   const toggleNotesMode = () => setNotesMode(m => { const nm = m === 'full' ? 'highlights' : 'full'; try { localStorage.setItem('pim_remote_notes_mode', nm) } catch { /* ignore */ } return nm })
 
+  // The big panel shows either the speaker NOTES or the SLIDE images (current + what's next) — one tap flips
+  // between them. Persisted so it survives reloads. Purely local to the phone; never touches the deck.
+  const [panelMode, setPanelMode] = useState(() => { try { return localStorage.getItem('pim_remote_panel') === 'slides' ? 'slides' : 'notes' } catch { return 'notes' } })
+  const togglePanel = () => setPanelMode(m => { const nm = m === 'notes' ? 'slides' : 'notes'; try { localStorage.setItem('pim_remote_panel', nm) } catch { /* ignore */ } return nm })
+
   // Editing speaker notes from the phone (for practice — never navigates or interrupts the show).
   const [editNotes, setEditNotes] = useState(false)
   const noteRef = useRef(null)          // the contentEditable div
@@ -189,19 +194,27 @@ export default function RemoteControl({ code }) {
           display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px 5px' }}>
             <span style={{ flex: 1, fontSize: '0.98rem', fontWeight: 700, color: '#c5d0ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{state?.title || 'Slide'}</span>
-            {editNotes && [['bold', <b key="b">B</b>], ['italic', <i key="i">I</i>], ['underline', <u key="u">U</u>]].map(([cmd, gl]) => (
+            {/* Notes ⇄ Slides: one tap flips the big panel between the speaker notes and the slide images. */}
+            {!editNotes && (
+              <button onClick={togglePanel}
+                style={{ height: 30, borderRadius: 8, padding: '0 10px', border: `1px solid ${panelMode === 'slides' ? '#3a5a8a' : '#2a3358'}`, background: panelMode === 'slides' ? '#152238' : '#171d38', color: panelMode === 'slides' ? '#8fb4ff' : '#9aa8d8', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1 }}
+                title={panelMode === 'slides' ? 'Showing slide images — tap for notes' : 'Showing notes — tap for slide images'}>
+                {panelMode === 'slides' ? '❑ Slides' : '≣ Notes'}
+              </button>
+            )}
+            {panelMode === 'notes' && editNotes && [['bold', <b key="b">B</b>], ['italic', <i key="i">I</i>], ['underline', <u key="u">U</u>]].map(([cmd, gl]) => (
               <button key={cmd} onMouseDown={e => { e.preventDefault(); fmtNote(cmd) }} onTouchStart={e => { e.preventDefault(); fmtNote(cmd) }}
                 style={{ minWidth: 30, height: 30, borderRadius: 8, border: '1px solid #2a3358', background: '#171d38', color: '#c5d0ff', fontSize: '0.95rem', lineHeight: 1 }}>{gl}</button>
             ))}
             {/* Full ⇄ Highlights toggle. Highlights = only the bolded words (day-of); Full = everything (practice). */}
-            {!editNotes && (
+            {panelMode === 'notes' && !editNotes && (
               <button onClick={() => { setEditNotes(false); toggleNotesMode() }}
                 style={{ height: 30, borderRadius: 8, padding: '0 10px', border: `1px solid ${notesMode === 'highlights' ? '#8a6d2f' : '#2a3358'}`, background: notesMode === 'highlights' ? '#2a220e' : '#171d38', color: notesMode === 'highlights' ? '#f6c453' : '#9aa8d8', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1 }}
                 title={notesMode === 'highlights' ? 'Showing highlights (bold only) — tap for full notes' : 'Showing full notes — tap for highlights only'}>
                 {notesMode === 'highlights' ? '★ Marks' : '≡ Full'}
               </button>
             )}
-            {notesMode === 'full' && (
+            {panelMode === 'notes' && notesMode === 'full' && (
               <button onClick={() => { const n = !editNotes; setEditNotes(n); if (!n) sendNote() }}
                 style={{ minWidth: 34, height: 30, borderRadius: 8, border: `1px solid ${editNotes ? '#3a7d5a' : '#2a3358'}`, background: editNotes ? '#123524' : '#171d38', color: editNotes ? '#6ee7a8' : '#9aa8d8', fontSize: '0.9rem', lineHeight: 1 }}
                 title={editNotes ? 'Done editing' : 'Edit notes'}>{editNotes ? '✓' : '✎'}</button>
@@ -209,7 +222,25 @@ export default function RemoteControl({ code }) {
           </div>
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '0 13px 12px' }}>
-              {notesMode === 'highlights'
+              {panelMode === 'slides'
+                ? (<>
+                    <style>{`.pim-rslide svg{width:100%;height:auto;display:block}`}</style>
+                    <div style={{ paddingTop: 2, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>On screen now</div>
+                        {thumb?.cur
+                          ? <div className="pim-rslide" style={{ borderRadius: 9, overflow: 'hidden', border: '1px solid #3a4a7a', background: '#0d0d1a' }} dangerouslySetInnerHTML={{ __html: thumb.cur }} />
+                          : <div style={{ fontSize: '0.9rem', color: '#6b7699', fontStyle: 'italic', padding: '10px 0' }}>No preview.</div>}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.58rem', color: '#8090b8', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>Next{state?.nextTitle ? ` · ${state.nextTitle}` : ''}</div>
+                        {thumb?.next
+                          ? <div className="pim-rslide" style={{ borderRadius: 9, overflow: 'hidden', border: '1px solid #2a3358', background: '#0d0d1a', opacity: 0.92 }} dangerouslySetInnerHTML={{ __html: thumb.next }} />
+                          : <div style={{ fontSize: '0.9rem', color: '#6b7699', fontStyle: 'italic', padding: '10px 0' }}>End of the deck.</div>}
+                      </div>
+                    </div>
+                  </>)
+                : notesMode === 'highlights'
                 ? (() => {
                     const hi = rcHighlights(state?.note)
                     return hi
@@ -250,6 +281,7 @@ export default function RemoteControl({ code }) {
         const showClip = nextClip >= 0 && nextClip < nClips
         const clipSrc = showClip ? thumb.clipThumbs[nextClip] : null
         if (!showClip && !thumb?.next) return null
+        if (panelMode === 'slides' && !showClip) return null   // the big panel already shows the next slide
         return (
           <div style={{ flexShrink: 0, padding: '6px 14px 2px', display: 'flex', alignItems: 'center', gap: 10 }}>
             <style>{`.pim-rthumb svg{width:100%;height:auto;display:block}`}</style>
