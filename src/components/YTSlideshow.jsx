@@ -673,6 +673,8 @@ function TextClipEditor({ clip, onPatch, onClose }) {
             <span style={{ minWidth: 22, textAlign: 'center', color: '#c5d0ff' }}>{clip.fontSize || 9}</span>
             <button onMouseDown={e => { e.preventDefault(); onPatch({ fontSize: Math.min(40, (clip.fontSize || 9) + 1) }) }} style={btn}>+</button></span>
           {['left', 'center', 'right'].map(a => <button key={a} onMouseDown={e => { e.preventDefault(); onPatch({ align: a }) }} style={{ ...btn, background: align === a ? '#2a3358' : '#232a5c' }}>{a === 'left' ? '⯇' : a === 'right' ? '⯈' : '≡'}</button>)}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#c5d0ff', fontSize: 12, cursor: 'pointer' }}><input type="checkbox" checked={clip.bold !== false} onChange={e => onPatch({ bold: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Bold</label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#c5d0ff', fontSize: 12, cursor: 'pointer' }} title="Show this text on top of the previous clip"><input type="checkbox" checked={!!clip.overlayPrev} onChange={e => onPatch({ overlayPrev: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> On previous</label>
           <span style={{ flex: 1 }} />
           <button onClick={onClose} style={{ ...btn, background: '#1f6f43', border: '1px solid #2f9a5f', fontWeight: 700 }}>Done</button>
         </div>
@@ -1218,6 +1220,7 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
                       {(c.trigger || 'click') === 'click' ? '☝ On click' : c.trigger === 'delay' ? '⏱ Delay' : '▶ Auto'}
                     </button>
                     <div style={{ display: 'flex', gap: 1, marginTop: 1 }}>
+                      {ck === 'text' && <IconBtn name="edit" title="Edit text & style" size={18} tone="ghost" onClick={() => { setSel(i); setEditTextIdx(i) }} />}
                       <IconBtn name="copy" title="Duplicate" size={18} tone="ghost" onClick={() => dup(i)} />
                       {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={18} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}
                       <IconBtn name="trash" title="Delete" size={18} tone="danger" onClick={() => del(i)} />
@@ -1320,43 +1323,6 @@ export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtra
           </div>
           <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
         </>}
-        {/* Text step editor: the text itself + look (colour, background, size, alignment). */}
-        {cur && k === 'text' && (
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginTop: 4, flexWrap: 'wrap' }}>
-            {/* Rich editing (bold/italic/underline/inline colour) happens in the pop-out editor — open it by
-                double-clicking the step's chip, or with this button. The controls at right set slide-wide look. */}
-            <button onClick={() => setEditTextIdx(sel)} style={{ flex: 1, minWidth: 220, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 6, fontSize: 13, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', overflow: 'hidden' }}>
-              ✎ Edit text & style<span style={{ color: '#7d84a4', marginLeft: 8, fontSize: 11 }}>— {((cur.html ? cur.html.replace(/<[^>]+>/g, ' ') : cur.text) || 'Text').replace(/\s+/g, ' ').trim().slice(0, 40) || 'empty'}</span>
-            </button>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11.5, color: '#8fa0d8', minWidth: 210 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Text
-                  <SwatchButton title="Text colour" size={20} value={cur.color || '#e8ecff'} onChange={c => patch(sel, { color: c })} /></span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Background
-                  <SwatchButton title="Background colour" size={20} value={cur.bg || '#0c0c1a'} onChange={c => patch(sel, { bg: c })} /></span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>Size</span>
-                <button onClick={() => patch(sel, { fontSize: Math.max(3, (cur.fontSize || 9) - 1) })} style={trimBtn}>−</button>
-                <span style={{ minWidth: 28, textAlign: 'center', color: '#c5d0ff' }}>{cur.fontSize || 9}</span>
-                <button onClick={() => patch(sel, { fontSize: Math.min(40, (cur.fontSize || 9) + 1) })} style={trimBtn}>+</button>
-                <span style={{ marginLeft: 8 }}>Align</span>
-                {['left', 'center', 'right'].map(a => (
-                  <button key={a} onClick={() => patch(sel, { align: a })}
-                    style={{ ...trimBtn, width: 28, background: (cur.align || 'center') === a ? '#2a3358' : 'transparent', color: (cur.align || 'center') === a ? '#eef1ff' : '#aeb8ff' }}>
-                    {a === 'left' ? '⯇' : a === 'right' ? '⯈' : '≡'}</button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}>
-                  <input type="checkbox" checked={cur.bold !== false} onChange={e => patch(sel, { bold: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Bold</label>
-                {/* Superimpose this text over the PREVIOUS clip instead of showing it on its own frame. */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }} title="Show this text on top of the previous clip (transparent background) instead of its own full slide">
-                  <input type="checkbox" checked={!!cur.overlayPrev} onChange={e => patch(sel, { overlayPrev: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> On previous</label>
-              </div>
-            </div>
-          </div>
-        )}
         {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No steps yet. Paste a YouTube link, upload media, or add text above.</div>}
       </div>
       {editTextIdx != null && clips[editTextIdx] && clipKind(clips[editTextIdx]) === 'text' && (
