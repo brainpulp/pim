@@ -22,6 +22,8 @@ import { YTSlideshowNode, YTSlideshowInspector, YTFullscreenPlayer, YTVideoOptio
 import { driveThumbUrl } from '../lib/gdrive'
 import { playDrop } from '../lib/sound'
 import PresenterRemote from '../components/PresenterRemote'
+import FontPicker from '../components/FontPicker'
+import { fontStack, loadFont } from '../lib/fonts'
 import { SwatchRow, SwatchButton } from '../components/SwatchPicker'
 import QRCode from '../components/QRCode'
 import { plog, presLog } from '../lib/presDebug'
@@ -609,14 +611,15 @@ function shapeClipShape(shape, halfW, halfH, r) {
 // â"€â"€ Label rendering (foreignObject for word-wrap) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
-function NodeLabel({ label, halfW, halfH, fontSize, textColor }) {
+function NodeLabel({ label, halfW, halfH, fontSize, textColor, fontFamily }) {
+  useEffect(() => { if (fontFamily) loadFont(fontFamily) }, [fontFamily])
   return (
     <foreignObject x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         width: '100%', height: '100%',
-        color: textColor || '#fff', fontSize, fontFamily: '-apple-system, sans-serif',
+        color: textColor || '#fff', fontSize, fontFamily: fontStack(fontFamily) || '-apple-system, sans-serif',
         wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.25,
         overflow: 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
         textShadow: '0 1px 3px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)',
@@ -1183,6 +1186,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [showExport, setShowExport] = useState(false)    // export-to-PDF/Word dialog
   const [showFlowchart, setShowFlowchart] = useState(false)  // flowchart text⇄graph panel
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
+  const [fontPickerNode, setFontPickerNode] = useState(null)   // nodeId whose font we're choosing (Google Fonts picker)
   const [frameStyleId, setFrameStyleId] = useState(null) // frame whose FILL picker is open (right-click only)
   const [dupGhost, setDupGhost] = useState(null)         // alt-drag duplicate: translucent preview { x, y, label, fill, shape, scale }
   const [dupChildrenPrompt, setDupChildrenPrompt] = useState(null) // { srcId, newId, cx, cy } after alt-drop when source has children
@@ -8051,6 +8055,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               onSetBorderFxCount={v => setNodeViewProp(hn.id, 'borderFxCount', v)}
               onSetSpin={v => setNodeViewProp(hn.id, 'spin', v)}
               onSetShape={s => { setNodeViewProp(hn.id, 'shape', s); if (s === 'image') setNodeViewProp(hn.id, 'fillColor', 'transparent'); if (s === '3d') setNodeViewProp(hn.id, 'fillColor', 'none'); if (s === 'frame') { addSlide(hn.id); detachNodeEdges(hn.id) } }}
+              onPickFont={() => { setFontPickerNode(hn.id); close() }}
               onDuplicate={() => { pushUndo(); handleDuplicateNode(hn.id); close() }}
               tags={hs.meta?.tags || []}
               allTags={allProjectTags}
@@ -9125,6 +9130,20 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
               setFsVeil(true); setYtssFullscreenId(null); setYtssIdxMap(m => ({ ...m, [id]: 0 }))
               advanceBuild(-1)
             }} />
+        )
+      })()}
+
+      {/* Google Fonts picker for node labels — search + category filter; applies to the selection. */}
+      {fontPickerNode && (() => {
+        const vpF = getVP(fontPickerNode)
+        const applyIds = (selectedNodeIds.size > 1 && selectedNodeIds.has(fontPickerNode)) ? [...selectedNodeIds] : [fontPickerNode]
+        return (
+          <FontPicker
+            value={vpF.fontFamily || null}
+            title={applyIds.length > 1 ? `Font · ${applyIds.length} nodes` : 'Font'}
+            onPick={family => { pushUndo(); applyIds.forEach(id => setNodeViewProp(id, 'fontFamily', family || null)); if (family) loadFont(family) }}
+            onClose={() => setFontPickerNode(null)}
+          />
         )
       })()}
 
@@ -13602,10 +13621,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {!editing && shape !== '3d' && (
           hasInlineImages ? (
             <g transform={`translate(${textCenterX.toFixed(1)},${textCenterY.toFixed(1)})`}>
-              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
+              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} />
             </g>
           ) : (
-            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} />
+            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} />
           )
         )}
         {!editing && shape === '3d' && (
@@ -13934,7 +13953,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
                   if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
                   if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(); onTab?.(node.id) }
                 }}
-                style={{ width:'100%', height:'100%', background: is3D ? '#1e1e3a' : 'transparent', border:'none', outline: is3D ? '1px solid #5b6af0' : 'none', borderRadius:4, color: is3D ? '#fff' : textColor, textAlign:'center', fontSize: fontSize-1, lineHeight:1.15, padding:'0 2px', boxSizing:'border-box', resize:'none', fontFamily:'inherit', overflow:'hidden', caretColor: is3D ? '#fff' : textColor }}
+                style={{ width:'100%', height:'100%', background: is3D ? '#1e1e3a' : 'transparent', border:'none', outline: is3D ? '1px solid #5b6af0' : 'none', borderRadius:4, color: is3D ? '#fff' : textColor, textAlign:'center', fontSize: fontSize-1, lineHeight:1.15, padding:'0 2px', boxSizing:'border-box', resize:'none', fontFamily: fontStack(viewProps.fontFamily) || 'inherit', overflow:'hidden', caretColor: is3D ? '#fff' : textColor }}
               ></textarea>
             </div>
           </foreignObject>
@@ -14464,7 +14483,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
   styles = [], onSaveStyle, onUpdateStyle, onRenameStyle, onDeleteStyle, onApplyStyle, onArrange, onReleaseChildren, onDuplicate, onGenContent, onGenWords, onGenVariations, onAutoStyle, selCount = 0,
   propertyDefs = [], nodeProps = {}, onSetNodeProp, onAddPropertyDef, onAddSelectOption, onTogglePropChip,
   tags = [], allTags = [], onAddTag, onRemoveTag,
-  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false, onSetInterim, isInterim = false, onEditStages, stageCount = 0 }) {
+  floating = false, onUndock, onRedock, nodeTitle, onMakeSlide, isSlide = false, onSetInterim, isInterim = false, onEditStages, stageCount = 0, onPickFont }) {
   const shape = viewProps.shape || 'circle'
   const [panel, setPanel] = useState(null) // null | 'color' | 'shape' | 'shadow' | 'styles' | 'note' | 'radiate' | 'motion' | 'emoji' | 'image'
   const [panelTop, setPanelTop] = useState(0) // y-offset of the row that opened the flyout, so it appears next to it
@@ -14620,6 +14639,7 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         })())}
         {onAddTag && textRow('Tags', () => setPanel('tags'), { icon: '🔖', right: tags.length ? String(tags.length) : '›', rightColor: tags.length ? '#88b4e8' : '#8090b8', opens: 'tags' })}
         {textRow('Emoji', () => setPanel('emoji'), { icon: '😀', right: '›', opens: 'emoji' })}
+        {onPickFont && textRow('Font', onPickFont, { icon: '🅰', right: viewProps.fontFamily ? '•' : '›', rightColor: viewProps.fontFamily ? '#88b4e8' : '#8090b8', opens: null })}
         {textRow('Image', () => setPanel('image'), { icon: '🖼️', right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
         {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { icon: '✨', right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
         {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
