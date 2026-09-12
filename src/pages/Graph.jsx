@@ -14650,9 +14650,20 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         <button title="Undock into a floating window" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onUndock?.() }}
           style={{ position:'absolute', top:3, right:4, background:'transparent', border:'none', color:'#6b7bb0', cursor:'pointer', fontSize:12, lineHeight:1, padding:2, zIndex:1 }}>⤢</button>
       )}
+      {/* â"€â"€ Top style bar (like the text-box formatting bar): font + every style control, one row â"€â"€ */}
+      <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'center', padding:'2px 4px 6px', marginBottom:3, borderBottom:'1px solid #23234a' }}
+        onMouseDown={e => e.stopPropagation()}>
+        {onPickFont && <button title={viewProps.fontFamily ? `Font: ${viewProps.fontFamily}` : 'Font'} onClick={onPickFont} style={iconBtn(!!viewProps.fontFamily)}>🅰</button>}
+        <button title="Color (fill / text)" onClick={() => openPanelNow('color', 0)} style={iconBtn(panel === 'color')}>🎨</button>
+        <button title="Shape" onClick={() => openPanelNow('shape', 0)} style={iconBtn(panel === 'shape')}>◆</button>
+        <button title="Border treatment" onClick={() => openPanelNow('border', 0)} style={iconBtn(panel === 'border' || !!(viewProps.borderFx || viewProps.spin))}>❋</button>
+        <button title="Shadow" onClick={() => openPanelNow('shadow', 0)} style={iconBtn(panel === 'shadow' || !!(viewProps.shadow && (viewProps.shadow.opacity ?? 0) > 0))}>🌑</button>
+        <button title="Saved styles" onClick={() => openPanelNow('styles', 0)} style={iconBtn(panel === 'styles')}>🎭</button>
+        <button title="Motion" onClick={() => openPanelNow('motion', 0)} style={iconBtn(panel === 'motion' || !!(viewProps.nodeMotion || viewProps.nodeColorCycle))}>🌀</button>
+        <button title="Radiate style to children" onClick={() => openPanelNow('radiate', 0)} style={iconBtn(panel === 'radiate')}>📡</button>
+      </div>
       {/* â"€â"€ Main text menu (always visible; sub-sections fly out beside it) â"€â"€ */}
       <>
-        {textRow('Style', () => openPanelNow('color'), { icon: '🎨', right: '›', opens: 'color' })}
         {textRow(selCount > 1 ? `Arrange (${selCount} selected)` : 'Arrange', () => setPanel('arrange'), { icon: '▦', right: '›', opens: 'arrange' })}
         {shape === 'image' && textRow('Image URL', () => setPanel('imageUrl'), { icon: '🔗', right: '›', opens: 'imageUrl' })}
         {textRow('Notes', () => setPanel('note'), { icon: '📝', right: notes ? '•' : '›', rightColor: notes ? '#88b4e8' : '#8090b8', opens: 'note' })}
@@ -14662,7 +14673,6 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         })())}
         {onAddTag && textRow('Tags', () => setPanel('tags'), { icon: '🔖', right: tags.length ? String(tags.length) : '›', rightColor: tags.length ? '#88b4e8' : '#8090b8', opens: 'tags' })}
         {textRow('Emoji', () => setPanel('emoji'), { icon: '😀', right: '›', opens: 'emoji' })}
-        {onPickFont && textRow('Font', onPickFont, { icon: '🅰', right: viewProps.fontFamily ? '•' : '›', rightColor: viewProps.fontFamily ? '#88b4e8' : '#8090b8', opens: null })}
         {textRow('Image', () => setPanel('image'), { icon: '🖼️', right: (viewProps.nodeImages || []).length > 0 ? '•' : '›', rightColor: (viewProps.nodeImages || []).length > 0 ? '#88b4e8' : '#8090b8', opens: 'image' })}
         {hasChildrenForList && textRow('Effects (children)', () => setPanel('effects'), { icon: '✨', right: childrenEffect ? '•' : '›', rightColor: childrenEffect ? '#8ecbff' : '#8090b8', opens: 'effects' })}
         {textRow(depthExpand !== null ? `Expand hops (+${depthExpand.radius})` : 'Expand hops', () => {
@@ -14671,11 +14681,8 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         }, { icon: '⊕', right: depthExpand !== null ? '×' : '›', rightColor: depthExpand !== null ? '#f6ad55' : '#8090b8', opens: null })}
         <div style={{ borderTop:'1px solid #2a3358', margin:'3px 6px' }} />
         {onDuplicate && textRow('Duplicate', onDuplicate, { icon: '⧉', opens: null })}
-        {onGenContent && textRow('Generate…', onGenContent, { icon: '✨', opens: null })}
-        {onGenWords && textRow('Generate words', onGenWords, { icon: '⚡', opens: null })}
-        {onGenVariations && textRow('Generate variations', onGenVariations, { icon: '🎲', opens: null })}
+        {(onGenContent || onGenWords || onGenVariations || onMakeSlide) && textRow('Tools', () => setPanel('tools'), { icon: '🧰', right: isSlide ? '✓' : '›', rightColor: isSlide ? '#f6ad55' : '#8090b8', opens: 'tools' })}
         {textRow('Drill in', onDrill, { icon: '🔎', opens: null })}
-        {onMakeSlide && textRow(isSlide ? 'In slideshow ✓' : 'Make a slide', onMakeSlide, { icon: '▦', right: isSlide ? '✓' : '›', rightColor: isSlide ? '#f6ad55' : '#8090b8', opens: null })}
         {onSetInterim && textRow(isInterim ? 'Interim slide ✓' : 'Set as interim slide', onSetInterim, { icon: '⤾', right: isInterim ? '✓' : '›', rightColor: isInterim ? '#f6ad55' : '#8090b8', opens: null })}
         {onEditStages && textRow('Stages (builds)', onEditStages, { icon: '🎬', right: stageCount ? String(stageCount) : '›', rightColor: stageCount ? '#f6ad55' : '#8090b8', opens: null })}
         {hasChildrenForList && textRow('Show as…', () => setPanel('showas'), { icon: '▧', right: (isList || isKanban || isStrategy) ? '•' : '›', rightColor: (isList || isKanban || isStrategy) ? '#f6ad55' : '#8090b8', opens: 'showas' })}
@@ -14709,6 +14716,26 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
             {sub('styles', '🎭', 'Styles')}
             {sub('motion', '🌀', 'Motion', viewProps.nodeMotion || viewProps.nodeColorCycle)}
             {sub('radiate', '📡', 'Radiate')}
+          </div>
+        )
+      })()}
+      {/* â"€â"€ Tools panel â"€â"€ (Generate / Generate words / Generate variations / Make a slide) */}
+      {panel === 'tools' && (() => {
+        const toolItem = (icon, label, onRun, right, rightColor) => (
+          <div onClick={onRun}
+            onMouseEnter={e => e.currentTarget.style.background = '#23234a'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.82rem', color: '#c5d0ff' }}>
+            <span style={{ width: 16, textAlign: 'center' }}>{icon}</span><span style={{ flex: 1 }}>{label}</span>
+            {right && <span style={{ color: rightColor || '#8090b8', fontSize: '0.72rem' }}>{right}</span>}
+          </div>
+        )
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 186 }}>
+            <div style={{ fontSize: '0.62rem', color: '#7080a0', letterSpacing: '0.08em', padding: '2px 8px 4px' }}>TOOLS</div>
+            {onGenContent && toolItem('✨', 'Generate…', onGenContent)}
+            {onGenWords && toolItem('⚡', 'Generate words', onGenWords)}
+            {onGenVariations && toolItem('🎲', 'Generate variations', onGenVariations)}
+            {onMakeSlide && toolItem('▦', isSlide ? 'In slideshow' : 'Make a slide', onMakeSlide, isSlide ? '✓' : '', '#f6ad55')}
           </div>
         )
       })()}
