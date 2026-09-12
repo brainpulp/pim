@@ -8191,6 +8191,38 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           return <TextFormatToolbar left={left} top={top} box={timg} boxId={tid} onBoxStyle={patch => updateImage(tid, patch)} />
         })()}
 
+        {/* Node style bar — floats above the single selected node (like the text-box formatting bar). */}
+        {(() => {
+          if (isPresenting || readOnly) return null
+          if (selected?.type !== 'node' || selectedNodeIds.size > 1) return null
+          if (nodeGestureRef.current) return null            // mid-drag → don't pop the bar
+          const sn = simNodesRef.current.find(n => n.id === selected.id)
+          if (!sn || !visibleNodeIds.has(sn.id)) return null
+          const vp = getVP(sn.id)
+          if (vp.shape === 'frame') return null               // frames use their own affordances
+          const fs = Math.max(9, Math.round(12 * (vp.scale || 1) * (vp.fontScale ?? 1)))
+          const { halfH } = shapeDims(vp.shape || 'circle', NODE_R * (vp.scale || 1), storeNodeById[sn.id]?.label || '', fs, vp.labelWidth)
+          const left = T.x + (sn.x || 0) * T.k
+          const top = T.y + ((sn.y || 0) - halfH) * T.k - 10
+          return (
+            <NodeStyleBar
+              key={sn.id}
+              left={left} top={top}
+              viewProps={vp}
+              onFont={() => setFontPickerNode(sn.id)}
+              onSetProp={(prop, value) => {
+                pushUndo()
+                const ids = selectedNodeIds.size > 1 ? [...selectedNodeIds] : [sn.id]
+                ids.forEach(id => {
+                  setNodeViewProp(id, prop, value)
+                  if (prop === 'shape') { if (value === 'image') setNodeViewProp(id, 'fillColor', 'transparent'); if (value === '3d') setNodeViewProp(id, 'fillColor', 'none'); if (value === 'frame') { addSlide(id); detachNodeEdges(id) } }
+                })
+              }}
+              onMore={() => setNodeMenu({ nodeId: sn.id, px: Math.round(left + 14), py: Math.round(top) })}
+            />
+          )
+        })()}
+
         {photoMenu && !cropImageId && (<>
           {/* Backdrop: left-click closes. Do NOT close on `contextmenu` — on Windows/Linux the trailing
               contextmenu from the very click that opened this menu fires AFTER mouseup (once the backdrop
@@ -12386,6 +12418,53 @@ const TEXT_FONTS = [
   { label: 'Permanent Marker', exec: '"Permanent Marker", cursive' },
   { label: 'Shadows Into Light', exec: '"Shadows Into Light", cursive' },
 ]
+// Floating style bar shown ABOVE a selected node (screen space), mirroring the text-box formatting bar.
+// Compact: Font + fill/text colour + shape inline, and "⋯" opens the full node toolbox for the rest.
+function NodeStyleBar({ left, top, viewProps, onFont, onSetProp, onMore }) {
+  const [popup, setPopup] = useState(null)   // 'fill' | 'text' | 'shape' | null
+  const FILL = ['none', '#5b6af0', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#30a46c', '#00a2c7', '#0090ff', '#6e56cf', '#8e4ec6', '#d6409f', '#ffffff', '#0f1420']
+  const TEXT = ['#ffffff', '#e8ecff', '#c5d0ff', '#0f1420', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#00a2c7', '#0090ff', '#6e56cf', '#d6409f']
+  const SHAPES2 = [['circle', '○'], ['ellipse', '⬭'], ['roundrect', '▭'], ['rect', '□'], ['diamond', '◇'], ['none', '╌']]
+  const btn = (active) => ({ background: active ? '#2d3a6a' : 'transparent', border: 'none', color: '#c5d0ff', cursor: 'pointer', fontSize: 14, padding: '5px 7px', borderRadius: 6, lineHeight: 1, display: 'inline-flex', alignItems: 'center', gap: 4 })
+  const swBg = (c) => (c === 'none' || !c) ? { backgroundImage: 'linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),linear-gradient(45deg,#555 25%,#333 25%,#333 75%,#555 75%)', backgroundSize: '6px 6px', backgroundPosition: '0 0,3px 3px' } : { background: c }
+  return (
+    <div className="pim-nodebar" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} onContextMenu={e => e.preventDefault()}
+      style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 22, display: 'flex', alignItems: 'center', gap: 2,
+        background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 9, padding: 3, boxShadow: '0 8px 24px rgba(0,0,0,0.55)' }}>
+      <button title="Font" onClick={onFont} style={btn(!!viewProps.fontFamily)}>🅰</button>
+      <button title="Fill colour" onClick={() => setPopup(p => p === 'fill' ? null : 'fill')} style={btn(popup === 'fill')}>
+        <span style={{ width: 13, height: 13, borderRadius: 3, border: '1px solid #4a5580', ...swBg(viewProps.fillColor) }} />
+      </button>
+      <button title="Text colour" onClick={() => setPopup(p => p === 'text' ? null : 'text')} style={btn(popup === 'text')}>
+        <span style={{ fontWeight: 800, color: viewProps.textColor || '#fff', textShadow: '0 0 2px #000' }}>A</span>
+      </button>
+      <button title="Shape" onClick={() => setPopup(p => p === 'shape' ? null : 'shape')} style={btn(popup === 'shape')}>◆</button>
+      <div style={{ width: 1, alignSelf: 'stretch', background: '#2a3358', margin: '2px 2px' }} />
+      <button title="More style & options" onClick={onMore} style={{ ...btn(false), fontSize: 16 }}>⋯</button>
+      {popup && (
+        <div onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 8, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.6)' }}>
+          {popup === 'shape' ? (
+            <div style={{ display: 'flex', gap: 3 }}>
+              {SHAPES2.map(([s, ic]) => (
+                <button key={s} title={s} onClick={() => { onSetProp('shape', s); setPopup(null) }}
+                  style={{ ...btn(viewProps.shape === s || (!viewProps.shape && s === 'circle')), fontSize: 16, padding: '5px 8px' }}>{ic}</button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ width: 176 }}>
+              <div style={{ fontSize: 10, color: '#8090b8', marginBottom: 4 }}>{popup === 'fill' ? 'Fill' : 'Text'} colour</div>
+              <SwatchRow value={popup === 'fill' ? viewProps.fillColor : viewProps.textColor}
+                swatches={popup === 'fill' ? FILL : TEXT}
+                onPick={c => { onSetProp(popup === 'fill' ? 'fillColor' : 'textColor', c); setPopup(null) }}
+                onNone={popup === 'fill' ? () => { onSetProp('fillColor', 'none'); setPopup(null) } : undefined} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TextFormatToolbar({ left, top, box, boxId, onBoxStyle }) {
   const savedRange = useRef(null)
   const [showColors, setShowColors] = useState(false)
