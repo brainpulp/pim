@@ -14,6 +14,7 @@ import CommandPalette from './components/CommandPalette'
 import SharedView from './pages/SharedView'
 import ShareDialog from './components/ShareDialog'
 import RemoteControl from './pages/RemoteControl'
+import ViewManager from './components/ViewManager'
 
 const parseShareToken = () => {
   const m = window.location.hash.match(/^#\/share\/([A-Za-z0-9]+)/)
@@ -85,9 +86,21 @@ export default function App() {
   useEffect(() => { if (!outlineDock) setOutlineMax(false) }, [outlineDock])
   // "View" dropdown (next to the tabs) — one place to toggle the canvas panels: Outline / Draw / Slides / Views.
   const [viewMenuOpen, setViewMenuOpen] = useState(false)
+  const [viewSub, setViewSub] = useState(null)   // inline submenu expanded in the View menu: 'views' | 'slides' | null
   const showDrawPanel = useGraphStore(s => s.showDraw)
   const showSlidesPanel = useGraphStore(s => s.showSlideSidebar)
   const showViewsPanel = useGraphStore(s => s.showViews)
+  const hideFrames = useGraphStore(s => s.hideFrames)
+  const storeViews = useGraphStore(s => s.views)
+  const activeViewId = useGraphStore(s => s.activeViewId)
+  const activeViewObj = storeViews?.find(v => v.id === activeViewId)
+  const activeSlideshows = activeViewObj?.slideshows || []
+  const activeSlideshowId = activeViewObj?.activeSlideshowId
+  // Run a canvas-only view action (fit / present / fullscreen); switch to the graph canvas first if needed.
+  const runGraphAction = (name) => {
+    if (view !== 'graph') { setView('graph'); setTimeout(() => useGraphStore.getState().viewActions?.[name]?.(), 140) }
+    else useGraphStore.getState().viewActions?.[name]?.()
+  }
   const [outlineW, setOutlineW] = useState(() => { try { return Math.max(240, Math.min(720, +localStorage.getItem('pim_outline_w') || 380)) } catch { return 380 } })
   useEffect(() => { try { localStorage.setItem('pim_outline_w', String(outlineW)) } catch { /* ignore */ } }, [outlineW])
   const startDockResize = (e) => {
@@ -324,24 +337,82 @@ export default function App() {
               <>
                 <div onClick={() => setViewMenuOpen(false)}
                   style={{ position: 'fixed', inset: 0, zIndex: 200 }} />
-                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 201, minWidth: 178,
+                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 201, minWidth: 200, maxHeight: '78vh', overflowY: 'auto',
                   background: '#14141f', border: '1px solid #2a2a3c', borderRadius: 10, padding: 5,
                   boxShadow: '0 16px 44px rgba(0,0,0,0.55)' }}>
-                  {[
-                    { label: 'Outline', on: outlineDock, run: () => setOutlineDock(o => !o) },
-                    { label: 'Draw', on: view === 'graph' && showDrawPanel, run: () => { if (view !== 'graph') setView('graph'); const st = useGraphStore.getState(); st.setShowDraw(v => !v); st.setShowSlideSidebar(false) } },
-                    { label: 'Slides', on: view === 'graph' && showSlidesPanel, run: () => { if (view !== 'graph') setView('graph'); const st = useGraphStore.getState(); st.setShowSlideSidebar(v => !v); st.setShowDraw(false) } },
-                    { label: 'Views', on: view === 'graph' && showViewsPanel, run: () => { if (view !== 'graph') setView('graph'); useGraphStore.getState().setShowViews(v => !v) } },
-                  ].map(it => (
-                    <button key={it.label} className="pim-nav-tab"
-                      onClick={() => { it.run(); setViewMenuOpen(false) }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
-                        padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: '0.82rem',
-                        fontFamily: FONT, background: it.on ? '#20233c' : 'transparent', color: it.on ? '#cbd3ff' : '#a9b0d0' }}>
-                      <span style={{ width: 14, display: 'inline-block', color: '#7c8cff' }}>{it.on ? '✓' : ''}</span>
-                      {it.label}
-                    </button>
-                  ))}
+                  {(() => {
+                    const st = () => useGraphStore.getState()
+                    const rowStyle = (on) => ({ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                      padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: '0.82rem', boxSizing: 'border-box',
+                      fontFamily: FONT, background: on ? '#20233c' : 'transparent', color: on ? '#cbd3ff' : '#a9b0d0' })
+                    const head = (t) => <div style={{ padding: '7px 10px 3px', fontSize: '0.6rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6f78a0', fontWeight: 700 }}>{t}</div>
+                    const divider = <div style={{ borderTop: '1px solid #23233a', margin: '4px 4px' }} />
+                    // A plain action/toggle row. `on` shows the ✓ column; leave undefined for a plain action.
+                    const Row = ({ label, icon, on, close = true, onRun }) => (
+                      <button className="pim-nav-tab" onClick={() => { onRun(); if (close) setViewMenuOpen(false) }} style={rowStyle(!!on)}>
+                        <span style={{ width: 14, display: 'inline-block', color: '#7c8cff' }}>{on ? '✓' : (icon || '')}</span>
+                        <span style={{ flex: 1 }}>{label}</span>
+                      </button>
+                    )
+                    return (
+                      <>
+                        {head('Panels')}
+                        <Row label="Outliner" on={outlineDock} onRun={() => setOutlineDock(o => !o)} />
+                        <Row label="Draw" on={view === 'graph' && showDrawPanel} onRun={() => { if (view !== 'graph') setView('graph'); st().setShowDraw(v => !v); st().setShowSlideSidebar(false) }} />
+                        <Row label="Slides panel" on={view === 'graph' && showSlidesPanel} onRun={() => { if (view !== 'graph') setView('graph'); st().setShowSlideSidebar(v => !v); st().setShowDraw(false) }} />
+                        <Row label="Views panel" on={view === 'graph' && showViewsPanel} onRun={() => { if (view !== 'graph') setView('graph'); st().setShowViews(v => !v) }} />
+
+                        {divider}
+                        {head('Display')}
+                        <Row label={hideFrames ? 'Frames: hidden' : 'Frames: shown'} icon="▢" on={!hideFrames}
+                          onRun={() => { if (view !== 'graph') setView('graph'); st().setHideFrames(v => !v) }} close={false} />
+                        <Row label="Fit to screen" icon="⊡" onRun={() => runGraphAction('fit')} />
+                        <Row label="Fullscreen" icon="⛶" onRun={() => runGraphAction('toggleFullscreen')} />
+
+                        {divider}
+                        <Row label="Present" icon="▶" onRun={() => runGraphAction('present')} />
+
+                        {divider}
+                        {/* Views submenu — quick switch / manage, inline */}
+                        <button className="pim-nav-tab" onClick={() => setViewSub(s => s === 'views' ? null : 'views')} style={rowStyle(viewSub === 'views')}>
+                          <span style={{ width: 14, display: 'inline-block', color: '#7c8cff' }}>🗂</span>
+                          <span style={{ flex: 1 }}>Views</span>
+                          <span style={{ color: '#7080a0' }}>{viewSub === 'views' ? '▾' : '▸'}</span>
+                        </button>
+                        {viewSub === 'views' && (
+                          <div style={{ margin: '2px 4px 4px', border: '1px solid #23233a', borderRadius: 8, overflow: 'hidden', maxHeight: 240, overflowY: 'auto' }}>
+                            <ViewManager />
+                          </div>
+                        )}
+
+                        {/* Slideshows submenu — switch the active slideshow, or open the Slides panel */}
+                        <button className="pim-nav-tab" onClick={() => setViewSub(s => s === 'slides' ? null : 'slides')} style={rowStyle(viewSub === 'slides')}>
+                          <span style={{ width: 14, display: 'inline-block', color: '#7c8cff' }}>🎞️</span>
+                          <span style={{ flex: 1 }}>Slideshows{activeSlideshows.length ? ` (${activeSlideshows.length})` : ''}</span>
+                          <span style={{ color: '#7080a0' }}>{viewSub === 'slides' ? '▾' : '▸'}</span>
+                        </button>
+                        {viewSub === 'slides' && (
+                          <div style={{ margin: '2px 4px 4px', border: '1px solid #23233a', borderRadius: 8, padding: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {activeSlideshows.length === 0 && <div style={{ color: '#7080a0', fontSize: '0.75rem', padding: '5px 8px' }}>No slideshows yet.</div>}
+                            {activeSlideshows.map(ss => (
+                              <button key={ss.id} className="pim-nav-tab"
+                                onClick={() => { st().setActiveSlideshowId(ss.id); if (view !== 'graph') setView('graph'); st().setShowSlideSidebar(true); st().setShowDraw(false); setViewMenuOpen(false) }}
+                                style={{ ...rowStyle(ss.id === activeSlideshowId), padding: '6px 9px' }}>
+                                <span style={{ width: 12, display: 'inline-block', color: '#7c8cff' }}>{ss.id === activeSlideshowId ? '●' : '○'}</span>
+                                <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ss.name || 'Slideshow'}</span>
+                                <span style={{ color: '#7080a0', fontSize: '0.68rem' }}>{(ss.slides || []).length}</span>
+                              </button>
+                            ))}
+                            <button className="pim-nav-tab"
+                              onClick={() => { if (view !== 'graph') setView('graph'); st().addSlideshow?.('New Slideshow'); st().setShowSlideSidebar(true); st().setShowDraw(false); setViewMenuOpen(false) }}
+                              style={{ ...rowStyle(false), padding: '6px 9px', color: '#8ea2ff' }}>
+                              <span style={{ width: 12, display: 'inline-block' }}>＋</span><span style={{ flex: 1 }}>New slideshow</span>
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()}
                 </div>
               </>
             )}

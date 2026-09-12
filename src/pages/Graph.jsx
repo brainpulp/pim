@@ -1304,9 +1304,11 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const setShowDraw = useGraphStore(s => s.setShowDraw)
   const showViews = useGraphStore(s => s.showViews)
   const setShowViews = useGraphStore(s => s.setShowViews)
+  const setViewActions = useGraphStore(s => s.setViewActions)   // register fit/present/fullscreen for the App View menu
   const [selectedDrawingId, setSelectedDrawingId] = useState(null)
   const [dragDraw, setDragDraw] = useState(null)                // { kind, defaults, ghost:{x,y} } while dragging from palette
-  const [hideFrameOutlines, setHideFrameOutlines] = useState(false)
+  const hideFrameOutlines = useGraphStore(s => s.hideFrames)          // lives in the store so App's View menu can toggle it
+  const setHideFrameOutlines = useGraphStore(s => s.setHideFrames)
   // Auto-hide frame outlines after zooming to a frame (thumbnail click), until the next real pan/zoom.
   const [autoHideFrames, setAutoHideFrames] = useState(false)
   const prevFrameCountRef = useRef(0)
@@ -6807,6 +6809,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const restartPresent = () => { resumeSlideIdxRef.current = null; setResumeIdx(null); if (slideSimNodes.length) presentSlide(0, 'fwd') }
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
   exitPresentationRef.current = exitPresentation
+
+  // Expose canvas-only view actions to the App-level "View" menu. Kept behind a ref so the registered
+  // wrappers are stable (registered once) but always call the latest closures.
+  const viewActionRefs = useRef({})
+  viewActionRefs.current = {
+    fit: () => zoomExtents(),
+    present: () => startPresent(),
+    toggleFullscreen: () => {
+      if (document.fullscreenElement || document.webkitFullscreenElement) exitDeviceFullscreen()
+      else enterDeviceFullscreen()
+    },
+  }
+  useEffect(() => {
+    if (readOnly) return
+    setViewActions({
+      fit: () => viewActionRefs.current.fit?.(),
+      present: () => viewActionRefs.current.present?.(),
+      toggleFullscreen: () => viewActionRefs.current.toggleFullscreen?.(),
+    })
+    return () => setViewActions({})
+  }, [setViewActions, readOnly])
 
   // Phone-remote command handlers (kept in a ref so PresenterRemote subscribes once but always calls the
   // latest closures). Present/Next/Prev/etc. mirror the on-stage keyboard controls.

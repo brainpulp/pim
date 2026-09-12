@@ -309,6 +309,14 @@ const useGraphStore = create((set, get) => ({
     try { localStorage.setItem('pim_show_views', next ? '1' : '0') } catch { /* ignore */ }
     return { showViews: next }
   }),
+  // Hide frame outlines/titles across the canvas (drives Graph's FrameNode `hideOutline`). Lives in the
+  // store so the App-level View menu can toggle it too.
+  hideFrames: false,
+  setHideFrames: (v) => set(s => ({ hideFrames: typeof v === 'function' ? v(s.hideFrames) : v })),
+  // Imperative view actions that live inside the Graph canvas (fit-to-screen, present, fullscreen). Graph
+  // registers thin wrappers here on mount so the App-level View menu can invoke them. `{}` when no canvas.
+  viewActions: {},
+  setViewActions: (a) => set({ viewActions: a || {} }),
 
   setNodeWriteStyle: (id, patch) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, writeStyle: { ...(n.writeStyle || {}), ...patch } } : n),
