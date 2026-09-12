@@ -1379,6 +1379,18 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Leaving native fullscreen (Esc / F11 / the browser's own control) also ends the presentation.
   // Declared here — before any early return — so the hooks order never changes (React #310).
   const exitPresentationRef = useRef(null)
+  // View actions (fit / present / fullscreen) exposed to the App View menu. Ref + registration effect MUST
+  // live here in the pre-early-return hook zone; the ref's contents are refreshed later in the body.
+  const viewActionRefs = useRef({})
+  useEffect(() => {
+    if (readOnly) return
+    setViewActions({
+      fit: () => viewActionRefs.current.fit?.(),
+      present: () => viewActionRefs.current.present?.(),
+      toggleFullscreen: () => viewActionRefs.current.toggleFullscreen?.(),
+    })
+    return () => setViewActions({})
+  }, [setViewActions, readOnly])
   useEffect(() => {
     // Distinguish leaving the DECK's fullscreen (Esc on the presentation → end it) from leaving a NESTED
     // video's fullscreen (a clip played fullscreen, then closed → we must stay in the presentation, NOT
@@ -6810,9 +6822,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Bridge to the fullscreenchange listener (registered up top, before any early return, per hooks rules).
   exitPresentationRef.current = exitPresentation
 
-  // Expose canvas-only view actions to the App-level "View" menu. Kept behind a ref so the registered
-  // wrappers are stable (registered once) but always call the latest closures.
-  const viewActionRefs = useRef({})
+  // Expose canvas-only view actions to the App-level "View" menu. The ref + registration effect are
+  // declared UP TOP with the other early hooks (before any early return, per React #310); here we only
+  // refresh the ref's contents, which is a plain assignment (safe after an early return).
   viewActionRefs.current = {
     fit: () => zoomExtents(),
     present: () => startPresent(),
@@ -6821,15 +6833,6 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
       else enterDeviceFullscreen()
     },
   }
-  useEffect(() => {
-    if (readOnly) return
-    setViewActions({
-      fit: () => viewActionRefs.current.fit?.(),
-      present: () => viewActionRefs.current.present?.(),
-      toggleFullscreen: () => viewActionRefs.current.toggleFullscreen?.(),
-    })
-    return () => setViewActions({})
-  }, [setViewActions, readOnly])
 
   // Phone-remote command handlers (kept in a ref so PresenterRemote subscribes once but always calls the
   // latest closures). Present/Next/Prev/etc. mirror the on-stage keyboard controls.
