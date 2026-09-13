@@ -1,0 +1,183 @@
+/* Strategy tab — dark theme to match pim */
+
+.strat-page {
+  display: flex;
+  height: 100%;
+  background: #0f0f0f;
+  color: #ddd;
+}
+
+.strat-left {
+  width: 40%;
+  min-width: 320px;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #262626;
+  background: #161616;
+  min-height: 0;
+}
+
+.strat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #262626;
+  font-size: 12px;
+}
+
+.strat-hint {
+  color: #777;
+  flex: 1;
+}
+
+.strat-save {
+  font-size: 11px;
+  color: #666;
+}
+
+.strat-save-saving { color: #eab308; }
+.strat-save-dirty { color: #eab308; }
+.strat-save-error { color: #f87171; }
+
+.strat-btn {
+  border: 1px solid #333;
+  background: #1d1d1d;
+  color: #ccc;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.strat-btn:hover { background: #262626; }
+
+.strat-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.strat-editor .cm-editor { height: 100%; }
+
+.strat-gaps {
+  border-top: 1px solid #262626;
+  max-height: 30%;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.strat-gaps-header {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: #888;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.strat-gaps ul {
+  margin: 0;
+  padding: 0 12px 10px 26px;
+}
+
+.strat-gaps li {
+  font-size: 12px;
+  margin-bottom: 5px;
+  line-height: 1.4;
+}
+
+.strat-gap-warning { color: #d97706; }
+.strat-gap-suggestion { color: #888; }
+
+.strat-canvas {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- Nodes ---------- */
+
+.strat-node-task {
+  background: #1d1d1d;
+  border: 1.5px solid #3a3a3a;
+  border-radius: 8px;
+  padding: 10px 16px;
+  min-width: 100px;
+  max-width: 280px;
+  text-align: center;
+}
+
+.strat-node-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #eee;
+}
+
+.strat-node-description {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+}
+
+.strat-node-decision {
+  position: relative;
+  min-width: 120px;
+  padding: 24px 26px;
+  text-align: center;
+}
+
+.strat-node-decision-shape {
+  position: absolute;
+  inset: 0;
+  background: #2a2010;
+  border: 1.5px solid #b45309;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+.strat-node-decision .strat-node-label {
+  position: relative;
+  font-size: 12px;
+}
+
+.strat-node-startend {
+  border-radius: 999px;
+  padding: 10px 22px;
+  text-align: center;
+  border: 1.5px solid;
+}
+
+.strat-node-start {
+  background: #0d2418;
+  border-color: #34d399;
+}
+
+.strat-node-end {
+  background: #2a1214;
+  border-color: #f87171;
+}
+
+.strat-node-note {
+  background: #26220e;
+  border: 1px dashed #a16207;
+  border-radius: 4px;
+  padding: 8px 12px;
+  max-width: 220px;
+}
+
+.strat-node-note .strat-node-label {
+  font-weight: 400;
+  font-size: 12px;
+  color: #d9c87a;
+}
+
+.strat-page .react-flow__handle {
+  width: 6px;
+  height: 6px;
+  background: #555;
+  border: none;
+}
