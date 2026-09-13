@@ -18,11 +18,19 @@ export const FONT_CATEGORIES = [
   { id: 'monospace', label: 'Mono' },
 ]
 
-// Google's multicolour (COLRv1) fonts — they render in full colour in the browser via the normal CSS API.
-// Not a Google "category", so we filter to this set for the Color chip and tag them for search.
+// Multicolour (COLR / COLRv1) fonts — they render in full colour in the browser. Not a Google "category",
+// so we filter to this set for the Color chip and tag them for search. Most are Google-hosted; 'Rocher'
+// is a free font we self-host (see SELF_HOSTED below).
 export const COLOR_FONTS = new Set([
-  'Nabla', 'Honk', 'Sixtyfour', 'Bungee Spice', 'Foldit', 'Rocher',
+  'Nabla', 'Honk', 'Sixtyfour', 'Bungee Spice', 'Bungee Tint', 'Foldit', 'Reem Kufi Ink', 'Rocher',
 ])
+
+// Fonts we host ourselves (not on Google Fonts) — loaded via an injected @font-face from a CORS-friendly
+// CDN instead of the Google CSS API. Rocher Color is free for personal & commercial use (Harbor Type).
+const SELF_HOSTED = {
+  'Rocher': { url: 'https://assets.codepen.io/9632/RocherColorGX.woff2', category: 'display', weights: [400] },
+}
+const SELF_HOSTED_LIST = Object.entries(SELF_HOSTED).map(([family, m]) => ({ family, category: m.category }))
 
 // Generic fallback stack per category, appended after the chosen family so text stays readable while the
 // web font is still loading (or if it fails).
@@ -87,7 +95,7 @@ const RAW = [
   ['Gluten', 'display'], ['Climate Crisis', 'display'], ['Rampart One', 'display'], ['Silkscreen', 'display'],
   ['Press Start 2P', 'display'], ['Pirata One', 'display'], ['Creepster', 'display'], ['Faster One', 'display'],
   ['Nabla', 'display'], ['Honk', 'display'], ['Sixtyfour', 'display'], ['Playfair Display SC', 'display'],
-  ['Bungee Spice', 'display'], ['Foldit', 'display'], ['Rocher', 'display'],
+  ['Bungee Spice', 'display'], ['Bungee Tint', 'display'], ['Foldit', 'display'], ['Reem Kufi Ink', 'display'],
 
   // ── Handwriting ──
   ['Pacifico', 'handwriting'], ['Caveat', 'handwriting'], ['Dancing Script', 'handwriting'], ['Lobster', 'handwriting'],
@@ -113,11 +121,13 @@ const RAW = [
 ]
 
 // The bundled fallback catalog (used offline / before the live catalog loads / if the fetch fails).
-export const BUNDLED_FONTS = RAW.map(([family, category]) => ({ family, category }))
+export const BUNDLED_FONTS = [...RAW.map(([family, category]) => ({ family, category })), ...SELF_HOSTED_LIST]
 
 // Mutable maps, seeded from the bundled list and REPLACED/extended when the live catalog loads.
 const CAT_BY_FAMILY = Object.fromEntries(RAW.map(([f, c]) => [f, c]))
 const WEIGHTS_BY_FAMILY = {}   // family -> sorted numeric weights the font actually ships (from the live catalog)
+// Seed the self-hosted fonts so they always resolve (category + weights), even after the live catalog loads.
+Object.entries(SELF_HOSTED).forEach(([f, m]) => { CAT_BY_FAMILY[f] = m.category; WEIGHTS_BY_FAMILY[f] = m.weights || [400] })
 
 // The current catalog the UI should show: live once fetched, else bundled. Read via getCatalog().
 let CATALOG = BUNDLED_FONTS
@@ -147,7 +157,8 @@ function ingestLive(list) {
     CAT_BY_FAMILY[f.family] = f.category || 'sans-serif'
     if (f.weights && f.weights.length) WEIGHTS_BY_FAMILY[f.family] = f.weights
   })
-  CATALOG = list.map(f => ({ family: f.family, category: f.category || 'sans-serif' }))
+  // Keep the self-hosted (non-Google) fonts in the catalog even after the live Google list replaces it.
+  CATALOG = [...SELF_HOSTED_LIST, ...list.map(f => ({ family: f.family, category: f.category || 'sans-serif' }))]
   catalogSubs.forEach(cb => { try { cb(CATALOG) } catch { /* */ } })
 }
 function parseGwfh(arr) {
@@ -194,6 +205,18 @@ const loaded = new Set()
 // actually ships (when known) so a single-weight font doesn't 400 the whole request.
 export function loadFont(family, weight) {
   if (!family || !/^[\w .\-&']+$/.test(family)) return
+  // Self-hosted fonts: inject their @font-face once (not on the Google CSS API).
+  if (SELF_HOSTED[family]) {
+    try {
+      const id = 'gfsh-' + family.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+      if (!document.getElementById(id)) {
+        const st = document.createElement('style'); st.id = id
+        st.textContent = `@font-face{font-family:"${family}";src:url("${SELF_HOSTED[family].url}") format("woff2");font-display:swap;}`
+        document.head.appendChild(st)
+      }
+    } catch { /* ignore */ }
+    return
+  }
   const reqW = Array.isArray(weight) ? weight.slice() : (weight ? [400, weight] : [400])
   const key = family + '@' + [...new Set(reqW)].sort((a, b) => a - b).join(',')
   if (loaded.has(key)) return
