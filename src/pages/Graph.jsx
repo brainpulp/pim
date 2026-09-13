@@ -1218,16 +1218,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   // Clicking/selecting a node seeds the nav focus there; arrow-nav then moves the focus (pan/zoom only)
   // WITHOUT changing the selection, so navigating doesn't pop the node toolbar on every hop.
   useEffect(() => { if (selected?.type === 'node') { navFocusRef.current = selected.id; navOutRef.current = 0 } }, [selected])
-  // While the style panel is undocked, keep it targeted on the currently selected node (so a plain
-  // left-click retargets the floating window, not just a right-click).
-  useEffect(() => {
-    if (!floatDock) return
-    if (nodeGestureRef.current) return   // mid node-drag → don't spring the panel; mouseup reopens on a clean click
-    // Frames: the style/colour panel opens on RIGHT-CLICK only — a plain selection must not spring it.
-    if (selected?.type === 'node' && viewNodePropsRef.current?.[selected.id]?.shape !== 'frame') {
-      setNodeMenu(m => (m?.nodeId === selected.id ? m : { nodeId: selected.id, px: 0, py: 0 }))
-    }
-  }, [floatDock, selected])
+  // Selecting a node shows the floating STYLE BAR only (see NodeStyleBar). The full node toolbox (all the
+  // non-style items) opens on RIGHT-CLICK, never on a plain select — even when the toolbox is undocked.
+  // (Previously an undocked panel sprang open on every selection; the on-select style bar replaces that.)
   const [photoMenu, setPhotoMenu] = useState(null)       // { px, py } right-click photo menu (acts on current selection)
   // Right-click diagnostic: append ?rcdebug=1 to the URL to show, in a corner badge, exactly what each
   // right-click resolved to. Lets us pin a non-reproducible "right-click does nothing" without the console.
@@ -4308,10 +4301,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
           }
         }
       }
-      // Gesture over. If it was a clean click (no drag) while the style panel is undocked, retarget/open
-      // it now — the retarget effect was suppressed during the gesture so a drag can't spring it.
+      // Gesture over. A clean click selects and shows the floating style bar (NodeStyleBar); the full node
+      // toolbox no longer springs open on click — it's right-click / the style bar's "⋯" only.
       nodeGestureRef.current = false
-      if (!didDrag && floatDockRef.current && viewNodePropsRef.current?.[nodeId]?.shape !== 'frame') setNodeMenu(m => (m?.nodeId === nodeId ? m : { nodeId, px: 0, py: 0 }))
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -7908,7 +7900,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             dash:   () => <>{listPanel([['Solid', 'solid'], ['Dashed', 'dashed'], ['Dotted', 'dotted']], v => setAll('strokeDash', v))}</>,
             opacity:() => <>{listPanel([['100%', 1], ['75%', 0.75], ['50%', 0.5], ['25%', 0.25]], v => setAll('opacity', v))}</>,
             size:   () => <>{listPanel([['Small', 0.6], ['Medium', 1], ['Large', 1.5], ['Extra large', 2.2]], v => setAll('scale', v))}</>,
-            motion: () => <>{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
+            motion: () => <>{listPanel([['None', null], ['≋ Shake', { type: 'shake' }], ['◎ Orbit', { type: 'circle' }], ['⚡ Pulse', { type: 'scale' }], ['◐ Zoom in/out', { type: 'zoom' }], ['⊕ Zoom in', { type: 'zoomin' }], ['⊖ Zoom out', { type: 'zoomout' }], ['↕ Up/Down', { type: 'updown' }], ['↔ Sideways', { type: 'sideways' }]], v => setAll('nodeMotion', v ? { ...v, speed: 1, intensity: 1 } : null))}</>,
             style:  () => storeStyles.length ? storeStyles.map(st => <div key={st.id}>{item(null, st.name, () => { pushUndo(); applyStyleAction(st.id, ids); close() })}</div>) : <div style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#8090b8' }}>No saved styles</div>,
             align:  () => <>
               {item(null, 'Align left', () => alignNodes('left'))}
@@ -12517,7 +12509,10 @@ function NodeStyleBar({ left, top, viewProps, onFont, onSetProp, onMore, onCopyS
         <span style={{ width: 13, height: 13, borderRadius: 3, border: '1px solid #4a5580', ...swBg(viewProps.fillColor) }} />
       </button>
       <button title="Text colour" onClick={() => setPopup(p => p === 'text' ? null : 'text')} style={btn(popup === 'text')}>
-        <span style={{ fontWeight: 800, color: viewProps.textColor || '#fff', textShadow: '0 0 2px #000' }}>A</span>
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1 }}>
+          <span style={{ fontWeight: 800, fontSize: 13, color: '#e8ecff' }}>A</span>
+          <span style={{ width: 14, height: 3, borderRadius: 2, marginTop: 1, background: (!viewProps.textColor || viewProps.textColor === '#fff') ? '#5b6af0' : viewProps.textColor }} />
+        </span>
       </button>
       <button title="Shape" onClick={() => setPopup(p => p === 'shape' ? null : 'shape')} style={btn(popup === 'shape')}>◆</button>
       <div style={{ width: 1, alignSelf: 'stretch', background: '#2a3358', margin: '2px 2px' }} />
@@ -13477,51 +13472,58 @@ function ContainerNode({ node, viewProps, isSelected, isCollapsed, isDropTarget,
 }
 
 // ─── AnimatedG ── wraps node visual content with optional motion + color cycle ──
-function AnimatedG({ motionType, motionSpeed, motionIntensity, colorCycle, isActive, opacity, children }) {
+function AnimatedG({ motionTypes, motionSpeed, motionIntensity, colorCycle, isActive, opacity, children }) {
   const ref = useRef()
   const rafRef = useRef()
+  const types = Array.isArray(motionTypes) ? motionTypes.filter(Boolean) : []
+  const key = types.join(',')   // stable dep for the effect
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    if (isActive || (!motionType && !colorCycle)) {
+    if (isActive || (!types.length && !colorCycle)) {
       cancelAnimationFrame(rafRef.current)
       el.style.transform = ''
       el.style.animation = ''
       return
     }
     el.style.animation = colorCycle ? `pim-hue-cycle ${colorCycle}s linear infinite` : ''
-    if (!motionType) return
+    if (!types.length) return
     const speed = motionSpeed || 1
-    const intensity = motionIntensity || 10
+    const i = motionIntensity || 10
     let startTime = null
     const animate = ts => {
       if (!startTime) startTime = ts
       const t = (ts - startTime) * 0.001 * speed
-      const i = intensity
-      let tx = 0, ty = 0, sc = 1
-      switch (motionType) {
-        case 'shake':    tx = (Math.sin(t * 14) * 0.75 + Math.sin(t * 37) * 0.25) * i; ty = (Math.sin(t * 11 + 1.5) * 0.7 + Math.sin(t * 29 + 0.7) * 0.3) * i; break
-        case 'circle':   tx = Math.sin(t * 2.5) * i; ty = Math.cos(t * 2.5) * i; break
-        case 'jerk':     { const ph = Math.floor(t * 3.5); const ang = (ph * 2.3999632) % (Math.PI * 2); const w = (t * 3.5) % 1; tx = w < 0.35 ? 0 : Math.cos(ang) * i; ty = w < 0.35 ? 0 : Math.sin(ang) * i; break }
-        case 'updown':   ty = Math.sin(t * 2.5) * i; break
-        case 'sideways': tx = Math.sin(t * 2.5) * i; break
-        case 'scale':    sc = 1 + Math.abs(Math.sin(t * 2.5)) * (i * 0.04); break
-        case 'rock':     { const rot = Math.sin(t * 2.5) * i * 0.025; el.style.transformBox = 'fill-box'; el.style.transformOrigin = 'center'; el.style.transform = 'rotate(' + (rot * 180 / Math.PI).toFixed(3) + 'deg)'; rafRef.current = requestAnimationFrame(animate); return }
-        default: break
+      // Accumulate every selected motion so they COMBINE: translations add, scales multiply, rotation adds.
+      let tx = 0, ty = 0, sc = 1, rot = 0
+      for (const mt of types) {
+        switch (mt) {
+          case 'shake':    tx += (Math.sin(t * 14) * 0.75 + Math.sin(t * 37) * 0.25) * i; ty += (Math.sin(t * 11 + 1.5) * 0.7 + Math.sin(t * 29 + 0.7) * 0.3) * i; break
+          case 'circle':   tx += Math.sin(t * 2.5) * i; ty += Math.cos(t * 2.5) * i; break
+          case 'jerk':     { const ph = Math.floor(t * 3.5); const ang = (ph * 2.3999632) % (Math.PI * 2); const w = (t * 3.5) % 1; if (w >= 0.35) { tx += Math.cos(ang) * i; ty += Math.sin(ang) * i } break }
+          case 'updown':   ty += Math.sin(t * 2.5) * i; break
+          case 'sideways': tx += Math.sin(t * 2.5) * i; break
+          case 'scale':    sc *= 1 + Math.abs(Math.sin(t * 2.5)) * (i * 0.04); break
+          case 'zoom':     sc *= 1 + Math.sin(t * 2.2) * (i * 0.045); break   // zoom in AND out (breathing)
+          case 'zoomin':   sc *= 1 + Math.abs(Math.sin(t * 2.4)) * (i * 0.06); break   // pulse larger
+          case 'zoomout':  sc *= 1 - Math.abs(Math.sin(t * 2.4)) * (i * 0.045); break  // pulse smaller
+          case 'rock':     rot += Math.sin(t * 2.5) * i * 0.025; break
+          default: break
+        }
       }
-      if (el) {
-        el.style.transformBox = 'fill-box'
-        el.style.transformOrigin = 'center'
-        el.style.transform = motionType === 'scale'
-          ? `scale(${sc.toFixed(4)})`
-          : `translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px)`
-      }
+      el.style.transformBox = 'fill-box'
+      el.style.transformOrigin = 'center'
+      const parts = []
+      if (tx || ty) parts.push(`translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px)`)
+      if (sc !== 1) parts.push(`scale(${Math.max(0.05, sc).toFixed(4)})`)
+      if (rot) parts.push(`rotate(${(rot * 180 / Math.PI).toFixed(3)}deg)`)
+      el.style.transform = parts.join(' ')
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
     return () => { cancelAnimationFrame(rafRef.current); if (el) { el.style.transform = ''; el.style.animation = '' } }
-  }, [motionType, motionSpeed, motionIntensity, colorCycle, isActive])
+  }, [key, motionSpeed, motionIntensity, colorCycle, isActive])
 
   return <g ref={ref} style={{ opacity: opacity ?? 1 }}>{children}</g>
 }
@@ -13727,7 +13729,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
 
       {/* Animated visual body */}
       <AnimatedG
-        motionType={motion?.type}
+        motionTypes={motion ? (motion.types || (motion.type ? [motion.type] : [])) : []}
         motionSpeed={motion?.speed}
         motionIntensity={motion?.intensity}
         colorCycle={colorCycle}
@@ -14860,32 +14862,9 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
       </>
 
       {/* â"€â"€ Fly-out sub-menu (holds whichever section is active) â"€â"€ */}
-      {panel && (<div
-        style={STYLE_PANES.includes(panel) ? { ...flyout, display: 'flex', gap: 10, maxWidth: 540, alignItems: 'flex-start' } : flyout}
+      {/* Fly-out sub-menu — the top style bar picks which pane; only that pane renders here (no second list). */}
+      {panel && (<div style={flyout}
         onMouseDown={e => e.stopPropagation()} onMouseEnter={cancelPanelTimer}>
-      {/* Persistent sub-list for the grouped Style panes (Color / Shape / Shadow / …) */}
-      {STYLE_PANES.includes(panel) && (() => {
-        const sub = (target, icon, label, on) => (
-          <div key={target} onMouseEnter={() => openPanelNow(target)} onClick={() => openPanelNow(target)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap',
-              fontSize: '0.8rem', background: panel === target ? '#23234a' : 'transparent', color: panel === target ? '#c5d0ff' : '#aab4dd' }}>
-            <span style={{ width: 15, textAlign: 'center', fontSize: '0.85rem' }}>{icon}</span><span>{label}</span>
-            {on && <span style={{ marginLeft: 'auto', color: '#88b4e8', fontSize: '0.7rem' }}>•</span>}
-          </div>
-        )
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 126, borderRight: '1px solid #23233e', paddingRight: 8, flexShrink: 0 }}>
-            <div style={{ fontSize: '0.62rem', color: '#7080a0', letterSpacing: '0.08em', padding: '2px 9px 4px' }}>STYLE</div>
-            {sub('color', '🎨', 'Color')}
-            {sub('shape', '◆', 'Shape')}
-            {sub('border', '❋', 'Border', viewProps.borderFx || viewProps.spin)}
-            {sub('shadow', '🌑', 'Shadow', viewProps.shadow && (viewProps.shadow.opacity ?? 0) > 0)}
-            {sub('styles', '🎭', 'Styles')}
-            {sub('motion', '🌀', 'Motion', viewProps.nodeMotion || viewProps.nodeColorCycle)}
-            {sub('radiate', '📡', 'Radiate')}
-          </div>
-        )
-      })()}
       {/* â"€â"€ Tools panel â"€â"€ (Generate / Generate words / Generate variations / Make a slide) */}
       {panel === 'tools' && (() => {
         const toolItem = (icon, label, onRun, right, rightColor) => (
@@ -15492,25 +15471,33 @@ function NodeToolbar({ x, y, viewProps, notes, onSetFill, onSetTextColor, onSetS
         const motion = viewProps.nodeMotion
         const colorCycle = viewProps.nodeColorCycle || 0
         const numBtn = { background:'transparent', border:'1px solid #2a3358', color:'#88b4e8', borderRadius:4, cursor:'pointer', fontSize:'0.75rem', padding:'2px 6px', lineHeight:1 }
+        // Motion is now a SET you can combine. `cur` = the active types (migrates the old single `type`).
+        const cur = motion ? (motion.types || (motion.type ? [motion.type] : [])) : []
+        const setTypes = (next) => onSetMotion(next.length ? { types: next, speed: motion?.speed ?? 1, intensity: motion?.intensity ?? 10 } : null)
+        const toggle = (type) => setTypes(cur.includes(type) ? cur.filter(t => t !== type) : [...cur, type])
         const motionTypes = [
-          [null,'○','off'],['shake','≋','shake'],['circle','◎','circle'],
-          ['jerk','⚡','jerk'],['updown','↕','up/dn'],['sideways','↔','side'],['scale','⬡','scale'],['rock','↺','rock'],
+          ['shake','≋','shake'],['circle','◎','orbit'],['jerk','⚡','jerk'],
+          ['updown','↕','up/dn'],['sideways','↔','side'],['rock','↺','rock'],
+          ['scale','⬡','pulse'],['zoom','◐','zoom'],['zoomin','⊕','zoom in'],['zoomout','⊖','zoom out'],
         ]
         return (
           <div style={{ display:'flex', flexDirection:'column', gap:6, minWidth:196 }}>
             <div style={{ display:'flex', alignItems:'center', gap:4, marginBottom:2 }}>
               <button style={backBtn} onClick={() => setPanel(null)}>‹</button>
               <span style={{ fontSize:'0.72rem', color:'#7080a0', letterSpacing:'0.06em' }}>MOTION</span>
+              <span style={{ flex:1 }} />
+              {cur.length > 0 && <button style={{ ...backBtn, width:'auto', padding:'2px 7px', fontSize:'0.62rem' }} onClick={() => onSetMotion(null)}>clear</button>}
             </div>
+            <div style={{ fontSize:'0.6rem', color:'#7080a0' }}>Tap to toggle — combine several.</div>
 
-            {/* Motion type grid */}
+            {/* Motion type grid — multi-select (tap several to combine) */}
             <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
               {motionTypes.map(([type, icon, label]) => {
-                const active = (motion?.type ?? null) === type
+                const active = cur.includes(type)
                 return (
                   <button key={label} title={label}
-                    style={{ background: active?'#2d3a6a':'transparent', border:`1px solid ${active?'#5b6af0':'#2a3358'}`, color: active?'#c5d0ff':'#8090b8', borderRadius:4, cursor:'pointer', padding:'3px 5px', lineHeight:1, display:'flex', flexDirection:'column', alignItems:'center', gap:1 }}
-                    onClick={() => onSetMotion(type === null ? null : { type, speed: motion?.speed ?? 1, intensity: motion?.intensity ?? 10 })}>
+                    style={{ background: active?'#2d3a6a':'transparent', border:`1px solid ${active?'#5b6af0':'#2a3358'}`, color: active?'#c5d0ff':'#8090b8', borderRadius:4, cursor:'pointer', padding:'3px 5px', lineHeight:1, display:'flex', flexDirection:'column', alignItems:'center', gap:1, width:42 }}
+                    onClick={() => toggle(type)}>
                     <span style={{ fontSize:'1rem' }}>{icon}</span>
                     <span style={{ fontSize:'0.5rem', color: active?'#fff':'#aab6e6' }}>{label}</span>
                   </button>

@@ -10,12 +10,19 @@
 
 export const FONT_CATEGORIES = [
   { id: 'all', label: 'All' },
+  { id: 'color', label: '🌈 Color' },
   { id: 'sans-serif', label: 'Sans' },
   { id: 'serif', label: 'Serif' },
   { id: 'display', label: 'Display' },
   { id: 'handwriting', label: 'Handwriting' },
   { id: 'monospace', label: 'Mono' },
 ]
+
+// Google's multicolour (COLRv1) fonts — they render in full colour in the browser via the normal CSS API.
+// Not a Google "category", so we filter to this set for the Color chip and tag them for search.
+export const COLOR_FONTS = new Set([
+  'Nabla', 'Honk', 'Sixtyfour', 'Bungee Spice', 'Foldit', 'Rocher',
+])
 
 // Generic fallback stack per category, appended after the chosen family so text stays readable while the
 // web font is still loading (or if it fails).
@@ -80,6 +87,7 @@ const RAW = [
   ['Gluten', 'display'], ['Climate Crisis', 'display'], ['Rampart One', 'display'], ['Silkscreen', 'display'],
   ['Press Start 2P', 'display'], ['Pirata One', 'display'], ['Creepster', 'display'], ['Faster One', 'display'],
   ['Nabla', 'display'], ['Honk', 'display'], ['Sixtyfour', 'display'], ['Playfair Display SC', 'display'],
+  ['Bungee Spice', 'display'], ['Foldit', 'display'], ['Rocher', 'display'],
 
   // ── Handwriting ──
   ['Pacifico', 'handwriting'], ['Caveat', 'handwriting'], ['Dancing Script', 'handwriting'], ['Lobster', 'handwriting'],

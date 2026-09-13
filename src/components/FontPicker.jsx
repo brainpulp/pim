@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FONT_CATEGORIES, fontStack, loadFont, loadFontFull, getCatalog, subscribeCatalog, ensureLiveCatalog, isLiveCatalog, weightsFor } from '../lib/fonts'
+import { FONT_CATEGORIES, COLOR_FONTS, fontStack, loadFont, loadFontFull, getCatalog, subscribeCatalog, ensureLiveCatalog, isLiveCatalog, weightsFor } from '../lib/fonts'
 
 const WEIGHT_LABEL = { 100: 'Thin', 200: 'ExtraLight', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semibold', 700: 'Bold', 800: 'Extrabold', 900: 'Black' }
 
@@ -54,10 +54,12 @@ export default function FontPicker({ value, onPick, onClose, title = 'Font', wei
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return catalog.filter(f =>
-      (cat === 'all' || f.category === cat) &&
-      // Match the family name OR its category/tags, so typing "serif", "mono", "script", "hand", "slab"…
-      // filters like Google's tag search does.
-      (!needle || f.family.toLowerCase().includes(needle) || tagsFor(f).some(t => t.includes(needle)))
+      (cat === 'all' || (cat === 'color' ? COLOR_FONTS.has(f.family) : f.category === cat)) &&
+      // Match the family name OR its category/tags, so typing "serif", "mono", "script", "hand", "slab",
+      // "color"… filters like Google's tag search does.
+      (!needle || f.family.toLowerCase().includes(needle)
+        || tagsFor(f).some(t => t.includes(needle))
+        || (COLOR_FONTS.has(f.family) && ('color multicolour multicolor rainbow'.includes(needle))))
     )
   }, [q, cat, catalog])
 
