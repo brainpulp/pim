@@ -611,14 +611,16 @@ function shapeClipShape(shape, halfW, halfH, r) {
 // â"€â"€ Label rendering (foreignObject for word-wrap) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
-function NodeLabel({ label, halfW, halfH, fontSize, textColor, fontFamily, fontWeight }) {
-  useEffect(() => { if (fontFamily) loadFont(fontFamily, fontWeight) }, [fontFamily, fontWeight])
+function NodeLabel({ label, halfW, halfH, fontSize, textColor, fontFamily, fontWeight, bold, italic, underline }) {
+  const effWeight = bold ? 700 : fontWeight
+  useEffect(() => { if (fontFamily) loadFont(fontFamily, effWeight) }, [fontFamily, effWeight])
   return (
     <foreignObject x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        width: '100%', height: '100%', fontWeight: fontWeight || undefined,
+        width: '100%', height: '100%', fontWeight: effWeight || undefined,
+        fontStyle: italic ? 'italic' : undefined, textDecoration: underline ? 'underline' : undefined,
         color: textColor || '#fff', fontSize, fontFamily: fontStack(fontFamily) || '-apple-system, sans-serif',
         wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.25,
         overflow: 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
@@ -6832,7 +6834,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   // Copy-style / paste-style: transfer a node's LOOK (colours, font, border, shadow, motion, shape) to
   // other nodes. Structural shapes (frame / 3d) are never pasted — those change what a node IS, not its style.
-  const STYLE_COPY_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'fontFamily', 'fontWeight', 'fontScale', 'shadow', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle', 'opacity', 'borderBlur']
+  const STYLE_COPY_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'fontFamily', 'fontWeight', 'fontBold', 'fontItalic', 'fontUnderline', 'fontScale', 'shadow', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle', 'opacity', 'borderBlur']
   const copyNodeStyle = (id) => {
     const vp = getVP(id) || {}
     const s = {}
@@ -12505,6 +12507,10 @@ function NodeStyleBar({ left, top, viewProps, onFont, onSetProp, onMore, onCopyS
       style={{ position: 'absolute', left, top, transform: 'translate(-50%,-100%)', zIndex: 22, display: 'flex', alignItems: 'center', gap: 2,
         background: '#14142a', border: '1px solid #2d3a6a', borderRadius: 9, padding: 3, boxShadow: '0 8px 24px rgba(0,0,0,0.55)' }}>
       <button title="Font" onClick={onFont} style={btn(!!viewProps.fontFamily)}>🅰</button>
+      <button title="Bold" onClick={() => onSetProp('fontBold', !viewProps.fontBold)} style={{ ...btn(!!viewProps.fontBold), fontWeight: 800 }}>B</button>
+      <button title="Italic" onClick={() => onSetProp('fontItalic', !viewProps.fontItalic)} style={{ ...btn(!!viewProps.fontItalic), fontStyle: 'italic', fontWeight: 700 }}>I</button>
+      <button title="Underline" onClick={() => onSetProp('fontUnderline', !viewProps.fontUnderline)} style={{ ...btn(!!viewProps.fontUnderline), textDecoration: 'underline', fontWeight: 700 }}>U</button>
+      <div style={{ width: 1, alignSelf: 'stretch', background: '#2a3358', margin: '2px 1px' }} />
       <button title="Fill colour" onClick={() => setPopup(p => p === 'fill' ? null : 'fill')} style={btn(popup === 'fill')}>
         <span style={{ width: 13, height: 13, borderRadius: 3, border: '1px solid #4a5580', ...swBg(viewProps.fillColor) }} />
       </button>
@@ -13813,10 +13819,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {!editing && shape !== '3d' && (
           hasInlineImages ? (
             <g transform={`translate(${textCenterX.toFixed(1)},${textCenterY.toFixed(1)})`}>
-              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} fontWeight={viewProps.fontWeight} />
+              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} fontWeight={viewProps.fontWeight} bold={viewProps.fontBold} italic={viewProps.fontItalic} underline={viewProps.fontUnderline} />
             </g>
           ) : (
-            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} fontWeight={viewProps.fontWeight} />
+            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} fontWeight={viewProps.fontWeight} bold={viewProps.fontBold} italic={viewProps.fontItalic} underline={viewProps.fontUnderline} />
           )
         )}
         {!editing && shape === '3d' && (
@@ -14145,7 +14151,7 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
                   if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
                   if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(); onTab?.(node.id) }
                 }}
-                style={{ width:'100%', height:'100%', background: is3D ? '#1e1e3a' : 'transparent', border:'none', outline: is3D ? '1px solid #5b6af0' : 'none', borderRadius:4, color: is3D ? '#fff' : textColor, textAlign:'center', fontSize: fontSize-1, lineHeight:1.15, padding:'0 2px', boxSizing:'border-box', resize:'none', fontFamily: fontStack(viewProps.fontFamily) || 'inherit', overflow:'hidden', caretColor: is3D ? '#fff' : textColor }}
+                style={{ width:'100%', height:'100%', background: is3D ? '#1e1e3a' : 'transparent', border:'none', outline: is3D ? '1px solid #5b6af0' : 'none', borderRadius:4, color: is3D ? '#fff' : textColor, textAlign:'center', fontSize: fontSize-1, lineHeight:1.15, padding:'0 2px', boxSizing:'border-box', resize:'none', fontFamily: fontStack(viewProps.fontFamily) || 'inherit', fontWeight: viewProps.fontBold ? 700 : (viewProps.fontWeight || undefined), fontStyle: viewProps.fontItalic ? 'italic' : undefined, textDecoration: viewProps.fontUnderline ? 'underline' : undefined, overflow:'hidden', caretColor: is3D ? '#fff' : textColor }}
               ></textarea>
             </div>
           </foreignObject>
