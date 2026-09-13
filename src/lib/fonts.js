@@ -104,9 +104,73 @@ const RAW = [
   ['Anonymous Pro', 'monospace'], ['VT323', 'monospace'], ['Nova Mono', 'monospace'], ['Share Tech Mono', 'monospace'],
 ]
 
-export const GOOGLE_FONTS = RAW.map(([family, category]) => ({ family, category }))
+// The bundled fallback catalog (used offline / before the live catalog loads / if the fetch fails).
+export const BUNDLED_FONTS = RAW.map(([family, category]) => ({ family, category }))
 
+// Mutable maps, seeded from the bundled list and REPLACED/extended when the live catalog loads.
 const CAT_BY_FAMILY = Object.fromEntries(RAW.map(([f, c]) => [f, c]))
+const WEIGHTS_BY_FAMILY = {}   // family -> sorted numeric weights the font actually ships (from the live catalog)
+
+// The current catalog the UI should show: live once fetched, else bundled. Read via getCatalog().
+let CATALOG = BUNDLED_FONTS
+const catalogSubs = new Set()
+export function getCatalog() { return CATALOG }
+export function isLiveCatalog() { return CATALOG !== BUNDLED_FONTS }
+export function subscribeCatalog(cb) { catalogSubs.add(cb); return () => catalogSubs.delete(cb) }
+
+// Numeric weights a font ships (from the live catalog); a sensible default when unknown.
+export function weightsFor(family) {
+  const w = WEIGHTS_BY_FAMILY[family]
+  return (w && w.length) ? w : [400, 700]
+}
+
+// GOOGLE_FONTS kept as an alias for the bundled list (back-compat with existing imports).
+export const GOOGLE_FONTS = BUNDLED_FONTS
+
+// ── Live catalog (google-webfonts-helper: keyless, CORS-enabled, full Google Fonts list) ──────────────
+// Cached in localStorage for a week. On success the whole catalog (family + category + real weights)
+// replaces the bundled list and subscribers are notified. Any failure silently keeps the bundled list.
+const CACHE_KEY = 'pim_gfonts_catalog_v1'
+const CACHE_TTL = 7 * 24 * 3600 * 1000
+let liveStarted = false
+function ingestLive(list) {
+  if (!Array.isArray(list) || !list.length) return
+  list.forEach(f => {
+    CAT_BY_FAMILY[f.family] = f.category || 'sans-serif'
+    if (f.weights && f.weights.length) WEIGHTS_BY_FAMILY[f.family] = f.weights
+  })
+  CATALOG = list.map(f => ({ family: f.family, category: f.category || 'sans-serif' }))
+  catalogSubs.forEach(cb => { try { cb(CATALOG) } catch { /* */ } })
+}
+function parseGwfh(arr) {
+  return arr.map(f => {
+    const weights = [...new Set((f.variants || [])
+      .filter(v => !/italic/i.test(v))
+      .map(v => v === 'regular' ? 400 : parseInt(v, 10))
+      .filter(n => !isNaN(n)))].sort((a, b) => a - b)
+    return { family: f.family, category: f.category || 'sans-serif', weights: weights.length ? weights : [400] }
+  })
+}
+// Kick off the live load (idempotent). Serves cache immediately if fresh, then/else fetches in the background.
+export function ensureLiveCatalog() {
+  if (liveStarted) return
+  liveStarted = true
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
+    if (c && c.t && (Date.now() - c.t) < CACHE_TTL && Array.isArray(c.fonts) && c.fonts.length) { ingestLive(c.fonts); return }
+  } catch { /* ignore */ }
+  try {
+    fetch('https://gwfh.mranftl.com/api/fonts', { mode: 'cors' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+      .then(arr => {
+        const parsed = parseGwfh(arr)
+        if (!parsed.length) return
+        ingestLive(parsed)
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), fonts: parsed })) } catch { /* quota */ }
+      })
+      .catch(() => { /* offline / blocked → keep bundled */ })
+  } catch { /* ignore */ }
+}
 
 // Build the CSS font-family value for a chosen family (quoted) + a sensible fallback for its category.
 export function fontStack(family) {
@@ -115,20 +179,31 @@ export function fontStack(family) {
   return `"${family}", ${FALLBACK[cat] || FALLBACK['sans-serif']}`
 }
 
-// Inject the Google Fonts stylesheet for one family, once. Keyless CSS API — no build step, no bundle cost.
+// Inject the Google Fonts stylesheet for one family (+ weight), once. Keyless CSS API. We only request
+// weights the font actually ships (when known) so a single-weight font doesn't 400 the whole request.
 const loaded = new Set()
-export function loadFont(family) {
-  if (!family || loaded.has(family) || !CAT_BY_FAMILY[family]) return
-  loaded.add(family)
+export function loadFont(family, weight) {
+  if (!family || !/^[\w .\-&']+$/.test(family)) return
+  const key = family + '@' + (weight || '')
+  if (loaded.has(key)) return
+  loaded.add(key)
   try {
-    const id = 'gf-' + family.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+    const avail = WEIGHTS_BY_FAMILY[family]
+    let axis = ''
+    if (avail && avail.length) {
+      const want = [...new Set([400, weight].filter(Boolean).filter(w => avail.includes(w)))]
+      const list = want.length ? want : [avail.includes(400) ? 400 : avail[0]]
+      axis = ':wght@' + list.sort((a, b) => a - b).join(';')
+    } else if (CAT_BY_FAMILY[family]) {
+      axis = ':wght@400;500;600;700'   // bundled fonts: assume the common range
+    }
+    const id = 'gf-' + (family + '-' + (weight || 'x')).replace(/[^a-z0-9]+/gi, '-').toLowerCase()
     if (document.getElementById(id)) return
     const link = document.createElement('link')
     link.id = id
     link.rel = 'stylesheet'
-    // css2 API: spaces → "+"; ask for regular + bold so labels can render weight.
     const fam = encodeURIComponent(family).replace(/%20/g, '+')
-    link.href = `https://fonts.googleapis.com/css2?family=${fam}:wght@400;500;600;700&display=swap`
+    link.href = `https://fonts.googleapis.com/css2?family=${fam}${axis}&display=swap`
     document.head.appendChild(link)
   } catch { /* SSR / blocked — the fallback stack still renders */ }
 }

@@ -23,7 +23,7 @@ import { driveThumbUrl } from '../lib/gdrive'
 import { playDrop } from '../lib/sound'
 import PresenterRemote from '../components/PresenterRemote'
 import FontPicker from '../components/FontPicker'
-import { fontStack, loadFont } from '../lib/fonts'
+import { fontStack, loadFont, ensureLiveCatalog } from '../lib/fonts'
 import { SwatchRow, SwatchButton } from '../components/SwatchPicker'
 import QRCode from '../components/QRCode'
 import { plog, presLog } from '../lib/presDebug'
@@ -612,7 +612,7 @@ function shapeClipShape(shape, halfW, halfH, r) {
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
 function NodeLabel({ label, halfW, halfH, fontSize, textColor, fontFamily, fontWeight }) {
-  useEffect(() => { if (fontFamily) loadFont(fontFamily) }, [fontFamily])
+  useEffect(() => { if (fontFamily) loadFont(fontFamily, fontWeight) }, [fontFamily, fontWeight])
   return (
     <foreignObject x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
@@ -1394,6 +1394,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     })
     return () => setViewActions({})
   }, [setViewActions, readOnly])
+  useEffect(() => { ensureLiveCatalog() }, [])   // start loading the full live Google Fonts catalog
   useEffect(() => {
     // Distinguish leaving the DECK's fullscreen (Esc on the presentation → end it) from leaving a NESTED
     // video's fullscreen (a clip played fullscreen, then closed → we must stay in the presentation, NOT

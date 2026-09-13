@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { GOOGLE_FONTS, FONT_CATEGORIES, fontStack, loadFont } from '../lib/fonts'
+import { FONT_CATEGORIES, fontStack, loadFont, getCatalog, subscribeCatalog, ensureLiveCatalog, isLiveCatalog, weightsFor } from '../lib/fonts'
+
+const WEIGHT_LABEL = { 100: 'Thin', 200: 'ExtraLight', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semibold', 700: 'Bold', 800: 'Extrabold', 900: 'Black' }
 
 // A Google-Fonts-style picker: search box + category filter chips + a scrolling list where every row
 // previews itself in its own font. Fonts load lazily (only when a row scrolls into view) so opening the
@@ -31,19 +33,31 @@ function tagsFor(f) {
 export default function FontPicker({ value, onPick, onClose, title = 'Font', weight, onSetWeight }) {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
+  const [catalog, setCatalog] = useState(getCatalog())
+  const [live, setLive] = useState(isLiveCatalog())
 
-  // Preload the currently-selected font so its row (and the "Current:" line) render correctly right away.
-  useEffect(() => { if (value) loadFont(value) }, [value])
+  // Load the full live Google Fonts catalog (once), and re-render when it arrives.
+  useEffect(() => {
+    ensureLiveCatalog()
+    const unsub = subscribeCatalog(c => { setCatalog(c); setLive(isLiveCatalog()) })
+    return unsub
+  }, [])
+
+  // Preload the currently-selected font so its row (and the weight previews) render correctly right away.
+  useEffect(() => { if (value) loadFont(value, weight) }, [value, weight])
 
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return GOOGLE_FONTS.filter(f =>
+    return catalog.filter(f =>
       (cat === 'all' || f.category === cat) &&
       // Match the family name OR its category/tags, so typing "serif", "mono", "script", "hand", "slab"…
       // filters like Google's tag search does.
       (!needle || f.family.toLowerCase().includes(needle) || tagsFor(f).some(t => t.includes(needle)))
     )
-  }, [q, cat])
+  }, [q, cat, catalog])
+
+  // Weight options: the selected font's actual shipped weights (from the live catalog), else a common set.
+  const weightOpts = useMemo(() => (value ? weightsFor(value) : [300, 400, 500, 600, 700]).map(w => [w, WEIGHT_LABEL[w] || String(w)]), [value, catalog])
 
   return (
     <div onMouseDown={onClose} onContextMenu={e => e.preventDefault()}
@@ -85,7 +99,7 @@ export default function FontPicker({ value, onPick, onClose, title = 'Font', wei
         {onSetWeight && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', padding: '0 12px 8px' }}>
             <span style={{ fontSize: 10.5, color: '#8090b8', marginRight: 2 }}>Weight</span>
-            {WEIGHTS.map(([w, lbl]) => {
+            {weightOpts.map(([w, lbl]) => {
               const on = (weight || 400) === w
               return (
                 <button key={w} title={lbl} onClick={() => onSetWeight(w)}
@@ -102,14 +116,19 @@ export default function FontPicker({ value, onPick, onClose, title = 'Font', wei
           {list.length === 0 && (
             <div style={{ color: '#8090b8', fontSize: 13, textAlign: 'center', padding: '24px 12px' }}>No fonts match "{q}".</div>
           )}
-          {list.map(f => (
+          {list.slice(0, 300).map(f => (
             <FontRow key={f.family} family={f.family} category={f.category} selected={f.family === value}
               onPick={() => { onPick?.(f.family); onClose?.() }} />
           ))}
+          {list.length > 300 && (
+            <div style={{ color: '#7080a0', fontSize: 12, textAlign: 'center', padding: '12px' }}>
+              +{list.length - 300} more — search or pick a category to narrow.
+            </div>
+          )}
         </div>
 
         <div style={{ padding: '6px 12px', borderTop: '1px solid #23283f', fontSize: 11, color: '#7080a0' }}>
-          {list.length} font{list.length === 1 ? '' : 's'} · from Google Fonts
+          {list.length} font{list.length === 1 ? '' : 's'} · {live ? 'full Google Fonts catalog' : 'loading full catalog…'}
         </div>
       </div>
     </div>
