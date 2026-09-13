@@ -5,7 +5,30 @@ import { GOOGLE_FONTS, FONT_CATEGORIES, fontStack, loadFont } from '../lib/fonts
 // previews itself in its own font. Fonts load lazily (only when a row scrolls into view) so opening the
 // picker doesn't fire hundreds of network requests. `value` = currently chosen family (or null/'' for the
 // app default). onPick(family|null) applies; onClose dismisses.
-export default function FontPicker({ value, onPick, onClose, title = 'Font' }) {
+const WEIGHTS = [[300, 'Light'], [400, 'Regular'], [500, 'Medium'], [600, 'Semibold'], [700, 'Bold'], [800, 'Extrabold']]
+
+// Extra searchable tags per font — its Google category plus common synonyms and name-derived traits
+// (slab, condensed, mono, script…), so the search box works like Google Fonts' tag filtering.
+const CAT_TAGS = {
+  'sans-serif': ['sans', 'sans-serif', 'sans serif', 'grotesque', 'grotesk', 'geometric'],
+  'serif': ['serif', 'roman', 'slab'],
+  'display': ['display', 'decorative', 'poster', 'headline', 'bold'],
+  'handwriting': ['handwriting', 'hand', 'script', 'cursive', 'calligraphy', 'brush', 'signature'],
+  'monospace': ['mono', 'monospace', 'code', 'typewriter', 'fixed'],
+}
+function tagsFor(f) {
+  const tags = [...(CAT_TAGS[f.category] || [])]
+  const n = f.family.toLowerCase()
+  if (n.includes('slab')) tags.push('slab')
+  if (n.includes('condensed') || n.includes('narrow')) tags.push('condensed', 'narrow')
+  if (n.includes('mono')) tags.push('mono')
+  if (n.includes('script')) tags.push('script')
+  if (n.includes('hand')) tags.push('hand', 'handwriting')
+  if (n.includes('display')) tags.push('display')
+  return tags
+}
+
+export default function FontPicker({ value, onPick, onClose, title = 'Font', weight, onSetWeight }) {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
 
@@ -16,7 +39,9 @@ export default function FontPicker({ value, onPick, onClose, title = 'Font' }) {
     const needle = q.trim().toLowerCase()
     return GOOGLE_FONTS.filter(f =>
       (cat === 'all' || f.category === cat) &&
-      (!needle || f.family.toLowerCase().includes(needle))
+      // Match the family name OR its category/tags, so typing "serif", "mono", "script", "hand", "slab"…
+      // filters like Google's tag search does.
+      (!needle || f.family.toLowerCase().includes(needle) || tagsFor(f).some(t => t.includes(needle)))
     )
   }, [q, cat])
 
@@ -55,6 +80,22 @@ export default function FontPicker({ value, onPick, onClose, title = 'Font' }) {
                 color: cat === c.id ? '#dbe4ff' : '#9aa8d8' }}>{c.label}</button>
           ))}
         </div>
+
+        {/* Weight selector (applies to the node label live) */}
+        {onSetWeight && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', padding: '0 12px 8px' }}>
+            <span style={{ fontSize: 10.5, color: '#8090b8', marginRight: 2 }}>Weight</span>
+            {WEIGHTS.map(([w, lbl]) => {
+              const on = (weight || 400) === w
+              return (
+                <button key={w} title={lbl} onClick={() => onSetWeight(w)}
+                  style={{ borderRadius: 6, padding: '3px 9px', fontSize: 11.5, fontWeight: w, cursor: 'pointer',
+                    border: `1px solid ${on ? '#5b6af0' : '#2a3358'}`, background: on ? '#1e2547' : 'transparent',
+                    color: on ? '#dbe4ff' : '#9aa8d8' }}>{lbl}</button>
+              )
+            })}
+          </div>
+        )}
 
         {/* List */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', borderTop: '1px solid #23283f' }}>

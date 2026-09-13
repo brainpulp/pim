@@ -611,14 +611,14 @@ function shapeClipShape(shape, halfW, halfH, r) {
 // â"€â"€ Label rendering (foreignObject for word-wrap) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Best practice: use HTML foreignObject inside SVG for text wrapping.
 // It scales correctly with SVG zoom transforms in all modern browsers.
-function NodeLabel({ label, halfW, halfH, fontSize, textColor, fontFamily }) {
+function NodeLabel({ label, halfW, halfH, fontSize, textColor, fontFamily, fontWeight }) {
   useEffect(() => { if (fontFamily) loadFont(fontFamily) }, [fontFamily])
   return (
     <foreignObject x={-halfW} y={-halfH} width={halfW * 2} height={halfH * 2}
       style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        width: '100%', height: '100%',
+        width: '100%', height: '100%', fontWeight: fontWeight || undefined,
         color: textColor || '#fff', fontSize, fontFamily: fontStack(fontFamily) || '-apple-system, sans-serif',
         wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.25,
         overflow: 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
@@ -6839,7 +6839,7 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
 
   // Copy-style / paste-style: transfer a node's LOOK (colours, font, border, shadow, motion, shape) to
   // other nodes. Structural shapes (frame / 3d) are never pasted — those change what a node IS, not its style.
-  const STYLE_COPY_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'fontFamily', 'fontScale', 'shadow', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle', 'opacity', 'borderBlur']
+  const STYLE_COPY_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'fontFamily', 'fontWeight', 'fontScale', 'shadow', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle', 'opacity', 'borderBlur']
   const copyNodeStyle = (id) => {
     const vp = getVP(id) || {}
     const s = {}
@@ -9276,8 +9276,10 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
         return (
           <FontPicker
             value={vpF.fontFamily || null}
+            weight={vpF.fontWeight}
             title={applyIds.length > 1 ? `Font · ${applyIds.length} nodes` : 'Font'}
             onPick={family => { pushUndo(); applyIds.forEach(id => setNodeViewProp(id, 'fontFamily', family || null)); if (family) loadFont(family) }}
+            onSetWeight={w => { pushUndo(); applyIds.forEach(id => setNodeViewProp(id, 'fontWeight', w)) }}
             onClose={() => setFontPickerNode(null)}
           />
         )
@@ -13808,10 +13810,10 @@ function NodeShape({ node, viewProps, isSelected, isHovered, isDropTarget, autoE
         {!editing && shape !== '3d' && (
           hasInlineImages ? (
             <g transform={`translate(${textCenterX.toFixed(1)},${textCenterY.toFixed(1)})`}>
-              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} />
+              <NodeLabel label={node.label} halfW={textHalfW} halfH={textHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} fontWeight={viewProps.fontWeight} />
             </g>
           ) : (
-            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} />
+            <NodeLabel label={node.label} halfW={labelHalfW} halfH={labelHalfH} fontSize={fontSize} textColor={viewProps.textColor || '#fff'} fontFamily={viewProps.fontFamily} fontWeight={viewProps.fontWeight} />
           )
         )}
         {!editing && shape === '3d' && (
