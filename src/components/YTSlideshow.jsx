@@ -1,0 +1,1814 @@
+// YouTube slideshow — a node carrying an ordered list of YouTube clips (node.ytss.clips), each with a
+// trim (start/end) and a trigger (auto / after a delay / on click-or-key). Rendered as a CLEAN player
+// (no YouTube chrome before/after a clip plays — a poster covers it). The inspector edits clips and
+// PREVIEWS on the node itself (no separate mini-screen); trimming scrubs the node live.
+//
+// Built on the YouTube IFrame Player API so play/pause/seek/duration/ended are all first-class — the
+// graph's arrow-key control just calls the same player handle exposed here via `onReady`.
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { driveEmbedUrl, driveThumbUrl } from '../lib/gdrive'
+import { fsArrowAction } from '../lib/slideshowNav'
+import { plog } from '../lib/presDebug'
+import { SwatchButton } from './SwatchPicker'
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+export const parseYoutubeId = (str) => {
+  const s = String(str || '').trim()
+  const m = s.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/)
+  if (m) return m[1]
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s
+  return null
+}
+export const ytThumb = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+// Format seconds as m:ss, or m:ss.d with `dec` decimal places for frame-ish precision.
+export const fmtTime = (sec, dec = 0) => {
+  const total = Math.max(0, sec || 0)
+  if (dec <= 0) { const s = Math.round(total); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+  let whole = Math.floor(total)
+  let frac = Math.round((total - whole) * 10 ** dec)
+  if (frac >= 10 ** dec) { whole += 1; frac = 0 }
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}.${String(frac).padStart(dec, '0')}`
+}
+// Parse "m:ss", "m:ss.d", "ss", or "ss.d" → seconds (float). null if unparseable.
+export const parseTime = (str) => {
+  const t = String(str || '').trim()
+  if (/^\d+(\.\d+)?$/.test(t)) return parseFloat(t)
+  const m = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/)
+  if (m) return (+m[1]) * 60 + parseFloat(m[2])
+  return null
+}
+
+// ── Crisp inline-SVG icons (centered reliably inside a flex button, unlike emoji glyphs) ──────
+function Icon({ name, size = 15 }) {
+  const p = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', style: { display: 'block' } }
+  switch (name) {
+    case 'play':   return <svg {...p} fill="currentColor" stroke="none"><path d="M8 5.5v13l11-6.5z" /></svg>
+    case 'pause':  return <svg {...p} fill="currentColor" stroke="none"><rect x="6.5" y="5.5" width="3.5" height="13" rx="1" /><rect x="14" y="5.5" width="3.5" height="13" rx="1" /></svg>
+    case 'prev':   return <svg {...p}><path d="M14.5 6l-6 6 6 6" /></svg>
+    case 'next':   return <svg {...p}><path d="M9.5 6l6 6-6 6" /></svg>
+    case 'edit':   return <svg {...p}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M14 6l4 4" /></svg>
+    case 'full':   return <svg {...p}><path d="M4 9V5a1 1 0 0 1 1-1h4" /><path d="M20 9V5a1 1 0 0 0-1-1h-4" /><path d="M4 15v4a1 1 0 0 0 1 1h4" /><path d="M20 15v4a1 1 0 0 1-1 1h-4" /></svg>
+    case 'replay': return <svg {...p}><path d="M4 12a8 8 0 1 0 3-6.2" /><path d="M4 4v4h4" /></svg>
+    case 'close':  return <svg {...p}><path d="M6 6l12 12M18 6L6 18" /></svg>
+    case 'add':    return <svg {...p}><path d="M12 5v14M5 12h14" /></svg>
+    case 'trash':  return <svg {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>
+    case 'extract':return <svg {...p}><path d="M7 17L17 7" /><path d="M8 7h9v9" /></svg>
+    case 'copy':   return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
+    case 'drag':   return <svg {...p} fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
+    default:       return null
+  }
+}
+// A round icon button — the SVG sits dead-center because it's a flex child with equal box on all sides.
+function IconBtn({ name, title, onClick, size = 26, tone = 'default' }) {
+  const bg = tone === 'ghost' ? 'transparent' : '#12122aee'
+  const bd = tone === 'ghost' ? 'transparent' : '#5b6af0'
+  const col = tone === 'danger' ? '#f87171' : '#c5d0ff'
+  return (
+    <button title={title} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onClick?.(e) }}
+      style={{ pointerEvents: 'auto', width: size, height: size, padding: 0, borderRadius: '50%', background: bg, border: `1px solid ${bd}`, color: col, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
+      <Icon name={name} size={Math.round(size * 0.56)} />
+    </button>
+  )
+}
+
+// ── YouTube IFrame API loader (shared, once) ─────────────────────────────────
+let ytApiPromise = null
+function loadYTApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT)
+  if (ytApiPromise) return ytApiPromise
+  ytApiPromise = new Promise((resolve) => {
+    const prev = window.onYouTubeIframeAPIReady
+    window.onYouTubeIframeAPIReady = () => { prev?.(); resolve(window.YT) }
+    const tag = document.createElement('script')
+    tag.src = 'https://www.youtube.com/iframe_api'
+    document.head.appendChild(tag)
+  })
+  return ytApiPromise
+}
+
+// A single reusable YT player. Exposes an imperative handle via onReady(api). `clip` = {youtubeId,start,end}.
+// While not playing, a poster (thumbnail) covers the iframe so no YouTube UI shows. On end, calls onEnded.
+export function YTPlayer({ clip, autoplay = false, muted = false, captions = false, loop = false, interactive = true, externalControl = false, coverOnPause = false, onReady, onEnded, onStateChange, style }) {
+  const coverOnPauseRef = useRef(coverOnPause); coverOnPauseRef.current = coverOnPause
+  const holderRef = useRef(null)
+  const playerRef = useRef(null)
+  const [ready, setReady] = useState(false)
+  const [covered, setCovered] = useState(true)   // poster over the player until it actually plays
+  const clipRef = useRef(clip); clipRef.current = clip
+  const loopRef = useRef(loop); loopRef.current = loop
+  const cbRef = useRef({}); cbRef.current = { onReady, onEnded, onStateChange }
+  const waitingRef = useRef(false)         // paused at a stop marker, waiting for → / resume
+  const consumedRef = useRef(new Set())    // stop-marker ids already released this playthrough
+  const lastTRef = useRef(0)
+  const lastRateRef = useRef(1)
+  const seenRef = useRef(new Set())   // pause-marker ids already encountered this playthrough
+  const ytFreshRef = useRef('')       // youtubeId|start — only a change here reloads (end/speed edits don't)
+
+  useEffect(() => {
+    let dead = false
+    loadYTApi().then((YT) => {
+      if (dead || !holderRef.current) return
+      const c = clipRef.current || {}
+      playerRef.current = new YT.Player(holderRef.current, {
+        videoId: c.youtubeId || undefined,
+        playerVars: {
+          controls: 0, disablekb: 1, modestbranding: 1, rel: 0, iv_load_policy: 3,
+          fs: 0, playsinline: 1, start: Math.round(c.start || 0),
+          ...(c.end ? { end: Math.round(c.end) } : {}),
+          ...(captions ? { cc_load_policy: 1, cc_lang_pref: 'en' } : {}),
+          origin: window.location.origin,
+        },
+        events: {
+          onReady: (e) => {
+            setReady(true)
+            if (muted) e.target.mute()
+            if (c.speed && c.speed !== 1) { try { e.target.setPlaybackRate(c.speed) } catch { /* */ } }
+            if (autoplay) { e.target.playVideo() }
+            cbRef.current.onReady?.(makeHandle(e.target))
+          },
+          onStateChange: (e) => {
+            // 1 = playing → drop the poster; 0 = ended → loop or advance; 2 = paused
+            if (e.data === 1) setCovered(false)
+            // Paused → re-cover with our poster so YouTube's pause/end overlay (share, watch-later,
+            // related-video cards, YouTube logo) can NEVER show. Gated so the trim editor, which needs
+            // to see the paused frame, is unaffected.
+            if (e.data === 2 && coverOnPauseRef.current) setCovered(true)
+            if (e.data === 0) {
+              if (loopRef.current) { try { e.target.seekTo(Math.round(clipRef.current?.start || 0), true); e.target.playVideo() } catch { /* */ } }
+              else { setCovered(true); cbRef.current.onEnded?.() }
+            }
+            cbRef.current.onStateChange?.(e.data)
+          },
+        },
+      })
+    })
+    return () => { dead = true; try { playerRef.current?.destroy?.() } catch { /* ignore */ } playerRef.current = null }
+  }, []) // eslint-disable-line -- create once; clip changes handled below
+
+  // Build the imperative handle the graph/inspector drives.
+  const makeHandle = (p) => ({
+    play: () => { waitingRef.current = false; try { p.playVideo() } catch { /* */ } },
+    pause: () => { try { p.pauseVideo() } catch { /* */ } },
+    isWaiting: () => waitingRef.current,                                   // paused at a stop marker?
+    resume: () => { waitingRef.current = false; try { p.playVideo() } catch { /* */ } },   // → continue to the next marker/end
+    // While rolling, jump to the next STOP marker and keep playing (consume it so it doesn't pause there);
+    // returns false if there's no marker ahead → the caller advances the clip/slide instead.
+    skipToNextStop: () => {
+      const now = p.getCurrentTime?.() || 0
+      let best = null
+      for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
+      if (!best) return false
+      consumedRef.current.add(best.id); waitingRef.current = false
+      try { p.seekTo(Math.max(0, best.s), true); p.playVideo() } catch { /* */ }
+      return true
+    },
+    // Back = step to the PREVIOUS pause marker within this clip; false when none earlier (caller → prev clip).
+    skipToPrevStop: () => {
+      const now = p.getCurrentTime?.() || 0
+      let best = null
+      for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s < now - 0.6 && (!best || s > best.s)) best = { id: m.id, s } }
+      if (!best) return false
+      consumedRef.current.clear(); seenRef.current.clear(); lastTRef.current = best.s
+      consumedRef.current.add(best.id); waitingRef.current = false
+      try { p.seekTo(Math.max(0, best.s), true); p.playVideo() } catch { /* */ }
+      return true
+    },
+    seekBy: (d) => { try { p.seekTo(Math.max(0, (p.getCurrentTime?.() || 0) + d), true) } catch { /* */ } },
+    seekTo: (t) => { if (t <= (clipRef.current?.start || 0) + 0.5) consumedRef.current.clear(); try { p.seekTo(Math.max(0, t), true) } catch { /* */ } },
+    mute: () => { try { p.mute() } catch { /* */ } },
+    unMute: () => { try { p.unMute() } catch { /* */ } },
+    setRate: (r) => { try { p.setPlaybackRate(r || 1) } catch { /* */ } },
+    duration: () => { try { return p.getDuration?.() || 0 } catch { return 0 } },
+    time: () => { try { return p.getCurrentTime?.() || 0 } catch { return 0 } },
+    loadClip: (cl, play) => {
+      try {
+        const opts = { videoId: cl.youtubeId, startSeconds: Math.round(cl.start || 0), ...(cl.end ? { endSeconds: Math.round(cl.end) } : {}) }
+        setCovered(true)
+        if (play) p.loadVideoById(opts); else p.cueVideoById(opts)
+        try { p.setPlaybackRate(cl.speed || 1) } catch { /* */ }
+      } catch { /* */ }
+    },
+  })
+
+  // Honor the Sound switch (per-clip `muted` OR slideshow master) reactively — the create-once effect only
+  // muted at onReady, so a later toggle was ignored. 'pim-reassert-mute' lets the phone panic-mute hand
+  // control back to this clip's own state instead of blanket-unmuting.
+  useEffect(() => {
+    const apply = () => { const p = playerRef.current; if (!p || !p.mute) return; try { muted ? p.mute() : p.unMute() } catch { /* */ } }
+    apply()
+    window.addEventListener('pim-reassert-mute', apply)
+    return () => window.removeEventListener('pim-reassert-mute', apply)
+  }, [muted, ready])
+
+  // When the clip changes (id/trim), reload it in the existing player. Skipped when the parent drives
+  // clip switching through the handle (externalControl) — avoids a double-load.
+  useEffect(() => {
+    if (externalControl) return
+    if (!ready || !playerRef.current || !clip?.youtubeId) return
+    const p = playerRef.current
+    // Only a NEW video or a new trim-start reloads (which jumps to start). Editing the end or speed applies
+    // in place so the preview head doesn't snap back to the beginning.
+    const fkey = clip.youtubeId + '|' + Math.round(clip.start || 0)
+    if (ytFreshRef.current !== fkey) {
+      ytFreshRef.current = fkey
+      try {
+        const opts = { videoId: clip.youtubeId, startSeconds: Math.round(clip.start || 0), ...(clip.end ? { endSeconds: Math.round(clip.end) } : {}) }
+        setCovered(true)
+        if (autoplay) p.loadVideoById(opts); else p.cueVideoById(opts)
+      } catch { /* */ }
+    }
+    try { p.setPlaybackRate(clip.speed || 1) } catch { /* */ }
+  }, [clip?.youtubeId, clip?.start, clip?.end, clip?.speed]) // eslint-disable-line
+
+  // Marker playback: poll currentTime, apply speed ranges, skip cuts, and pause at pause markers.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const p = playerRef.current; if (!p?.getCurrentTime) return
+      const markers = resolveMarkers(clipRef.current)
+      let t; try { t = p.getCurrentTime() } catch { return }
+      // Speed markers apply continuously, independent of pause/cut and even while covered.
+      const rate = speedAt(t, markers, clipRef.current?.speed || 1)
+      if (rate !== lastRateRef.current) { lastRateRef.current = rate; try { p.setPlaybackRate(rate) } catch { /* */ } }
+      if (!markers.length) { lastTRef.current = t; return }
+      if (waitingRef.current) return   // paused at a pause marker → wait for resume
+      if (t < lastTRef.current - 1) { consumedRef.current.clear(); seenRef.current.clear() }   // rewound/looped → pauses fire again
+      // A pause marker only pauses if the head CROSSES INTO it. One first seen at/behind the head now (e.g.
+      // just dropped there while playing) is auto-consumed, so adding a marker never stops the live preview.
+      for (const m of markers) { if (markerKind(m) === 'pause' && !seenRef.current.has(m.id)) { seenRef.current.add(m.id); if (Math.min(m.s, m.e ?? m.s) <= t + 0.05) consumedRef.current.add(m.id) } }
+      const prevT = lastTRef.current
+      lastTRef.current = t
+      const a = markerAction(t, markers, consumedRef.current, prevT)
+      if (!a) return
+      if (a.type === 'skip') { try { p.seekTo(a.to, true) } catch { /* */ } }
+      else if (a.type === 'stop') { consumedRef.current.add(a.id); waitingRef.current = true; try { p.pauseVideo() } catch { /* */ } }
+    }, 120)
+    return () => clearInterval(iv)
+  }, [])
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <div ref={holderRef} style={{ width: '100%', height: '100%', pointerEvents: interactive ? 'auto' : 'none' }} />
+      {/* Poster hides YouTube's own chrome (big play button, title, end-screen) until/after playback. */}
+      {covered && clip?.youtubeId && (
+        <div onMouseDown={e => { if (interactive) e.stopPropagation() }} onClick={() => { if (interactive) playerRef.current?.playVideo?.() }}
+          style={{ position: 'absolute', inset: 0, background: `#000 center/cover no-repeat url("${ytThumb(clip.youtubeId)}")`,
+            cursor: interactive ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ width: 54, height: 54, borderRadius: '50%', background: 'rgba(12,12,26,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.35)', color: '#fff' }}>
+            <Icon name="play" size={26} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── A slide's kind: youtube | video | audio | image | gdrive (legacy clips with a youtubeId are 'youtube') ──
+export const clipKind = (c) => c?.kind || (c?.driveId ? 'gdrive' : (c?.youtubeId ? 'youtube' : (c?.src ? 'video' : 'youtube')))
+// gdrive embeds are dumb iframes with no JS player API, so they're NOT time-controllable (no trim/markers).
+export const isTimeMedia = (c) => { const k = clipKind(c); return k === 'youtube' || k === 'video' || k === 'audio' }
+
+// The clip an "on previous" overlay text paints over: the nearest EARLIER clip that isn't itself an overlay.
+export const overlayBaseClip = (clips, idx) => {
+  for (let i = (idx || 0) - 1; i >= 0; i--) { const c = clips[i]; if (c && !(clipKind(c) === 'text' && c.overlayPrev)) return c }
+  return null
+}
+
+// Compact trim readout for a slideshow chip: the kept length (end−start) when trimmed to an end,
+// or the start offset alone if only the head is trimmed. null when the clip isn't time-media or
+// has no trim set (its full duration isn't known here for an unselected clip).
+export const chipTrimLabel = (c) => {
+  if (!isTimeMedia(c)) return null
+  const s = c.start || 0, e = c.end || 0
+  if (e > s) return fmtTime(e - s)
+  if (s > 0) return fmtTime(s) + '→'
+  return null
+}
+
+// Inverse trim ("snips"): `cuts` = [{s,e}] time ranges to SKIP. During playback, if the playhead lands
+// inside a cut, jump to its end. Returns the skip target time, or null if the playhead is not in a cut.
+export function cutSkipTarget(t, cuts) {
+  if (!cuts || !cuts.length || t == null) return null
+  for (const c of cuts) {
+    const s = Math.min(c.s, c.e), e = Math.max(c.s, c.e)
+    if (e - s < 0.05) continue
+    if (t >= s - 0.05 && t < e - 0.1) return e
+  }
+  return null
+}
+
+// ── Markers ─────────────────────────────────────────────────────────────────────────────────
+// A marker on a clip is a range [s,e]. Its WIDTH decides whether it's a cut — there is no separate flag:
+//   • a LINE (e ≈ s, zero width) is just a point on the timeline.
+//   • a WIDE marker (e − s ≥ CUT_MIN) is a CUTOUT — that range is skipped during playback.
+// An independent `stop` flag can be set on either: when true, playback PAUSES at `s` until → is pressed.
+//   → a line + stop = a plain pause step · a wide marker = a silent cut · a wide marker + stop = pause,
+//     then skip · a line without stop is inert (the editor never makes one).
+// Legacy `clip.cuts` are read as wide (cut) markers so old shows keep working.
+export const CUT_MIN = 0.1   // a marker at least this wide counts as a range/chunk
+export const isWide = (m) => (Math.max(m.s, m.e ?? m.s) - Math.min(m.s, m.e ?? m.s)) >= CUT_MIN
+// A marker's BEHAVIOR kind: 'cut' (skip the range) | 'pause' (stop until →) | 'speed' (play the range at
+// m.speed). New markers carry `kind`; legacy markers are derived from the old `stop` flag + width so
+// existing shows keep working: a wide marker without stop = cut; a wide marker with stop = pause; a line
+// (zero-width) = pause point.
+export function markerKind(m) {
+  if (m?.kind === 'cut' || m?.kind === 'pause' || m?.kind === 'speed') return m.kind
+  if (isWide(m)) return m?.stop ? 'pause' : 'cut'
+  return 'pause'
+}
+export const isCut = (m) => markerKind(m) === 'cut'   // kept for callers; now kind-based
+export function resolveMarkers(clip) {
+  if (clip?.markers?.length) return clip.markers
+  if (clip?.cuts?.length) return clip.cuts.map((c, i) => ({ id: `cut${i}`, s: c.s, e: c.e, kind: 'cut' }))
+  return []
+}
+
+// Decide what should happen at time `t`. `consumed` = ids of pause markers already released this
+// playthrough (so we don't re-pause after →). `prevT` = the previously-polled time; a pause fires only
+// when the head CROSSES its start (predictable, and dropping a marker at the head never pauses "now").
+// Returns { type:'stop', id } | { type:'skip', to } | null. (Speed is handled by speedAt, not here.)
+export function markerAction(t, markers, consumed, prevT) {
+  if (t == null || !markers || !markers.length) return null
+  const eps = 0.05
+  let best = null
+  for (const m of markers) {
+    if (markerKind(m) !== 'pause' || consumed?.has(m.id)) continue
+    const s = Math.min(m.s, m.e ?? m.s)
+    const from = (prevT != null && prevT <= t) ? prevT - eps : t - 0.4   // span just traversed since last poll
+    if (s > from && s <= t + eps) { if (!best || s < best.s) best = { type: 'stop', id: m.id, s } }
+  }
+  if (best) return best
+  for (const m of markers) {
+    if (markerKind(m) !== 'cut') continue
+    const s = Math.min(m.s, m.e), e = Math.max(m.s, m.e)
+    if (t >= s - eps && t < e - 0.1) return { type: 'skip', to: e }
+  }
+  return null
+}
+
+// Playback rate to apply at time `t`: the speed of the speed-marker under the head, else the clip's base.
+export function speedAt(t, markers, base = 1) {
+  if (t == null || !markers || !markers.length) return base || 1
+  for (const m of markers) {
+    if (markerKind(m) !== 'speed') continue
+    const s = Math.min(m.s, m.e), e = Math.max(m.s, m.e)
+    if (t >= s - 0.02 && t < e) return m.speed || 1
+  }
+  return base || 1
+}
+
+// ── Native <video>/<audio> file player with a YT-compatible handle ────────────────────────────
+function MediaFilePlayer({ clip, kind, autoplay = false, muted = false, interactive = true, onReady, onEnded, style }) {
+  const ref = useRef(null)
+  const clipRef = useRef(clip); clipRef.current = clip   // markers/cuts read live so editing them doesn't reseek
+  const freshKeyRef = useRef('')   // src|start — only a change here reseeks/re-covers (end/speed edits don't)
+  const start = clip.start || 0
+  const end = (clip.end && clip.end > start) ? clip.end : 0
+  // Cover the <video> with its poster frame until playback actually starts — a loading uploaded video
+  // renders BLACK otherwise, which looks like a stuck/blank slide during a presentation.
+  const [covered, setCovered] = useState(true)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    // "fresh" = the source or trim-start changed. Only then do we cover with the poster and seek to start.
+    // Editing the trim END, speed, loop or markers must NOT yank the head back to the start.
+    const fkey = (clip.src || '') + '|' + start
+    const fresh = freshKeyRef.current !== fkey
+    freshKeyRef.current = fkey
+    if (fresh) setCovered(true)   // new clip / new start → cover until it plays
+    el.playbackRate = clip.speed || 1
+    el.loop = !!clip.loop
+    const onPlaying = () => setCovered(false)
+    el.addEventListener('playing', onPlaying)
+    let ended = false, waiting = false, lastT = 0
+    const consumed = new Set()
+    const seen = new Set()   // pause-marker ids already encountered this playthrough
+    const seekStart = () => { consumed.clear(); waiting = false; if (fresh && start) { try { el.currentTime = start } catch { /* not seekable yet */ } } }
+    const onLoaded = () => { seekStart(); el.playbackRate = clip.speed || 1 }
+    let lastRate = 1
+    const onTime = () => {
+      const t = el.currentTime
+      const markers = resolveMarkers(clipRef.current)
+      // Speed ranges apply continuously (even while paused-scrubbing).
+      const rate = speedAt(t, markers, clipRef.current?.speed || 1)
+      if (rate !== lastRate) { lastRate = rate; try { el.playbackRate = rate } catch { /* */ } }
+      if (waiting) return
+      if (t < lastT - 1) { consumed.clear(); seen.clear() }   // rewound/looped → pauses fire again
+      // Auto-consume a pause marker first seen at/behind the head now, so dropping one never stops preview.
+      for (const m of markers) { if (markerKind(m) === 'pause' && !seen.has(m.id)) { seen.add(m.id); if (Math.min(m.s, m.e ?? m.s) <= t + 0.05) consumed.add(m.id) } }
+      const prevT = lastT
+      lastT = t
+      const a = markerAction(t, markers, consumed, prevT)
+      if (a) {
+        if (a.type === 'skip') { try { el.currentTime = a.to } catch { /* */ } return }
+        if (a.type === 'stop') { consumed.add(a.id); waiting = true; el.pause(); return }
+      }
+      if (end && el.currentTime >= end) {
+        if (clip.loop) { try { el.currentTime = start } catch { /* */ } consumed.clear(); el.play().catch(() => {}) }
+        else if (!ended) { ended = true; el.pause(); onEnded?.() }
+      }
+    }
+    const onNativeEnded = () => { if (!clip.loop && !ended) { ended = true; onEnded?.() } }
+    el.addEventListener('loadedmetadata', onLoaded)
+    el.addEventListener('timeupdate', onTime)
+    el.addEventListener('ended', onNativeEnded)
+    if (el.readyState >= 1) onLoaded()
+    // Autoplay: try with the intended sound. A play() promise can reject for two very different reasons
+    // and we must NOT treat them the same:
+    //   • AbortError  → the play was interrupted by a re-render/seek/pause (common during slide
+    //                    transitions). Sound is fine — just retry; muting here is what silenced
+    //                    presentations while preview (a calm single mount) kept its sound.
+    //   • NotAllowedError → the browser genuinely blocked UNMUTED autoplay. Only then fall back to
+    //                    muted so the slide still plays rather than freezing.
+    // If the browser blocks UNMUTED autoplay we must NOT silence the clip for good — that made the first
+    // play of a talk come out muted while a manual replay had sound (the "erratic" bug). Start it muted so
+    // the slide isn't frozen, then restore sound the instant the presenter's next key/click arrives (always
+    // imminent in a driven talk). AbortErrors (a re-render/seek interrupted play) just retry with sound.
+    let gestureUnmute = null
+    const disarmGesture = () => { if (!gestureUnmute) return; window.removeEventListener('pointerdown', gestureUnmute, true); window.removeEventListener('keydown', gestureUnmute, true); gestureUnmute = null }
+    if (autoplay) {
+      el.muted = !!muted
+      const tryPlay = (left) => el.play().then(() => disarmGesture()).catch(err => {
+        if (err && err.name === 'AbortError') { if (left > 0) setTimeout(() => { if (ref.current === el) tryPlay(left - 1) }, 80); return }
+        el.muted = true; el.play().catch(() => {})   // blocked → play muted so the slide isn't stuck…
+        if (!muted && !gestureUnmute) {              // …then bring sound back on the very next user gesture
+          gestureUnmute = () => { el.muted = false; el.play().catch(() => {}); disarmGesture() }
+          window.addEventListener('pointerdown', gestureUnmute, true)
+          window.addEventListener('keydown', gestureUnmute, true)
+        }
+      })
+      tryPlay(4)
+    } else el.muted = !!muted
+    onReady?.({
+      play: () => { waiting = false; el.play().catch(() => {}) }, pause: () => el.pause(),
+      isWaiting: () => waiting,                                        // paused at a stop marker?
+      resume: () => { waiting = false; el.play().catch(() => {}) },    // → continue to the next marker/end
+      // While rolling, jump to the next STOP marker and keep playing (consume it so it doesn't pause there).
+      skipToNextStop: () => {
+        const now = el.currentTime || 0
+        let best = null
+        for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s > now + 0.15 && (!best || s < best.s)) best = { id: m.id, s } }
+        if (!best) return false
+        consumed.add(best.id); waiting = false
+        try { el.currentTime = best.s } catch { /* */ }
+        el.play().catch(() => {})
+        return true
+      },
+      // Back = step to the PREVIOUS pause marker within this clip (so a marked video rewinds one marker,
+      // not a whole clip). Returns false when there's no earlier marker → the caller falls back to prev clip.
+      skipToPrevStop: () => {
+        const now = el.currentTime || 0
+        let best = null
+        for (const m of resolveMarkers(clipRef.current)) { if (markerKind(m) !== 'pause') continue; const s = Math.min(m.s, m.e ?? m.s); if (s < now - 0.6 && (!best || s > best.s)) best = { id: m.id, s } }
+        if (!best) return false
+        consumed.clear(); seen.clear(); waiting = false
+        try { el.currentTime = best.s } catch { /* */ }
+        lastT = best.s; consumed.add(best.id)   // don't immediately re-pause at the marker we landed on
+        el.play().catch(() => {})
+        return true
+      },
+      seekBy: (d) => { try { el.currentTime = Math.max(start, (el.currentTime || 0) + d) } catch { /* */ } },
+      seekTo: (t) => { if (t <= start + 0.5) consumed.clear(); try { el.currentTime = Math.max(0, t) } catch { /* */ } },
+      mute: () => { el.muted = true }, unMute: () => { el.muted = false },
+      setRate: (r) => { el.playbackRate = r || 1 },
+      duration: () => el.duration || 0, time: () => el.currentTime || 0,
+    })
+    return () => { disarmGesture(); el.removeEventListener('playing', onPlaying); el.removeEventListener('loadedmetadata', onLoaded); el.removeEventListener('timeupdate', onTime); el.removeEventListener('ended', onNativeEnded) }
+  }, [clip.src, clip.start, clip.end, clip.speed, clip.loop]) // eslint-disable-line
+
+  // Honor the Sound switch (per-clip `muted` OR the slideshow master) reactively — the load effect above
+  // deliberately doesn't re-run on `muted`, so without this a clip switched to muted mid-play kept its
+  // sound. We SKIP the mount run (the load effect + its autoplay handling own the initial mute, and
+  // unmuting a just-started clip here could make the browser pause it) and only act on later toggles.
+  // 'pim-reassert-mute' lets the phone panic-mute hand control back to each clip's own state.
+  const mutedInitRef = useRef(false)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    if (mutedInitRef.current) el.muted = !!muted     // a real toggle after mount → apply immediately
+    else mutedInitRef.current = true                  // mount → leave the initial state to the load effect
+    const reassert = () => { const e = ref.current; if (e) e.muted = !!muted }
+    window.addEventListener('pim-reassert-mute', reassert)
+    return () => window.removeEventListener('pim-reassert-mute', reassert)
+  }, [muted])
+
+  if (kind === 'audio') {
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%', background: 'linear-gradient(135deg,#1a1f3a,#0e0e1c)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, overflow: 'hidden', ...style }}>
+        <div style={{ width: 84, height: 84, borderRadius: '50%', background: 'rgba(91,106,240,0.18)', border: '1px solid #3a4a8a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c5d0ff' }}>
+          <svg width={40} height={40} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l10-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="16" cy="16" r="3" /></svg>
+        </div>
+        <div style={{ color: '#c5d0ff', fontSize: 13, fontFamily: '-apple-system, sans-serif', maxWidth: '80%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title || 'Audio'}</div>
+        <audio ref={ref} src={clip.src} preload="metadata" style={{ display: 'none' }} />
+      </div>
+    )
+  }
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <video ref={ref} src={clip.src} playsInline preload="auto" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', pointerEvents: interactive ? 'auto' : 'none' }} />
+      {covered && clip.poster && (
+        <div style={{ position: 'absolute', inset: 0, background: `#000 center/contain no-repeat url("${clip.poster}")`, pointerEvents: 'none' }} />
+      )}
+    </div>
+  )
+}
+
+// ── Image slide: shown for `duration` seconds, then "ends" so the show can advance ────────────
+function ImageSlide({ clip, autoplay = false, onReady, onEnded, style }) {
+  const timer = useRef(null)
+  const remaining = useRef((clip.duration || 5) * 1000)
+  const startedAt = useRef(0)
+  useEffect(() => {
+    const arm = (ms) => { clearTimeout(timer.current); startedAt.current = Date.now(); timer.current = setTimeout(() => onEnded?.(), ms) }
+    if (autoplay && !clip.loop) arm((clip.duration || 5) * 1000)
+    onReady?.({
+      play: () => { if (!clip.loop) arm(remaining.current) },
+      pause: () => { clearTimeout(timer.current); remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt.current)) },
+      seekBy: () => {}, seekTo: () => {}, mute: () => {}, unMute: () => {}, setRate: () => {},
+      duration: () => clip.duration || 5, time: () => 0,
+    })
+    return () => clearTimeout(timer.current)
+  }, [clip.src, clip.duration, clip.loop, autoplay]) // eslint-disable-line
+  // Keep the image's canvas look: full blur, contour (edge) blur, colour tint, opacity.
+  const b = clip.blur || 0, eb = clip.edgeBlur || 0, op = clip.opacity == null ? 1 : clip.opacity
+  const tint = clip.tint && clip.tint.amount > 0 ? clip.tint : null
+  const feather = eb > 0 ? {
+    WebkitMaskImage: `linear-gradient(to right, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent), linear-gradient(to bottom, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent)`,
+    maskImage: `linear-gradient(to right, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent), linear-gradient(to bottom, transparent, #000 ${eb}px, #000 calc(100% - ${eb}px), transparent)`,
+    WebkitMaskComposite: 'source-in', maskComposite: 'intersect',
+  } : null
+  // Reframe: an optional per-clip scale+pan applied over the base `contain` fit. z = zoom (both ways:
+  // <1 shrinks the image within the slide, >1 fills/crops), x/y = pan in % of the frame. Absent frame →
+  // identical to the old plain `contain` render.
+  const fr = clip.frame
+  const frameTf = (fr && ((fr.z && fr.z !== 1) || fr.x || fr.y))
+    ? { transform: `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`, transformOrigin: 'center center' }
+    : null
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`,
+        filter: b ? `blur(${b}px)` : 'none', opacity: op, ...(frameTf || {}), ...(feather || {}) }} />
+      {tint && <div style={{ position: 'absolute', inset: 0, background: tint.color, opacity: tint.amount, mixBlendMode: 'color', pointerEvents: 'none' }} />}
+    </div>
+  )
+}
+
+// ── Reframe control (inspector): drag inside the mini-preview to PAN, slider to ZOOM. Fully
+//    self-contained — it only patches `clip.frame`, so it can't disturb any canvas gesture. ──
+function ImageReframe({ clip, onPatch }) {
+  const fr = clip.frame || { z: 1, x: 0, y: 0 }
+  const boxRef = useRef(null)
+  const onDown = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const box = boxRef.current; if (!box) return
+    const w = box.clientWidth || 210, h = box.clientHeight || 118
+    const z = fr.z || 1
+    const sx = e.clientX, sy = e.clientY, ox = fr.x || 0, oy = fr.y || 0
+    // Text needs to travel much further than an image (change registration — push it to any edge/corner or
+    // even fully off), so give it a generous range; an image only needs to reframe within its own bounds.
+    const LIM = clipKind(clip) === 'text' ? 500 : 120
+    const move = (me) => {
+      // Track the cursor 1:1: on-screen pan = x% · z, so divide the pixel delta by z.
+      const nx = ox + ((me.clientX - sx) / w) * 100 / z
+      const ny = oy + ((me.clientY - sy) / h) * 100 / z
+      onPatch({ frame: { z, x: Math.max(-LIM, Math.min(LIM, nx)), y: Math.max(-LIM, Math.min(LIM, ny)) } })
+    }
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  const setZoom = (z) => onPatch({ frame: { z, x: fr.x || 0, y: fr.y || 0 } })
+  const framed = (fr.z && fr.z !== 1) || fr.x || fr.y
+  const tf = `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 11, color: '#aeb8ff', fontWeight: 600 }}>Reframe <span style={{ color: '#7d84a4', fontWeight: 400 }}>drag to pan</span></span>
+        {framed ? <button onClick={() => onPatch({ frame: undefined })} style={{ background: 'transparent', border: 'none', color: '#8fa0d8', cursor: 'pointer', fontSize: 10.5, textDecoration: 'underline' }}>Reset</button> : null}
+      </div>
+      <div ref={boxRef} onMouseDown={onDown} title="Drag to reposition within the slide"
+        style={{ position: 'relative', width: '100%', height: 118, borderRadius: 6, overflow: 'hidden', cursor: 'grab', background: clipKind(clip) === 'text' && clip.overlayPrev ? '#111' : '#000', border: '1px solid #2a3358', userSelect: 'none' }}>
+        {clipKind(clip) === 'text'
+          ? <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: clip.align === 'left' ? 'flex-start' : clip.align === 'right' ? 'flex-end' : 'center', background: clip.overlayPrev ? 'transparent' : (clip.bg || '#0c0c1a'), transform: tf, transformOrigin: 'center center', pointerEvents: 'none' }}>
+              <div style={{ maxWidth: '92%', padding: '0 6px', color: clip.color || '#e8ecff', fontWeight: clip.bold === false ? 400 : 600, fontSize: 13, textAlign: clip.align || 'center', lineHeight: 1.2, overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{(clip.text || 'Text').slice(0, 90)}</div>
+            </div>
+          : <div style={{ position: 'absolute', inset: 0, background: `center/contain no-repeat url("${clip.src}")`, transform: tf, transformOrigin: 'center center', pointerEvents: 'none' }} />}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ fontSize: 11, color: '#8fa0d8' }}>Zoom</span>
+        <input type="range" min={0.25} max={4} step={0.02} value={fr.z || 1} onChange={e => setZoom(parseFloat(e.target.value))}
+          style={{ flex: 1, accentColor: '#5b6af0', cursor: 'pointer' }} />
+        <span style={{ fontSize: 10.5, color: '#c5d0ff', minWidth: 30, textAlign: 'right' }}>{(fr.z || 1).toFixed(2)}×</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Text step: a full-frame text card (headline / caption / quote). Timed exactly like an image step. ──
+// Text size is in `cqh` (container-height %) so it looks identical inline on the node and fullscreen.
+function TextSlide({ clip, autoplay = false, onReady, onEnded, style }) {
+  const timer = useRef(null)
+  const remaining = useRef((clip.duration || 5) * 1000)
+  const startedAt = useRef(0)
+  useEffect(() => {
+    const arm = (ms) => { clearTimeout(timer.current); startedAt.current = Date.now(); timer.current = setTimeout(() => onEnded?.(), ms) }
+    if (autoplay && !clip.loop) arm((clip.duration || 5) * 1000)
+    onReady?.({
+      play: () => { if (!clip.loop) arm(remaining.current) },
+      pause: () => { clearTimeout(timer.current); remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt.current)) },
+      seekBy: () => {}, seekTo: () => {}, mute: () => {}, unMute: () => {}, setRate: () => {},
+      duration: () => clip.duration || 5, time: () => 0,
+    })
+    return () => clearTimeout(timer.current)
+  }, [clip.text, clip.duration, clip.loop, autoplay]) // eslint-disable-line
+  const align = clip.align || 'center'
+  const justify = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+  // Reframe: scale + pan the text block within the slide (both ways, like images). Absent → unchanged.
+  const fr = clip.frame
+  const frameTf = (fr && ((fr.z && fr.z !== 1) || fr.x || fr.y))
+    ? { transform: `scale(${fr.z || 1}) translate(${fr.x || 0}%, ${fr.y || 0}%)`, transformOrigin: 'center center' }
+    : null
+  // Overlay ("on previous") → transparent ground so the clip underneath shows through.
+  const bg = clip.overlayPrev ? 'transparent' : (clip.bg || '#0c0c1a')
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: bg, overflow: 'hidden', containerType: 'size', ...style }}>
+      {/* The reframe transform rides on a FULL-FRAME layer (not the small text block) so pan % is relative
+          to the slide — the text can be registered anywhere, matching the inspector preview 1:1. */}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: justify, ...(frameTf || {}) }}>
+        <div data-richtext="1" style={{ maxWidth: '90%', maxHeight: '92%', overflow: 'hidden', color: clip.color || '#e8ecff',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: clip.bold === false ? 400 : 600,
+          fontSize: `${clip.fontSize || 9}cqh`, lineHeight: 1.25, textAlign: align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          textShadow: clip.overlayPrev ? '0 1px 6px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.9)' : 'none' }}
+          {...(clip.html ? { dangerouslySetInnerHTML: { __html: clip.html } } : {})}>
+          {clip.html ? undefined : (clip.text || 'Text')}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Rich editor for a text step — opened by double-clicking the step's chip. Edit the text AND style
+//    (bold / italic / underline / inline colour), just like a canvas text box. Stores HTML in clip.html.
+function TextClipEditor({ clip, onPatch, onClose }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current; if (!el) return
+    el.innerHTML = clip.html || (clip.text ? String(clip.text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') : '')
+    el.focus()
+    try { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r) } catch { /* */ }
+  }, []) // eslint-disable-line
+  const sync = () => onPatch({ html: ref.current?.innerHTML || '', text: undefined })
+  const exec = (cmd) => { document.execCommand(cmd, false, null); ref.current?.focus(); sync() }
+  const setColor = (c) => { try { document.execCommand('styleWithCSS', false, true) } catch { /* */ } document.execCommand('foreColor', false, c); ref.current?.focus(); sync() }
+  const align = clip.align || 'center'
+  const justify = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+  const btn = { background: '#232a5c', border: '1px solid #3a4a8a', color: '#dbe4ff', borderRadius: 6, padding: '4px 9px', cursor: 'pointer', fontSize: 13, minWidth: 30, lineHeight: 1.1 }
+  return (
+    <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(4,6,16,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onMouseDown={e => e.stopPropagation()} style={{ width: 'min(720px,92vw)', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.6)', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <button onMouseDown={e => { e.preventDefault(); exec('bold') }} style={{ ...btn, fontWeight: 800 }}>B</button>
+          <button onMouseDown={e => { e.preventDefault(); exec('italic') }} style={{ ...btn, fontStyle: 'italic' }}>I</button>
+          <button onMouseDown={e => { e.preventDefault(); exec('underline') }} style={{ ...btn, textDecoration: 'underline' }}>U</button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8fa0d8', fontSize: 12 }}>Colour <SwatchButton title="Selected text colour" size={20} value={clip.color || '#e8ecff'} onChange={setColor} /></span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8fa0d8', fontSize: 12 }}>BG <SwatchButton title="Slide background" size={20} value={clip.bg || '#0c0c1a'} onChange={c => onPatch({ bg: c })} /></span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#8fa0d8', fontSize: 12 }}>Size
+            <button onMouseDown={e => { e.preventDefault(); onPatch({ fontSize: Math.max(3, (clip.fontSize || 9) - 1) }) }} style={btn}>−</button>
+            <span style={{ minWidth: 22, textAlign: 'center', color: '#c5d0ff' }}>{clip.fontSize || 9}</span>
+            <button onMouseDown={e => { e.preventDefault(); onPatch({ fontSize: Math.min(40, (clip.fontSize || 9) + 1) }) }} style={btn}>+</button></span>
+          {['left', 'center', 'right'].map(a => <button key={a} onMouseDown={e => { e.preventDefault(); onPatch({ align: a }) }} style={{ ...btn, background: align === a ? '#2a3358' : '#232a5c' }}>{a === 'left' ? '⯇' : a === 'right' ? '⯈' : '≡'}</button>)}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#c5d0ff', fontSize: 12, cursor: 'pointer' }}><input type="checkbox" checked={clip.bold !== false} onChange={e => onPatch({ bold: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Bold</label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#c5d0ff', fontSize: 12, cursor: 'pointer' }} title="Show this text on top of the previous clip"><input type="checkbox" checked={!!clip.overlayPrev} onChange={e => onPatch({ overlayPrev: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> On previous</label>
+          <span style={{ flex: 1 }} />
+          <button onClick={onClose} style={{ ...btn, background: '#1f6f43', border: '1px solid #2f9a5f', fontWeight: 700 }}>Done</button>
+        </div>
+        <div style={{ background: clip.bg || '#0c0c1a', borderRadius: 8, minHeight: 180, display: 'flex', alignItems: 'center', justifyContent: justify, padding: '18px 20px', overflow: 'auto' }}>
+          <div ref={ref} data-richtext="1" contentEditable suppressContentEditableWarning
+            onInput={sync} onBlur={sync} onKeyDown={e => e.stopPropagation()}
+            onPaste={e => { e.preventDefault(); const t = e.clipboardData?.getData('text/plain') || ''; document.execCommand('insertText', false, t); sync() }}
+            style={{ maxWidth: '100%', width: '100%', outline: 'none', color: clip.color || '#e8ecff', textAlign: align, fontWeight: clip.bold === false ? 400 : 600, fontSize: Math.max(15, (clip.fontSize || 9) * 2.2), lineHeight: 1.3, fontFamily: '-apple-system, sans-serif', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+        </div>
+        <div style={{ fontSize: 11, color: '#7d84a4' }}>Select text, then B / I / U or the Colour swatch for inline styling. Size, alignment and background apply to the whole slide.</div>
+      </div>
+    </div>
+  )
+}
+
+// ── Google Drive embed: a dumb <iframe> preview. No JS player API, so no seek/trim/markers and no
+// "ended" event — the show advances by click / delay only. Autoplays via the preview URL param. ──
+function GDrivePlayer({ clip, autoplay = false, interactive = true, onReady, style }) {
+  useEffect(() => {
+    onReady?.({
+      play: () => {}, pause: () => {}, seekBy: () => {}, seekTo: () => {},
+      mute: () => {}, unMute: () => {}, setRate: () => {},
+      duration: () => 0, time: () => 0, playing: () => true,
+    })
+  }, [clip.driveId]) // eslint-disable-line
+  return <iframe src={driveEmbedUrl(clip.driveId) + (autoplay ? '?autoplay=1' : '')}
+    style={{ width: '100%', height: '100%', border: 0, display: 'block', background: '#000', pointerEvents: interactive ? 'auto' : 'none', ...style }}
+    allow="autoplay; encrypted-media" allowFullScreen title={clip.title || 'Drive video'} />
+}
+
+// ── Polymorphic slide player: dispatches to the right engine by kind, one uniform handle ──────
+// `baseClip` is only used for an "on previous" text overlay: the previous clip is painted underneath
+// (static, muted, non-interactive) and the transparent text rides on top, driven by the text's own handle.
+export function SlidePlayer({ clip, autoplay = false, muted = false, captions = false, interactive = true, coverOnPause = false, onReady, onEnded, style, baseClip = null }) {
+  const kind = clipKind(clip)
+  if (kind === 'text' && clip.overlayPrev && baseClip) return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', ...style }}>
+      <div style={{ position: 'absolute', inset: 0 }}>
+        <SlidePlayer clip={baseClip} autoplay={false} muted interactive={false} />
+      </div>
+      <div style={{ position: 'absolute', inset: 0 }}>
+        <TextSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} />
+      </div>
+    </div>
+  )
+  if (kind === 'text') return <TextSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
+  if (kind === 'image') return <ImageSlide clip={clip} autoplay={autoplay} onReady={onReady} onEnded={onEnded} style={style} />
+  if (kind === 'gdrive') return <GDrivePlayer clip={clip} autoplay={autoplay} interactive={interactive} onReady={onReady} style={style} />
+  if (kind === 'video' || kind === 'audio') return <MediaFilePlayer clip={clip} kind={kind} autoplay={autoplay} muted={muted} interactive={interactive} onReady={onReady} onEnded={onEnded} style={style} />
+  return <YTPlayer clip={clip} autoplay={autoplay} muted={muted} captions={captions} loop={clip.loop} interactive={interactive} externalControl={false} coverOnPause={coverOnPause} onReady={onReady} onEnded={onEnded} style={style} />
+}
+
+// ── Dual-handle trim slider ───────────────────────────────────────────────────
+// onChange(start, end, which) — `which` is 'start' | 'end', so the caller can scrub the preview to
+// whichever edge is being moved.
+const trimBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '1px 7px', cursor: 'pointer', fontSize: 10.5, whiteSpace: 'nowrap' }
+// Dual-handle trim slider over the WHOLE video (no zoom window — that made the timeline jump around and
+// was more trouble than it was worth). Big, grippy handles with a wide invisible hit area so they're easy
+// to grab. Live preview via onScrub (drag) / onLoop (release).
+function TrimSlider({ start, end, max, playhead, onChange, onScrub, onLoop }) {
+  const trackRef = useRef(null)
+  const [dragging, setDragging] = useState(null)   // 'start' | 'end' | null (which handle is held)
+  const M = Math.max(max || 1, 1)
+  const s = Math.max(0, Math.min(start || 0, M)), e = Math.min(M, (end && end > s) ? end : M)
+  const stateRef = useRef({ s, e, M })
+  stateRef.current = { s, e, M }
+
+  // Snap to 0.1s. Bounds come from the LIVE stateRef (never a stale prop) so start/end can't fight each
+  // other or the preview mid-drag. The track always spans the whole video [0, M].
+  const timeAtClientX = (clientX, scale = stateRef.current.M) => {
+    const r = trackRef.current.getBoundingClientRect()
+    const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
+    return Math.round(frac * scale * 10) / 10
+  }
+  const drag = (which) => (ev0) => {
+    ev0.preventDefault(); ev0.stopPropagation()
+    setDragging(which)
+    const Md = stateRef.current.M   // freeze the time scale for the whole drag
+    const move = (ev) => {
+      const t = timeAtClientX(ev.clientX, Md)
+      const { s: cs, e: ce } = stateRef.current
+      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 0.1)); onChange(nv, ce, 'start'); onScrub?.(nv, 'start') }
+      else { const nv = Math.min(Md, Math.max(t, cs + 0.1)); onChange(cs, nv, 'end'); onScrub?.(nv, 'end') }
+    }
+    const up = () => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      setDragging(null)
+      const { s: cs, e: ce } = stateRef.current
+      onLoop?.(cs, ce)
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  // Click anywhere on the track (not a handle) → seek the preview there WITHOUT changing the trim, so you
+  // can scrub/preview any point, including outside the trimmed region.
+  const seekAt = (ev0) => {
+    if (ev0.button !== 0) return
+    ev0.stopPropagation()
+    onScrub?.(timeAtClientX(ev0.clientX), 'seek')
+  }
+
+  const pct = (t) => Math.max(0, Math.min(1, t / M)) * 100
+  const sPct = pct(s), ePct = pct(e)
+  const phPct = (playhead != null && playhead >= -0.001 && playhead <= M + 0.001) ? pct(playhead) : null
+  const HIT = 22   // half-width of the invisible grab area around each handle (px) — easy to catch
+  return (
+    <div style={{ margin: '4px 8px 2px' }}>
+      <div ref={trackRef} onMouseDown={seekAt} style={{ position: 'relative', height: 34, cursor: 'pointer' }}>
+        <div style={{ position: 'absolute', top: 15, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a2f47' }} />
+        <div style={{ position: 'absolute', top: 15, left: `${sPct}%`, width: `${Math.max(0, ePct - sPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0' }} />
+        {phPct != null && (
+          <div style={{ position: 'absolute', top: 6, left: `calc(${phPct}% - 1px)`, width: 2, height: 22, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 2 }} />
+        )}
+        {[['start', sPct], ['end', ePct]].map(([w, p]) => (
+          // Wide, tall, invisible hit area (easy to grab) wrapping a bigger visible knob with a grip.
+          <div key={w} onMouseDown={drag(w)} title={w === 'start' ? 'Drag to set the start' : 'Drag to set the end'}
+            style={{ position: 'absolute', top: 0, left: `calc(${p}% - ${HIT}px)`, width: HIT * 2, height: 34,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'ew-resize', zIndex: 3 }}>
+            <div style={{ width: 16, height: 26, borderRadius: 5, background: dragging === w ? '#eef1ff' : '#c5d0ff',
+              border: '1.5px solid #5b6af0', boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2.5 }}>
+              <span style={{ width: 1.5, height: 12, background: '#5b6af0', borderRadius: 1, opacity: 0.75 }} />
+              <span style={{ width: 1.5, height: 12, background: '#5b6af0', borderRadius: 1, opacity: 0.75 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, color: '#8fa0d8', marginTop: 3 }}>
+        <span>{fmtTime(s)}–{fmtTime(e)}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Snip ("inverse trim") editor: red bands over the timeline mark ranges to SKIP during playback. ──
+// Full editing surface: drag the red handles on the timeline OR punch exact in/out times in the numeric
+// fields; ⇤/⇥ snap a boundary to the current playhead; ▷ previews the snip; the playhead is shown live.
+// Markers editor: each marker is a range [s,e] with two independent toggles — Cut (skip it) and Stop
+// (pause there until →). Punch exact m:ss.s in/out, drag the handles, ⇤/⇥ snap to the playhead, ▷ preview.
+const newMarkerId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'm' + Math.random().toString(36).slice(2))
+// A downward-pointing triangle grip that sits above the track and points at the marker position.
+const TriGrip = ({ left, color, onMouseDown, title, dim }) => (
+  <div onMouseDown={onMouseDown} title={title}
+    style={{ position: 'absolute', top: -1, left: `calc(${left}% - 6px)`, width: 0, height: 0,
+      borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: `9px solid ${color}`,
+      cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 4, opacity: dim ? 0.85 : 1,
+      filter: dim ? 'none' : 'drop-shadow(0 0 2px rgba(0,0,0,0.5))' }} />
+)
+const MARKER_SPEEDS = [0.25, 0.5, 0.75, 1.25, 1.5, 2]
+// Visual identity per kind: cut = red, pause = amber, speed = violet.
+const kindColor = (k) => k === 'cut' ? '#f87171' : k === 'speed' ? '#a78bfa' : '#ffb454'
+const kindFill = (k) => k === 'cut' ? 'rgba(248,113,113,0.30)' : k === 'speed' ? 'rgba(167,139,250,0.30)' : 'rgba(255,180,84,0.28)'
+function MarkersEditor({ markers = [], max, getTime, playhead, onScrub, onChange, start, end, onTrim }) {
+  const trackRef = useRef(null)
+  const [sel, setSel] = useState(null)   // index of the marker whose numeric fields are shown
+  const [jogT, setJogT] = useState(null)   // live playhead while jogging (dragging the timeline)
+  const M = Math.max(max || 1, 1)
+  const stateRef = useRef({ markers, M }); stateRef.current = { markers, M }
+  const pct = t => Math.max(0, Math.min(1, t / M)) * 100
+  const snap = t => Math.round(Math.max(0, Math.min(M, t)) * 10) / 10   // 0.1s
+  const sorted = (arr) => [...arr].sort((a, b) => Math.min(a.s, a.e) - Math.min(b.s, b.e))
+  const commit = (arr) => onChange(sorted(arr))
+  const setM = (i, patch) => onChange(markers.map((m, j) => j === i ? { ...m, ...patch } : m))
+  const addMarker = () => {   // a PAUSE line at the playhead. Crossing detection means it won't pause the live preview now.
+    const at = snap(getTime?.() ?? M / 2)
+    commit([...(markers || []), { id: newMarkerId(), s: at, e: at, kind: 'pause' }])
+    setSel((markers || []).length)
+  }
+  const addChunk = () => {   // a wide CUT range at the playhead — the base for cut / speed chunks.
+    const at = snap(getTime?.() ?? M / 2); const e = snap(Math.min(M, at + 1.5))
+    commit([...(markers || []), { id: newMarkerId(), s: at, e: Math.max(e, at + CUT_MIN), kind: 'cut' }])
+    setSel((markers || []).length)
+  }
+  // Set a marker's kind. Cut/Speed need width — widen a line into a ~1.5s chunk. Speed gets a default rate.
+  const setKind = (i, kind) => {
+    const m = markers[i]; const s = Math.min(m.s, m.e ?? m.s); let e = Math.max(m.s, m.e ?? m.s)
+    const patch = { kind }
+    if ((kind === 'cut' || kind === 'speed') && (e - s) < CUT_MIN) { e = snap(Math.min(M, s + 1.5)); patch.s = s; patch.e = Math.max(e, s + CUT_MIN) }
+    if (kind === 'speed' && !m.speed) patch.speed = 0.5
+    setM(i, patch)
+  }
+  // Jump the preview to the previous / next marker start relative to the playhead.
+  const gotoAdj = (dir) => {
+    const now = getTime?.() ?? 0
+    const starts = [...new Set(markers.map(m => snap(Math.min(m.s, m.e ?? m.s))))].sort((a, b) => a - b)
+    let target = null
+    if (dir > 0) target = starts.find(s => s > now + 0.08)
+    else { const before = starts.filter(s => s < now - 0.08); target = before.length ? before[before.length - 1] : null }
+    if (target != null) onScrub?.(Math.max(0, target), 'seek')
+  }
+  // Trim (start/end) is drawn on this SAME track when onTrim is provided — one timeline, not two.
+  const hasTrim = typeof onTrim === 'function'
+  const ts = Math.max(0, Math.min(start || 0, M)), te = Math.min(M, (end && end > ts) ? end : M)
+  const trimRef = useRef({ ts, te }); trimRef.current = { ts, te }
+  const dragTrim = (which) => (ev0) => {
+    ev0.preventDefault(); ev0.stopPropagation(); setSel(null)
+    const Md = stateRef.current.M   // FREEZE the time scale for the whole drag — a mid-drag duration
+    const snapM = t => Math.round(Math.max(0, Math.min(Md, t)) * 10) / 10   // refresh must not move the handle
+    const move = ev => {
+      const r = trackRef.current.getBoundingClientRect()
+      const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
+      const t = snapM(frac * Md)
+      const { ts: cs, te: ce } = trimRef.current
+      if (which === 'start') { const nv = Math.max(0, Math.min(t, ce - 0.1)); onTrim(nv, ce >= Md ? 0 : ce); onScrub?.(nv, 'start') }
+      else { const nv = Math.min(Md, Math.max(t, cs + 0.1)); onTrim(cs, nv >= Md ? 0 : nv); onScrub?.(nv, 'end') }
+    }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  // which: 's' = move start edge, 'e' = move end edge, 'move' = slide the whole cut (keeps its width).
+  const dragHandle = (i, which) => (ev0) => {
+    ev0.preventDefault(); ev0.stopPropagation(); setSel(i)
+    const r0 = trackRef.current.getBoundingClientRect()
+    const startX = ev0.clientX
+    const orig = stateRef.current.markers[i]
+    const width = Math.abs((orig.e ?? orig.s) - orig.s)
+    const Md = stateRef.current.M   // freeze the time scale for the whole drag (no mid-drag jumps)
+    const snapM = t => Math.round(Math.max(0, Math.min(Md, t)) * 10) / 10
+    let moved = false
+    const move = ev => {
+      if (Math.abs(ev.clientX - startX) > 3) moved = true
+      const r = trackRef.current?.getBoundingClientRect() || r0
+      const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))
+      const t = snapM(frac * Md)
+      let scrubTo = t
+      onChange(stateRef.current.markers.map((m, j) => {
+        if (j !== i) return m
+        if (which === 's') { scrubTo = Math.min(t, m.e); return { ...m, s: scrubTo } }
+        if (which === 'e') { scrubTo = Math.max(t, m.s); return { ...m, e: scrubTo } }
+        // 'move' — slide the whole cut, keeping its width, clamped to [0, M]
+        let s = Math.max(0, Math.min(Md - width, snapM(t - width / 2)))
+        scrubTo = s
+        return { ...m, s, e: snapM(s + width) }
+      }))
+      onScrub?.(scrubTo, 'seek')   // live preview: see the exact frame at the edge you're dragging
+    }
+    const up = () => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      if (moved) commit(stateRef.current.markers)   // a plain click just selects (handled by setSel above)
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  // JOG: press the empty track and drag to scrub the playhead — the preview follows the cursor live so you
+  // can eyeball the exact frame. A plain click just seeks there. Deselects any marker.
+  const onTrackDown = (ev0) => {
+    if (ev0.button !== 0) return
+    setSel(null)
+    const Md = stateRef.current.M
+    const timeAt = (clientX) => { const r = trackRef.current.getBoundingClientRect(); return snap(Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * Md) }
+    const t0 = timeAt(ev0.clientX); setJogT(t0); onScrub?.(t0, 'seek')
+    const move = ev => { const t = timeAt(ev.clientX); setJogT(t); onScrub?.(t, 'seek') }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); setJogT(null) }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+  const TimeField = ({ value, onCommit, title }) => (
+    <input defaultValue={fmtTime(value, 1)} key={value} title={title}
+      onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.currentTarget.value = fmtTime(value, 1); e.currentTarget.blur() } }}
+      onBlur={e => { const v = parseTime(e.target.value); if (v == null) { e.target.value = fmtTime(value, 1); return } onCommit(snap(v)) }}
+      style={{ width: 54, background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11.5, padding: '2px 4px', outline: 'none', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }} />
+  )
+  const iconBtn = { background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 5, padding: '2px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.5, whiteSpace: 'nowrap' }
+  const ph = jogT != null ? jogT : playhead
+  const phPct = ph != null && ph >= 0 && ph <= M ? pct(ph) : null
+  const selM = sel != null ? markers[sel] : null
+  const H = 26   // full marker height — the middle of a cut is this tall, same as the edges
+  const tsPct = pct(ts), tePct = pct(te)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      {/* One timeline: trim region + markers + playhead. Drag triangle grips to move marker edges, drag a
+          cut's body to slide it, drag the blue brackets to trim. Click empty track to scrub. */}
+      <div ref={trackRef} onMouseDown={onTrackDown}
+        style={{ position: 'relative', height: H + 12, flex: 1, minWidth: 240, cursor: 'pointer' }}>
+        <div style={{ position: 'absolute', top: 9 + H / 2 - 2, left: 0, right: 0, height: 4, borderRadius: 2, background: '#2a3050' }} />
+        {/* Trim: shade the parts OUTSIDE [start,end], and paint the kept span blue. */}
+        {hasTrim && <>
+          {tsPct > 0 && <div style={{ position: 'absolute', top: 9, left: 0, width: `${tsPct}%`, height: H, background: 'rgba(6,6,18,0.6)', borderRadius: '3px 0 0 3px', pointerEvents: 'none' }} />}
+          {tePct < 100 && <div style={{ position: 'absolute', top: 9, left: `${tePct}%`, right: 0, height: H, background: 'rgba(6,6,18,0.6)', borderRadius: '0 3px 3px 0', pointerEvents: 'none' }} />}
+          <div style={{ position: 'absolute', top: 9 + H / 2 - 2, left: `${tsPct}%`, width: `${Math.max(0, tePct - tsPct)}%`, height: 4, borderRadius: 2, background: '#5b6af0', pointerEvents: 'none' }} />
+        </>}
+        {phPct != null && <>
+          <div style={{ position: 'absolute', top: 9, left: `calc(${phPct}% - 1px)`, width: 2, height: H, borderRadius: 1, background: '#ffd166', boxShadow: '0 0 5px rgba(255,209,102,0.9)', pointerEvents: 'none', zIndex: 6 }} />
+          {/* Jog knob at the top of the playhead — drag it (or anywhere on the track) to scrub the frame. */}
+          <div onMouseDown={onTrackDown} title="Drag to jog through the video"
+            style={{ position: 'absolute', top: 0, left: `calc(${phPct}% - 6px)`, width: 12, height: 10, background: '#ffd166', borderRadius: 3, cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 7, boxShadow: '0 0 5px rgba(255,209,102,0.8)' }} />
+        </>}
+        {markers.map((m, i) => {
+          const a = pct(Math.min(m.s, m.e)), bb = pct(Math.max(m.s, m.e)); const wide = isWide(m); const k = markerKind(m)
+          const on = i === sel; const col = kindColor(k)
+          const badge = k === 'cut' ? '✂' : k === 'speed' ? `⏩${(m.speed || 1)}×` : '⏸'
+          return (
+            <div key={m.id || i} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              {wide
+                // Range/chunk: a full-height band (cut = red, pause = amber, speed = violet). Body = slide grip.
+                ? <div onMouseDown={dragHandle(i, 'move')} title={`${k} — drag to slide`}
+                    style={{ position: 'absolute', top: 9, left: `${a}%`, width: `${Math.max(0.4, bb - a)}%`, height: H, borderRadius: 3,
+                      background: kindFill(k), border: `1px solid ${col}`, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : 'none',
+                      cursor: 'grab', pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    <span style={{ fontSize: 11, lineHeight: 1, color: col, pointerEvents: 'none', whiteSpace: 'nowrap' }}>{badge}</span>
+                  </div>
+                // Pause line: a thin vertical bar.
+                : <div onMouseDown={dragHandle(i, 'move')} title="Pause point — drag to move"
+                    style={{ position: 'absolute', top: 9, left: `calc(${a}% - 2px)`, width: 4, height: H, borderRadius: 2,
+                      background: col, boxShadow: on ? '0 0 0 1.5px #c5d0ff' : '0 0 4px rgba(255,180,84,0.7)',
+                      cursor: 'grab', pointerEvents: 'auto' }} />}
+              {/* Triangle grips pointing down at the track */}
+              <TriGrip left={a} color={col} onMouseDown={dragHandle(i, 's')} title="Drag the start" dim={!on} />
+              {wide && <TriGrip left={bb} color={col} onMouseDown={dragHandle(i, 'e')} title="Drag the end" dim={!on} />}
+            </div>
+          )
+        })}
+        {/* Trim brackets — blue, at the BOTTOM edge so they read apart from the marker triangles up top. */}
+        {hasTrim && [['start', tsPct], ['end', tePct]].map(([w, p]) => (
+          <div key={w} onMouseDown={dragTrim(w)} title={w === 'start' ? 'Trim start' : 'Trim end'}
+            style={{ position: 'absolute', bottom: 0, left: `calc(${p}% - 5px)`, width: 10, height: 13, background: '#5b6af0', border: '1px solid #8090ff',
+              borderRadius: w === 'start' ? '0 0 0 4px' : '0 0 4px 0', cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 5 }} />
+        ))}
+      </div>
+      {/* Prev / next marker — jog the playhead between marker starts. */}
+      {onScrub && markers.length > 0 && (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button style={iconBtn} title="Jump to previous marker" onClick={() => gotoAdj(-1)}>◀｜</button>
+          <button style={iconBtn} title="Jump to next marker" onClick={() => gotoAdj(1)}>｜▶</button>
+        </div>
+      )}
+      {/* Selected-marker inline editor: kind (Cut / Pause / Speed) + range fields. */}
+      {selM && (() => {
+        const cs = Math.min(selM.s, selM.e), ce = Math.max(selM.s, selM.e); const k = markerKind(selM)
+        const kindBtn = (val, label) => (
+          <button onClick={() => setKind(sel, val)} title={val === 'cut' ? 'Skip this range' : val === 'pause' ? 'Pause here until →' : 'Play this range at a set speed'}
+            style={{ background: k === val ? kindColor(val) : 'transparent', border: `1px solid ${k === val ? kindColor(val) : '#2d3a6a'}`, color: k === val ? '#0f0f22' : '#9aa8d8', borderRadius: 5, padding: '2px 7px', cursor: 'pointer', fontSize: 11, fontWeight: k === val ? 700 : 500, whiteSpace: 'nowrap' }}>{label}</button>
+        )
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', flexWrap: 'wrap' }}>
+            {kindBtn('cut', '✂ Cut')}{kindBtn('pause', '⏸ Pause')}{kindBtn('speed', '⏩ Speed')}
+            {k === 'speed' && (
+              <select value={selM.speed || 0.5} onChange={e => setM(sel, { speed: parseFloat(e.target.value) })}
+                onMouseDown={e => e.stopPropagation()}
+                style={{ background: '#0f0f22', border: '1px solid #2d3a6a', borderRadius: 5, color: '#dbe4ff', fontSize: 11, padding: '2px 4px' }}>
+                {MARKER_SPEEDS.map(r => <option key={r} value={r}>{r}×</option>)}
+              </select>
+            )}
+            <TimeField value={cs} title="Start (m:ss.s)" onCommit={v => setM(sel, { s: Math.min(v, ce) })} />
+            {getTime && <button style={iconBtn} title="Set start to the playhead" onClick={() => setM(sel, { s: Math.min(snap(getTime()), ce) })}>⇤</button>}
+            <span style={{ color: '#7c86ad' }}>–</span>
+            <TimeField value={ce} title="End (m:ss.s)" onCommit={v => setM(sel, { e: Math.max(v, cs) })} />
+            {getTime && <button style={iconBtn} title="Set end to the playhead" onClick={() => setM(sel, { e: Math.max(snap(getTime()), cs) })}>⇥</button>}
+            {onScrub && <button style={iconBtn} title="Preview from just before this marker" onClick={() => onScrub(Math.max(0, cs - 1), 'seek')}>▷</button>}
+            <button onClick={() => { commit(markers.filter((_, j) => j !== sel)); setSel(null) }} style={{ ...trimBtn, color: '#f0a0a0', borderColor: '#5a2a3a', padding: '2px 7px' }}>✕</button>
+          </div>
+        )
+      })()}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={addMarker} title="Drop a pause marker at the playhead (won't interrupt the running preview)"
+          style={{ background: '#232a5c', border: '1px solid #4a5bb8', color: '#dbe4ff', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>＋ Pause</button>
+        <button onClick={addChunk} title="Drop a range/chunk at the playhead — switch it to Cut, Pause or Speed"
+          style={{ background: 'transparent', border: '1px solid #4a5bb8', color: '#aeb8ff', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>＋ Chunk</button>
+      </div>
+    </div>
+  )
+}
+
+// A chevron-collapsible section (used for the optional "Cuts" UI).
+function Collapsible({ label, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', color: '#9fb0e8', cursor: 'pointer', fontSize: 11.5, padding: '2px 0', width: '100%' }}>
+        <span style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s', display: 'inline-block' }}>▸</span>
+        {label}
+      </button>
+      {open && <div style={{ paddingTop: 2 }}>{children}</div>}
+    </div>
+  )
+}
+
+// ── Inspector: clips column (drag to reorder) + trim + triggers. Preview happens on the NODE. ────
+export function YTSlideshowInspector({ clips, anchor, onChange, onClose, onExtract, preview, fullscreen, onToggleFullscreen, transition = 'fade', fadeMs = 1000, onSetTransition, onSetFadeMs, sound, onToggleSound, captions, onToggleCaptions, onUpload, onPickDrive, onReplaceClipFile }) {
+  const [sel, setSel] = useState(0)
+  const [editTextIdx, setEditTextIdx] = useState(null)   // a text step opened for rich editing (double-click)
+  const [urlInput, setUrlInput] = useState('')
+  const [dur, setDur] = useState(0)
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dropIdx, setDropIdx] = useState(null)
+  const rowsRef = useRef(null)
+  const cur = clips[sel] || null
+  const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2))
+  const patch = (i, p) => onChange(clips.map((c, j) => j === i ? { ...c, ...p } : c))
+
+  const addUrl = () => {
+    const id = parseYoutubeId(urlInput)
+    if (!id) { alert('Not a YouTube link/ID.'); return }
+    onChange([...clips, { id: uid(), kind: 'youtube', youtubeId: id, title: '', start: 0, end: 0, trigger: 'click', delayMs: 1500 }])
+    setUrlInput(''); setSel(clips.length)
+  }
+  const addText = () => {
+    onChange([...clips, { id: uid(), kind: 'text', text: 'New text', title: 'Text', trigger: 'click', duration: 5,
+      bg: '#0c0c1a', color: '#e8ecff', fontSize: 9, align: 'center' }])
+    setSel(clips.length)
+  }
+  const del = (i) => { onChange(clips.filter((_, j) => j !== i)); setSel(s => Math.max(0, Math.min(s, clips.length - 2))) }
+  // Duplicate a clip (right after it) so you can show a different segment of the SAME video in one slideshow.
+  const dup = (i) => { const copy = { ...clips[i], id: uid() }; onChange([...clips.slice(0, i + 1), copy, ...clips.slice(i + 1)]); setSel(i + 1) }
+
+  // Selecting a clip auto-plays it on the node from its trimmed start, and we poll its duration for the slider.
+  const [previewPlaying, setPreviewPlaying] = useState(true)
+  const endLoopRef = useRef(null)
+  const clearEndLoop = () => { if (endLoopRef.current) { clearInterval(endLoopRef.current); endLoopRef.current = null } }
+  // While dragging a handle: show a paused frame at that exact time (frame-accurate, precise for long clips).
+  const scrubTo = (t) => { clearEndLoop(); preview?.seek?.(t); preview?.pause?.(); setPreviewPlaying(false) }
+  // On release: play the trimmed selection on a loop so you keep seeing exactly what you picked.
+  const loopSel = (s, e) => {
+    clearEndLoop()
+    const hi = (e && e > s) ? e : (stateMax())
+    preview?.seek?.(s); preview?.play?.(); setPreviewPlaying(true)
+    endLoopRef.current = setInterval(() => { const t = preview?.time?.() || 0; if (t >= hi - 0.12 || t < s - 0.4) preview?.seek?.(s) }, 180)
+  }
+  const stateMax = () => Math.max(dur || 0, cur?.end || 0, 30)
+
+  useEffect(() => {
+    setDur(0); clearEndLoop(); setPreviewPlaying(true)
+    if (!cur) return
+    preview?.select?.(sel, cur)
+    let n = 0
+    const t = setInterval(() => { const d = preview?.duration?.() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 30) clearInterval(t) }, 300)
+    return () => clearInterval(t)
+  }, [cur?.id]) // eslint-disable-line
+  useEffect(() => () => clearEndLoop(), [])
+  // Live playhead for the trim slider + markers timeline (polls the node preview's current time).
+  const [curT, setCurT] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => {
+      setCurT(preview?.time?.() || 0)
+      // Keep the duration fresh: YouTube often reports it late, and the one-shot poll can miss it — a stale
+      // 0 duration is what made the timeline scale to the 30s floor and the playhead stop halfway.
+      const d = preview?.duration?.() || 0
+      if (d) setDur(prev => (prev === 0 || d > prev + 1) ? d : prev)   // adopt a real duration once; ignore small flaps (kept the timeline jittering)
+    }, 120)
+    return () => clearInterval(t)
+  }, [preview])
+
+  // Trim edits persist immediately (the scrub/loop preview is driven by the slider's onScrub/onLoop).
+  const onTrimChange = (s, e) => { patch(sel, { start: s, end: e >= max ? 0 : e }) }
+  const togglePreview = () => {
+    clearEndLoop()
+    if (previewPlaying) { preview?.pause?.(); setPreviewPlaying(false) }
+    else { preview?.play?.(); setPreviewPlaying(true) }
+  }
+
+  // Mouse-drag reorder of the clips column (no up/down buttons).
+  const rowDrag = (i) => (e) => {
+    if (e.button !== 0) return
+    e.preventDefault(); e.stopPropagation()
+    setSel(i); setDragIdx(i)
+    let to = i
+    const move = (ev) => {
+      const c = rowsRef.current; if (!c) return
+      const rows = [...c.querySelectorAll('[data-cliprow]')]
+      to = rows.length
+      for (let k = 0; k < rows.length; k++) { const r = rows[k].getBoundingClientRect(); if (ev.clientX < r.left + r.width / 2) { to = k; break } }   // horizontal strip
+      setDropIdx(to)
+    }
+    const up = () => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
+      setDragIdx(null); setDropIdx(null)
+      if (to != null && to !== i && to !== i + 1) {
+        const arr = clips.slice(); const [x] = arr.splice(i, 1)
+        const dest = to > i ? to - 1 : to
+        arr.splice(dest, 0, x); onChange(arr); setSel(dest)
+      }
+    }
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+  }
+
+  const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
+  // Once we know the real duration, the timeline scales to IT (so the playhead reaches the true end).
+  // Only before duration is known do we fall back to a 30s working width.
+  const max = dur > 0 ? Math.max(dur, cur?.end || 0) : Math.max(cur?.end || 0, curT || 0, 30)
+  const k = cur ? clipKind(cur) : null, timed = cur ? isTimeMedia(cur) : false
+  // FOOTER layout: a full-width bar docked to the bottom so the timeline gets the whole screen width.
+  return (
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '46vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
+      onMouseDown={e => e.stopPropagation()}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', borderBottom: '1px solid #23234a' }}>
+        <div style={{ color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>Slideshow editor</div>
+        {cur && isTimeMedia(cur) && <IconBtn name={previewPlaying ? 'pause' : 'play'} title={previewPlaying ? 'Pause preview' : 'Play preview'} onClick={togglePreview} size={24} />}
+        <span style={{ color: '#6a7290', fontSize: 11 }}>← → preview clips · space play/pause</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#c5d0ff', fontSize: 12, cursor: 'pointer', marginLeft: 6 }}>
+          <input type="checkbox" checked={!!fullscreen} onChange={e => onToggleFullscreen?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Play in fullscreen
+        </label>
+        {/* Global audio master: off → the whole slideshow is muted (overrides each step's own Sound). */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#c5d0ff', fontSize: 12, cursor: 'pointer', marginLeft: 6 }} title="Master audio for the whole slideshow (off mutes every step)">
+          <input type="checkbox" checked={sound !== false} onChange={e => onToggleSound?.(e.target.checked)} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Sound
+        </label>
+        {/* Transition between clips: fade (with a global duration) or a hard cut. */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c5d0ff', fontSize: 12, marginLeft: 6 }}>
+          Transition
+          <select value={transition} onChange={e => onSetTransition?.(e.target.value)} style={{ background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 5, fontSize: 12, padding: '2px 5px', outline: 'none' }}>
+            <option value="fade">Fade</option>
+            <option value="cut">Cut</option>
+          </select>
+        </label>
+        {transition !== 'cut' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8fa0d8', fontSize: 12 }}>
+            <input type="number" min="0" step="0.1" value={((fadeMs ?? 1000) / 1000)}
+              onChange={e => { const s = parseFloat(e.target.value); if (!isNaN(s)) onSetFadeMs?.(Math.max(0, Math.round(s * 1000))) }}
+              style={{ width: 46, background: '#0f0f22', border: '1px solid #2d3a6a', color: '#dbe4ff', borderRadius: 5, fontSize: 12, padding: '2px 5px', outline: 'none', textAlign: 'center' }} /> s
+          </label>
+        )}
+        <span style={{ flex: 1 }} />
+        <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={24} />
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 14px 10px', overflowY: 'auto' }}>
+        {/* Top row: horizontal clips strip + the selected clip's quick controls */}
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+          <div ref={rowsRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, paddingBottom: 4, minHeight: 52 }}>
+            {clips.map((c, i) => {
+              const ck = clipKind(c)
+              const thumbSrc = ck === 'youtube' ? ytThumb(c.youtubeId) : (ck === 'gdrive' ? driveThumbUrl(c.driveId) : (ck === 'image' ? c.src : null))
+              return (
+                <div key={c.id} data-cliprow onMouseDown={rowDrag(i)} title={ck === 'text' ? 'Double-click to edit text & style' : (c.title || ck)}
+                  onDoubleClick={e => { if (ck === 'text') { e.stopPropagation(); setSel(i); setEditTextIdx(i) } }}
+                  style={{ position: 'relative', flex: '0 0 auto', width: 108, borderRadius: 7, cursor: 'grab', overflow: 'hidden',
+                    opacity: dragIdx === i ? 0.4 : 1, background: i === sel ? '#1c2148' : '#0e0e1c',
+                    borderLeft: `2px solid ${dropIdx === i && dragIdx != null ? '#5b6af0' : 'transparent'}`,
+                    outline: i === sel ? '1.5px solid #5b6af0' : '1px solid #23234a' }}>
+                  {thumbSrc
+                    ? <img src={thumbSrc} alt="" width={108} height={40} style={{ objectFit: 'cover', display: 'block', background: '#000' }} />
+                    : ck === 'text'
+                    ? <div style={{ width: 108, height: 40, background: c.bg || '#0c0c1a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.color || '#e8ecff', fontSize: 10, fontWeight: 600, padding: '0 5px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{(c.text || 'Text').split('\n')[0].slice(0, 22) || 'Text'}</div>
+                    : <div style={{ width: 108, height: 40, background: '#0e0e1c', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d84a4', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 }}>{ck === 'audio' ? 'Audio' : 'Video'}</div>}
+                  {/* Trimmed-time badge: the kept length (end−start) or, if only a start is trimmed, that offset. */}
+                  {(() => { const tl = chipTrimLabel(c); return tl ? (
+                    <span style={{ position: 'absolute', top: 25, right: 3, background: 'rgba(6,8,20,0.82)', color: '#c5d0ff', fontSize: 9.5, fontWeight: 600, padding: '1px 4px', borderRadius: 4, lineHeight: 1.25, pointerEvents: 'none', fontVariantNumeric: 'tabular-nums' }}>{tl}</span>
+                  ) : null })()}
+                  <div style={{ padding: '2px 5px' }}>
+                    <div style={{ color: '#c5d0ff', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i + 1}. {c.title || (ck === 'youtube' ? c.youtubeId : ck)}</div>
+                    {/* Advance mode: quick click⇄auto toggle right on the chip. Delay is still set in the panel. */}
+                    <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); patch(i, { trigger: (c.trigger || 'click') === 'auto' ? 'click' : 'auto' }) }}
+                      title="Advance: on click/key ⇄ automatically (delay is set below)"
+                      style={{ width: '100%', marginTop: 2, background: (c.trigger || 'click') === 'click' ? 'transparent' : '#20305a', border: '1px solid #2d3a6a', color: (c.trigger || 'click') === 'click' ? '#8fa0d8' : '#aeb8ff', borderRadius: 4, padding: '1px 4px', cursor: 'pointer', fontSize: 9.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {(c.trigger || 'click') === 'click' ? '☝ On click' : c.trigger === 'delay' ? '⏱ Delay' : '▶ Auto'}
+                    </button>
+                    <div style={{ display: 'flex', gap: 1, marginTop: 1 }}>
+                      {ck === 'text' && <IconBtn name="edit" title="Edit text & style" size={18} tone="ghost" onClick={() => { setSel(i); setEditTextIdx(i) }} />}
+                      <IconBtn name="copy" title="Duplicate" size={18} tone="ghost" onClick={() => dup(i)} />
+                      {onExtract && <IconBtn name="extract" title="Pop out onto the canvas" size={18} tone="ghost" onClick={() => { onExtract(c); onChange(clips.filter((_, j) => j !== i)) }} />}
+                      <IconBtn name="trash" title="Delete" size={18} tone="danger" onClick={() => del(i)} />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {/* Add card */}
+            <div style={{ flex: '0 0 auto', width: 150, display: 'flex', flexDirection: 'column', gap: 4, padding: 5, borderRadius: 7, border: '1px dashed #3a4a8a' }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <input value={urlInput} onChange={e => setUrlInput(e.target.value)} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') addUrl() }}
+                  placeholder="YouTube link…" style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left', fontSize: 11, padding: '4px 6px' }} />
+                <button onClick={addUrl} style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>+</button>
+              </div>
+              {onUpload && <button onClick={onUpload} style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>⤒ Upload file…</button>}
+              {onPickDrive && <button onClick={onPickDrive} title="Search your Google Drive for a video" style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>🔍 Google Drive…</button>}
+              <button onClick={addText} title="Add a text step" style={{ background: 'transparent', border: '1px dashed #3a4a8a', color: '#aeb8ff', borderRadius: 6, padding: '5px', cursor: 'pointer', fontSize: 11 }}>T Add text…</button>
+            </div>
+          </div>
+
+          {/* Quick controls for the selected clip */}
+          {cur && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 210, flex: '0 0 auto', fontSize: 11.5, color: '#8fa0d8' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Advance</span>
+                <select value={cur.trigger || 'click'} onChange={e => patch(sel, { trigger: e.target.value })} style={{ ...inp, width: 'auto', textAlign: 'left', flex: 1 }}>
+                  <option value="click">On click / key</option>
+                  <option value="auto">Automatically{timed ? ' (when it ends)' : ''}</option>
+                  <option value="delay">After a delay</option>
+                </select>
+                {cur.trigger === 'delay' && <input style={{ ...inp, width: 46 }} defaultValue={String((cur.delayMs || 1500) / 1000)} key={'d' + cur.id}
+                  onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }}
+                  onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { delayMs: Math.max(0, v * 1000) }) }} title="seconds" />}
+              </div>
+              {(k === 'image' || k === 'text') && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span>Show for</span>
+                  <input style={{ ...inp, width: 48 }} defaultValue={String(cur.duration || 5)} key={'dur' + cur.id}
+                    onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }}
+                    onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) patch(sel, { duration: Math.max(0.5, v) }) }} /> <span>s</span>
+                </div>
+              )}
+              {(k === 'image' || k === 'text') && <ImageReframe clip={cur} onPatch={p => patch(sel, p)} />}
+              {timed && (
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 12px' }}>
+                  {(k === 'youtube' || k === 'video') && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>Speed
+                      <select value={cur.speed || 1} onChange={e => { const r = parseFloat(e.target.value); patch(sel, { speed: r }); preview?.setRate?.(r) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
+                        {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
+                      </select></span>
+                  )}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}><input type="checkbox" checked={!!cur.loop} onChange={e => patch(sel, { loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Loop</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}><input type="checkbox" checked={cur.muted !== true} onChange={e => { patch(sel, { muted: !e.target.checked }); if (e.target.checked) preview?.unMute?.(); else preview?.mute?.() }} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> Sound</label>
+                  {(k === 'youtube' || k === 'video') && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', color: '#c5d0ff' }}><input type="checkbox" checked={!!cur.captions} onChange={e => patch(sel, { captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 14, height: 14 }} /> CC</label>
+                  )}
+                </div>
+              )}
+              {k === 'youtube' && onReplaceClipFile && (
+                <button onClick={() => onReplaceClipFile(sel)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: '#183a2a', border: '1px solid #2f6a48', color: '#a7f3d0', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 11.5, fontWeight: 600 }}>⤒ Replace with file — ad-free</button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* One full-width timeline for the selected clip: blue = kept span (trim), amber line = pause,
+            wide band = cut (⏸ inside = a cut that also pauses). Numeric trim fields sit alongside. */}
+        {cur && timed && (k === 'youtube' || k === 'video') && (() => {
+          const mk = resolveMarkers(cur)
+          return (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, color: '#aeb8ff', fontSize: 11, whiteSpace: 'nowrap', paddingTop: 8 }}
+                title="Blue bar = the kept range (trim). Amber line = pause until →. Wide band = a cut (skipped); a ⏸ inside means it also pauses.">◆ Timeline</span>
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <MarkersEditor markers={mk} max={max} start={cur.start || 0} end={cur.end || 0} onTrim={onTrimChange}
+                  getTime={() => preview?.time?.() || 0} playhead={curT} onScrub={scrubTo}
+                  onChange={markers => patch(sel, { markers: markers.length ? markers : undefined, cuts: undefined })} />
+              </div>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8fa0d8', paddingTop: 6 }}>
+                <span style={{ color: '#7c86ad' }}>trim</span>
+                <input style={{ ...inp, width: 54 }} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
+                  onBlur={e => { const v = parseTime(e.target.value); if (v != null) { patch(sel, { start: v }); preview?.seek?.(v); preview?.play?.() } }} />
+                <span>–</span>
+                <input style={{ ...inp, width: 54 }} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
+                  onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
+              </span>
+            </div>
+          )
+        })()}
+        {/* Audio: just a trim slider (no visual frame / markers). */}
+        {cur && timed && k === 'audio' && <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: '#8fa0d8', marginTop: 2 }}>
+            <span style={{ fontWeight: 600, color: '#aeb8ff', minWidth: 52 }}>Trim</span>
+            <span>Start</span>
+            <input style={{ ...inp, width: 58 }} defaultValue={fmtTime(cur.start || 0)} key={'s' + cur.id + (cur.start || 0)}
+              onBlur={e => { const v = parseTime(e.target.value); if (v != null) { patch(sel, { start: v }); preview?.seek?.(v); preview?.play?.() } }} />
+            <span>End</span>
+            <input style={{ ...inp, width: 58 }} defaultValue={cur.end ? fmtTime(cur.end) : ''} placeholder={fmtTime(max)} key={'e' + cur.id + (cur.end || 0)}
+              onBlur={e => { const v = parseTime(e.target.value); patch(sel, { end: v || 0 }); if (v != null) preview?.seek?.(v) }} />
+          </div>
+          <TrimSlider start={cur.start || 0} end={cur.end || max} max={max} playhead={curT} onChange={onTrimChange} onScrub={scrubTo} onLoop={loopSel} />
+        </>}
+        {!clips.length && <div style={{ color: '#7080a0', fontSize: 12, padding: 8 }}>No steps yet. Paste a YouTube link, upload media, or add text above.</div>}
+      </div>
+      {editTextIdx != null && clips[editTextIdx] && clipKind(clips[editTextIdx]) === 'text' && (
+        <TextClipEditor clip={clips[editTextIdx]} onPatch={p => patch(editTextIdx, p)} onClose={() => setEditTextIdx(null)} />
+      )}
+    </div>
+  )
+}
+
+// ── Options panel for a single YouTube video node (link + trim + autoplay + sound + fullscreen) ──
+export function YTVideoOptions({ video, anchor, onPatch, onClose, onPlayFullscreen, onReplaceFile, onUploadPoster, onResetPoster, onScrubTime, onLoopSel, onPreviewPause, getDuration, getTime }) {
+  const [dur, setDur] = useState(0)
+  const [urlInput, setUrlInput] = useState('')
+  const [previewPlaying, setPreviewPlaying] = useState(true)
+  const yt = video.youtubeId
+  const isFile = !yt && !!video.src           // an uploaded file video (not a YouTube embed)
+  const hasVideo = !!(yt || isFile)           // there's a playable clip to trim / configure
+  // The preview plays on the NODE itself (via onScrub), not here — so we just poll the node player's
+  // reported duration to size the trim slider.
+  useEffect(() => {
+    setDur(0)
+    if (!hasVideo || !getDuration) return
+    let n = 0
+    const t = setInterval(() => { const d = getDuration() || 0; if (d) { setDur(d); clearInterval(t) } if (++n > 40) clearInterval(t) }, 300)
+    return () => clearInterval(t)
+  }, [hasVideo, video.src, yt, getDuration])
+  // Poll the preview's current time so the trim slider can show a live playback head.
+  const [curT, setCurT] = useState(0)
+  useEffect(() => {
+    if (!hasVideo || !getTime) return
+    const t = setInterval(() => {
+      setCurT(getTime() || 0)
+      const d = getDuration?.() || 0
+      if (d) setDur(prev => (prev === 0 || d > prev + 1) ? d : prev)   // adopt a real duration once; ignore small flaps (kept the timeline jittering)
+    }, 120)
+    return () => clearInterval(t)
+  }, [hasVideo, getTime, getDuration])
+  const max = dur > 0 ? Math.max(dur, video.end || 0) : Math.max(video.end || 0, curT || 0, 30)
+  const inp = { background: '#0e0e1c', border: '1px solid #2d3a6a', color: '#dbe2ff', borderRadius: 6, padding: '5px 7px', fontSize: 12, outline: 'none', width: 62, textAlign: 'center' }
+  const row = { display: 'flex', alignItems: 'center', gap: 8, color: '#c5d0ff', fontSize: 12.5 }
+  // Bottom full-width footer, matching the slideshow editor.
+  return (
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, maxHeight: '46vh', background: '#12122a', boxShadow: '0 -10px 40px rgba(0,0,0,0.55)', borderTop: '1px solid #2d3a6a', zIndex: 500, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: '-apple-system, sans-serif' }}
+      onMouseDown={e => e.stopPropagation()}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '7px 14px', borderBottom: '1px solid #23234a', flex: '0 0 auto' }}>
+        <div style={{ flex: 1, color: '#c5d0ff', fontWeight: 700, fontSize: '0.9rem' }}>{isFile ? 'Video' : 'YouTube video'}</div>
+        <IconBtn name="close" title="Close" onClick={onClose} tone="ghost" size={26} />
+      </div>
+      <div style={{ padding: '8px 14px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: '10px 22px', overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
+        {hasVideo && (
+          <div style={{ fontSize: 11.5, color: '#8fa0d8', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button title={previewPlaying ? 'Pause preview' : 'Play the trimmed clip on a loop'}
+              onClick={() => { if (previewPlaying) { onPreviewPause?.(); setPreviewPlaying(false) } else { onLoopSel?.(video.start || 0, video.end || 0); setPreviewPlaying(true) } }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 8, border: '1px solid #5b6af0', background: '#171c3f', color: '#dbe2ff', cursor: 'pointer', padding: '5px 12px 5px 10px', fontSize: 12, fontWeight: 600, flex: '0 0 auto' }}>
+              <Icon name={previewPlaying ? 'pause' : 'play'} size={13} />
+              {previewPlaying ? 'Pause' : 'Play'}
+            </button>
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#c5d0ff' }}>{fmtTime(curT)}</span>
+            <span>on the canvas</span>
+          </div>
+        )}
+        {/* Link (YouTube only — a file video has no URL to swap) */}
+        {!isFile && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={urlInput} placeholder={yt ? `youtu.be/${yt}` : 'Paste a YouTube link…'} onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') } }}
+              style={{ ...inp, width: 'auto', flex: 1, textAlign: 'left' }} />
+            <button onClick={() => { const id = parseYoutubeId(urlInput); if (id) { onPatch({ youtubeId: id }); setUrlInput('') } else alert('Not a YouTube link/ID.') }}
+              style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12 }}>Set</button>
+          </div>
+        )}
+        {/* One-click ad-free: replace this YouTube embed with an uploaded video file (native player,
+            no ads, no YouTube chrome). Only shown for a YouTube video; a file video is already clean. */}
+        {yt && onReplaceFile && (
+          <button onClick={onReplaceFile}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#183a2a', border: '1px solid #2f6a48', color: '#a7f3d0', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+            <Icon name="add" size={14} /> Replace with uploaded file <span style={{ color: '#6fae8c', fontWeight: 400 }}>— ad-free</span>
+          </button>
+        )}
+        {/* Trim + markers on ONE timeline (blue = kept span; amber line = pause; wide = cut; ⏸ = cut that pauses) */}
+        {hasVideo && <>
+          {(() => { const mk = resolveMarkers(video); return (
+            <div style={{ flexBasis: '100%', width: '100%', minWidth: 0 }}>
+              <MarkersEditor markers={mk} max={max} start={video.start || 0} end={video.end || 0} onTrim={(s, e) => onPatch({ start: s, end: e >= max ? 0 : e })}
+                getTime={getTime} playhead={curT} onScrub={onScrubTime} onChange={markers => onPatch({ markers: markers.length ? markers : undefined, cuts: undefined })} />
+            </div>
+          ) })()}
+          <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
+            <span>Start</span>
+            <input style={inp} defaultValue={fmtTime(video.start || 0)} key={'s' + (yt || 'f') + (video.start || 0)}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
+              onBlur={e => { const v = parseTime(e.target.value); if (v != null) { onPatch({ start: v }); onScrubTime?.(v, 'start') } }} />
+            <span style={{ flex: 1 }} />
+            <span>End</span>
+            <input style={inp} defaultValue={video.end ? fmtTime(video.end) : ''} placeholder={fmtTime(max)} key={'e' + (yt || 'f') + (video.end || 0)}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
+              onBlur={e => { const v = parseTime(e.target.value); onPatch({ end: v || 0 }); onScrubTime?.(v || (video.start || 0), 'end') }} />
+          </div>
+          {/* Final duration — after the trim, then after the speed change. */}
+          {(() => {
+            const st = video.start || 0
+            const en = (video.end && video.end > st) ? video.end : (dur || max)
+            const speed = video.speed || 1
+            const trimLen = Math.max(0, en - st)
+            const finalLen = trimLen / (speed || 1)
+            return (
+              <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8', justifyContent: 'space-between', fontVariantNumeric: 'tabular-nums' }}>
+                <span>Final length: <b style={{ color: '#c5d0ff' }}>{fmtTime(trimLen)}</b><span style={{ color: '#7080a0' }}> (trim)</span></span>
+                {speed !== 1 && <span>→ <b style={{ color: '#8ecbff' }}>{fmtTime(finalLen)}</b> at {speed}×</span>}
+              </div>
+            )
+          })()}
+        </>}
+        {/* Speed */}
+        {hasVideo && (
+          <div style={{ ...row, fontSize: 11.5, color: '#8fa0d8' }}>
+            <span>Speed</span>
+            <select value={video.speed || 1} onChange={e => { const r = parseFloat(e.target.value); onPatch({ speed: r }) }} style={{ ...inp, width: 'auto', textAlign: 'left' }}>
+              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(r => <option key={r} value={r}>{r}×</option>)}
+            </select>
+          </div>
+        )}
+        {/* Poster frame — the still shown on the canvas before playing (clean, no YouTube chrome).
+            YouTube auto-generates real frames of the video: a cover frame plus three stills sampled
+            across it (~25/50/75%). Pick one, or upload your own. (An embed is cross-origin, so an
+            arbitrary frame at an exact time can't be captured — these are the frames YouTube exposes.) */}
+        {yt && onUploadPoster && (() => {
+          const frames = [
+            { url: `https://img.youtube.com/vi/${yt}/hqdefault.jpg`, label: 'Cover' },
+            { url: `https://img.youtube.com/vi/${yt}/1.jpg`, label: '¼' },
+            { url: `https://img.youtube.com/vi/${yt}/2.jpg`, label: '½' },
+            { url: `https://img.youtube.com/vi/${yt}/3.jpg`, label: '¾' },
+          ]
+          const current = video.poster || `https://img.youtube.com/vi/${yt}/hqdefault.jpg`
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 11.5, color: '#8fa0d8' }}>Poster frame {video.poster ? '(custom)' : '(from the video)'}</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {frames.map(f => {
+                  const sel = current === f.url
+                  return (
+                    <button key={f.url} onClick={() => onResetPoster ? (f.label === 'Cover' ? onResetPoster() : onPatch({ poster: f.url })) : onPatch({ poster: f.url })}
+                      title={`Use the ${f.label} frame`}
+                      style={{ position: 'relative', flex: 1, aspectRatio: '16 / 9', borderRadius: 5, overflow: 'hidden', cursor: 'pointer', padding: 0,
+                        border: sel ? '2px solid #5b6af0' : '1px solid #23234a',
+                        background: `#0e0e1c center/cover no-repeat url("${f.url}")` }}>
+                      <span style={{ position: 'absolute', left: 3, bottom: 2, fontSize: 9.5, color: '#eef1ff', background: 'rgba(8,8,20,0.6)', borderRadius: 3, padding: '0 3px' }}>{f.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={onUploadPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Upload image…</button>
+                {video.poster && <button onClick={onResetPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Reset to cover</button>}
+              </div>
+            </div>
+          )
+        })()}
+        {/* Poster frame for a FILE video — upload-only (we can't sample arbitrary frames here). */}
+        {isFile && onUploadPoster && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 11.5, color: '#8fa0d8' }}>Poster frame {video.poster ? '(custom)' : '(the first frame)'}</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={onUploadPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Upload image…</button>
+              {video.poster && <button onClick={onResetPoster} style={{ background: 'transparent', border: '1px solid #2d3a6a', color: '#aeb8ff', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11.5 }}>Remove</button>}
+            </div>
+          </div>
+        )}
+        {/* Toggles */}
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.autoplayOnZoom} onChange={e => onPatch({ autoplayOnZoom: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Autoplay on zoom / arrow-nav</label>
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.autoplayOnSlide} onChange={e => onPatch({ autoplayOnSlide: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Autoplay on slide</label>
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={video.muted !== true} onChange={e => onPatch({ muted: !e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Sound on</label>
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.loop} onChange={e => onPatch({ loop: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Loop</label>
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.keepPlaying} onChange={e => onPatch({ keepPlaying: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Keep playing (ignore focus) <span style={{ color: '#7080a0', fontSize: 11 }}>— don't pause when deselected</span></label>
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.captions} onChange={e => onPatch({ captions: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Captions (CC) <span style={{ color: '#7080a0', fontSize: 11 }}>— if available</span></label>
+        {/* When this slide is presented, jump straight to clean, chrome-free fullscreen playback. */}
+        <label style={{ ...row, cursor: 'pointer' }}><input type="checkbox" checked={!!video.fullscreenOnSlide} onChange={e => onPatch({ fullscreenOnSlide: e.target.checked })} style={{ accentColor: '#5b6af0', width: 15, height: 15 }} /> Play fullscreen when presented</label>
+        {/* Play fullscreen NOW — clean, chrome-free playback (poster covers any YouTube pause/end overlay). */}
+        {hasVideo && onPlayFullscreen && (
+          <button onClick={onPlayFullscreen} style={{ marginTop: 2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+            <Icon name="full" size={15} /> Play fullscreen now
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Fullscreen player: plays the whole slideshow in real browser fullscreen ──────────────────
+// Ladder at the end: last clip ends → last frame + replay (stays); → exits to the node on canvas.
+export function YTFullscreenPlayer({ clips = [], startIndex = 0, muted = false, sound = true, captions = false, transition = 'fade', fadeMs = 1000, presenting = false, onExit, onDeckNext, onDeckPrev, onReplayDone, onIndex }) {
+  const wrapRef = useRef(null)
+  const handleRef = useRef(null)
+  const [idx, setIdx] = useState(startIndex)
+  const [ended, setEnded] = useState(false)
+  // Latest callbacks/flags in a ref — the keydown effect binds once (deps: clips.length) but must always
+  // call the current onExit/onDeckNext/onDeckPrev and see the live `presenting` flag.
+  const cbRef = useRef({})
+  cbRef.current = { onExit, onDeckNext, onDeckPrev, presenting, onIndex }
+  const idxRef = useRef(startIndex); idxRef.current = idx
+  // Report the active clip up so the app's step counter / phone remote / advance beep track sub-slides here.
+  useEffect(() => { cbRef.current.onIndex?.(idx) }, [idx])
+  const endedRef = useRef(false); endedRef.current = ended
+  const advTimer = useRef(null)
+  const cur = clips[idx] || null
+  // Image→image crossfade underlay (mirrors the on-canvas node).
+  const doFade = transition !== 'cut'
+  const prevClipRef = useRef(cur)
+  const [underlay, setUnderlay] = useState(null)
+  useLayoutEffect(() => {   // set the underlay BEFORE paint so no black frame flashes between clips
+    const before = prevClipRef.current
+    prevClipRef.current = cur
+    if (doFade && before && cur && before.id !== cur.id && clipKind(before) === 'image') {
+      setUnderlay(before)
+      const t = setTimeout(() => setUnderlay(null), fadeMs)
+      return () => clearTimeout(t)
+    }
+    setUnderlay(null)
+  }, [cur?.id]) // eslint-disable-line
+
+  // Enter real fullscreen on mount; exit on unmount. If the user leaves fullscreen (Esc via browser),
+  // treat it as exit.
+  // While PRESENTING, the deck already holds real fullscreen and this overlay (fixed, zIndex 4000) covers
+  // it — so we must NOT request/exit fullscreen ourselves. Doing so would switch the fullscreen element and,
+  // on exit, drop the whole deck out of fullscreen (the "abandon fullscreen" flicker). Leave it untouched.
+  useEffect(() => {
+    if (presenting) return
+    const el = wrapRef.current
+    el?.requestFullscreen?.().catch(() => {})
+    const onFsChange = () => { if (!document.fullscreenElement) onExit?.() }
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
+      if (advTimer.current) clearTimeout(advTimer.current)
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {})
+    }
+  }, []) // eslint-disable-line
+
+  // Keep keyboard focus on the parent wrapper, never on the playing media. A YouTube/embed IFRAME or an
+  // uploaded <video>/<audio> that holds focus swallows the arrow keys (they never reach our window
+  // listener), which is exactly the "stuck on a video" freeze. Poll continuously while this player is up and
+  // pull focus back to the wrapper whenever a media element has grabbed it — playback keeps going. This
+  // fixes both the standalone fullscreen video and a video inside a fullscreen slideshow, YouTube or
+  // uploaded. (The phone remote and the click-catcher work regardless of focus.)
+  useEffect(() => {
+    const el = wrapRef.current
+    const isMedia = (n) => n && (n.tagName === 'IFRAME' || n.tagName === 'VIDEO' || n.tagName === 'AUDIO')
+    const refocus = () => { try { if (el && isMedia(document.activeElement)) el.focus({ preventScroll: true }) } catch { /* ignore */ } }
+    const onFocusIn = (e) => { if (isMedia(e.target)) refocus() }
+    el?.focus?.({ preventScroll: true })
+    window.addEventListener('focusin', onFocusIn, true)
+    const iv = setInterval(refocus, 250)
+    return () => { window.removeEventListener('focusin', onFocusIn, true); clearInterval(iv) }
+  }, [])
+
+  const fsPlaying = useRef(true)
+  const goto = (i) => { setEnded(false); fsPlaying.current = true; setIdx(i) }   // remount → autoplay the new slide
+  const advance = () => {
+    const i = idxRef.current
+    if (i < clips.length - 1) goto(i + 1)
+    else { setEnded(true); handleRef.current?.pause?.() }
+  }
+  // Forward navigation shared by the → key AND the click-catcher (so tapping the slide advances too).
+  // A video at an authored stop marker reports isWaiting() → a single Next resumes it. But that could trap a
+  // presenter on a stuck video, so a SECOND Next on the same clip (or a quick double-press) forces past it.
+  const lastRightRef = useRef({ t: 0, idx: -1 })
+  const goRight = () => {
+    const now = Date.now(), lr = lastRightRef.current
+    const repeat = lr.idx === idxRef.current && (now - lr.t < 1500)   // pressed Next again on the same clip → escape
+    lastRightRef.current = { t: now, idx: idxRef.current }
+    if (!repeat && handleRef.current?.isWaiting?.()) { plog('  FSgoRight → resume (stop marker)'); handleRef.current.resume(); fsPlaying.current = true; return }
+    // Rolling with markers ahead → jump to the next marker and keep playing (not advance the clip).
+    if (!repeat && handleRef.current?.skipToNextStop?.()) { plog('  FSgoRight → skip to next marker'); fsPlaying.current = true; return }
+    const cb = cbRef.current
+    const act = fsArrowAction('right', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
+    plog(`  FSgoRight idx=${idxRef.current}/${clips.length} kind=${clipKind(clips[idxRef.current])} wait=${handleRef.current?.isWaiting?.() ? 1 : 0} act=${act}`)
+    if (act === 'clip-next') goto(idxRef.current + 1)
+    else if (act === 'deck-next') cb.onDeckNext?.()
+    else if (act === 'freeze-end') { setEnded(true); handleRef.current?.pause?.() }
+    else if (act === 'exit') cb.onExit?.()
+  }
+  const onEnded = () => {
+    const clip = clips[idxRef.current]; if (!clip) return
+    if (clip.trigger === 'auto') advance()
+    else if (clip.trigger === 'delay') { advTimer.current = setTimeout(advance, clip.delayMs || 1500) }
+    else setEnded(idxRef.current === clips.length - 1)   // 'click' on last clip → show replay/finish state
+  }
+
+  // Keyboard: ←/→ clips, Space play/pause, Shift+←/→ ∓10s, Esc/→-past-end → exit ladder.
+  useEffect(() => {
+    const onKey = (e) => {
+      // Capture-phase + stopPropagation so these arrows drive ONLY the fullscreen player, never the graph nav.
+      const keys = ['Escape', 'ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', ' ']
+      if (keys.includes(e.key)) { e.stopPropagation(); plog(`FSplayerKD ${e.key === ' ' ? 'Space' : e.key} idx=${idxRef.current}`) }
+      if (e.key === 'Escape') { e.preventDefault(); onExit?.(); return }
+      if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(10); return }
+      if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); handleRef.current?.seekBy?.(-10); return }
+      if (e.key === ' ') { e.preventDefault(); if (fsPlaying.current) { handleRef.current?.pause?.(); fsPlaying.current = false } else { handleRef.current?.play?.(); fsPlaying.current = true } return }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goRight(); return }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (handleRef.current?.skipToPrevStop?.()) { fsPlaying.current = true; return }   // step back one marker within the clip
+        const cb = cbRef.current
+        const act = fsArrowAction('left', { idx: idxRef.current, count: clips.length, presenting: cb.presenting, ended: endedRef.current })
+        if (act === 'clip-prev') goto(idxRef.current - 1)
+        else if (act === 'deck-prev') cb.onDeckPrev?.()               // presenting, first clip → previous slide
+        return
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [clips.length]) // eslint-disable-line
+
+  return (
+    <div ref={wrapRef} tabIndex={0} style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', outline: 'none' }}>
+      <div style={{ position: 'relative', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '100vh', aspectRatio: '16 / 9', margin: 'auto' }}>
+        {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
+        {cur && <div key={'fade' + idx} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
+          <SlidePlayer key={idx + '-' + (cur.captions ? 'cc' : '')} clip={cur} baseClip={cur.overlayPrev ? overlayBaseClip(clips, idx) : null} autoplay muted={cur.muted === true || sound === false} captions={cur.captions === true} interactive coverOnPause onReady={h => { handleRef.current = h }} onEnded={onEnded} />
+        </div>}
+      </div>
+      {/* While PRESENTING: a transparent full-screen catcher over the clip. It (a) advances on click/tap so
+          a stuck video slide isn't a dead end, and (b) keeps clicks off the video iframe so the iframe never
+          steals keyboard focus — arrow keys keep working. Hidden when not presenting (video controls usable). */}
+      {presenting && (
+        <div onMouseDown={e => { e.preventDefault(); wrapRef.current?.focus({ preventScroll: true }) }}
+          onClick={goRight}
+          style={{ position: 'absolute', inset: 0, zIndex: 6, background: 'transparent', cursor: 'default' }} />
+      )}
+      {ended && !presenting && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'rgba(6,6,16,0.55)', fontFamily: '-apple-system, sans-serif' }}>
+          <button onClick={() => goto(0, true)} title="Replay" style={{ width: 76, height: 76, borderRadius: '50%', background: 'rgba(18,18,42,0.85)', border: '2px solid #5b6af0', color: '#dbe2ff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="replay" size={34} /></button>
+          <div style={{ color: '#aab4dd', fontSize: 13 }}>End of slideshow — replay, or press → to return</div>
+        </div>
+      )}
+      {/* Controls: prev / next / exit (hidden during a presentation — smooth, no chrome; Esc still exits) */}
+      {!presenting && (<>
+        <div style={{ position: 'absolute', bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 12, alignItems: 'center' }}>
+          <IconBtn name="prev" title="Previous" size={40} onClick={() => { const i = idxRef.current; if (i > 0) goto(i - 1, true) }} />
+          <div style={{ color: '#c5d0ff', fontSize: 13, minWidth: 54, textAlign: 'center', fontFamily: '-apple-system, sans-serif' }}>{idx + 1} / {clips.length}</div>
+          <IconBtn name="next" title="Next" size={40} onClick={() => { const i = idxRef.current; if (i < clips.length - 1) goto(i + 1, true); else if (!endedRef.current) { setEnded(true); handleRef.current?.pause?.() } else onExit?.() }} />
+        </div>
+        <div style={{ position: 'absolute', top: 18, right: 18 }}>
+          <IconBtn name="close" title="Exit fullscreen (Esc)" size={40} onClick={() => onExit?.()} />
+        </div>
+      </>)}
+    </div>
+  )
+}
+
+// ── On-canvas node: a clean player showing the current clip ───────────────────
+// `active` = the ytss has been "entered" (arrows drive it). `currentIdx` is controlled by the parent so
+// arrow-nav can drive it; onReady exposes the live player handle for seek/play. Drag via the whole card.
+export function YTSlideshowNode({ node, ytss, currentIdx = 0, active, playing, muted, captions, selected, isDropTarget, ended, editing = false, presenting = false, onHeaderDown, onSelect, onEnter, onEdit, onReady, onEnded, onSetIdx, onFullscreen, onReplay, onRename, onSetScale, zoomK = 1 }) {
+  const [editingTitle, setEditingTitle] = useState(false)
+  const clips = ytss?.clips || []
+  const idx = Math.max(0, Math.min(currentIdx, clips.length - 1))
+  const cur = clips[idx] || null
+  // Image→image crossfade: hold the PREVIOUS clip as a static underlay while the new clip fades in on top,
+  // so one image dissolves into the next (not through black). Only images can be held statically; a
+  // video/gdrive we're leaving can't, so those fall back to fade-through-black.
+  const fadeMs = ytss?.fadeMs ?? 1000
+  const doFade = (ytss?.transition || 'fade') !== 'cut'
+  const prevClipRef = useRef(cur)
+  const [underlay, setUnderlay] = useState(null)
+  useLayoutEffect(() => {   // set the underlay BEFORE paint so no black frame flashes between clips
+    const before = prevClipRef.current
+    prevClipRef.current = cur
+    if (doFade && before && cur && before.id !== cur.id && clipKind(before) === 'image') {
+      setUnderlay(before)
+      const t = setTimeout(() => setUnderlay(null), fadeMs)
+      return () => clearTimeout(t)
+    }
+    setUnderlay(null)
+  }, [cur?.id]) // eslint-disable-line
+  const W = 480 * (node.__scale || 1), H = 270 * (node.__scale || 1)
+  const label = node.label || 'Slideshow'
+  // Corner scale handle (bottom-right). Drag out to grow / in to shrink; pins the top-left. While
+  // dragging, disable media pointer-events so the embedded YouTube iframe can't swallow the mouseup.
+  const startScale = (e) => {
+    if (e.button !== 0) return
+    e.preventDefault(); e.stopPropagation()
+    const sx = e.clientX, sy = e.clientY, s0 = node.__scale || 1, k = zoomK || 1
+    document.body.classList.add('pim-drag-nomedia')
+    const move = ev => onSetScale?.(Math.max(0.4, Math.min(4, s0 + ((ev.clientX - sx) + (ev.clientY - sy)) / 2 / (k * 320))))
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); document.body.classList.remove('pim-drag-nomedia') }
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+  }
+  // Green is ONLY the drop-target affordance (dragging media onto the slideshow). A playing/entered
+  // slideshow (incl. during a presentation) gets a quiet neutral border — never the loud green.
+  const bd = isDropTarget ? '#4ade80' : (selected ? '#5b6af0' : '#2d3a6a')
+  return (
+    <g transform={`translate(${node.x || 0},${node.y || 0})`} data-ytss="1" data-cardnode={node.id}
+      onMouseDown={e => { if (e.button === 0 && !active) { e.stopPropagation(); onSelect?.(); onHeaderDown?.(e) } }}
+      onDoubleClick={e => { e.stopPropagation(); onEnter?.() }}>
+      {/* Title above — double-click to rename. Hidden entirely while PRESENTING (no chrome/advisories). */}
+      {presenting ? null : editingTitle ? (
+        <foreignObject x={-W / 2} y={-H / 2 - 32} width={W} height={28} style={{ overflow: 'visible' }}>
+          <input autoFocus defaultValue={node.label || ''} placeholder="Slideshow name"
+            onMouseDown={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { e.currentTarget.value = node.label || ''; e.currentTarget.blur() } }}
+            onBlur={e => { onRename?.(e.currentTarget.value.trim()); setEditingTitle(false) }}
+            style={{ width: '100%', boxSizing: 'border-box', textAlign: 'center', background: '#12122a', border: '1px solid #5b6af0', color: '#eef1ff', borderRadius: 6, fontSize: 15, fontWeight: 600, padding: '3px 8px', outline: 'none', fontFamily: '-apple-system, sans-serif' }} />
+        </foreignObject>
+      ) : (
+        <text x={0} y={-H / 2 - 10} textAnchor="middle" fontSize={15} fill={active ? '#8ecbff' : '#c5d0ff'}
+          onDoubleClick={e => { if (!active) { e.stopPropagation(); onSelect?.(); setEditingTitle(true) } }}
+          style={{ userSelect: 'none', fontWeight: 600, cursor: active ? 'default' : 'text' }}>
+          {label}{clips.length ? `  ·  ${idx + 1}/${clips.length}` : ''}
+        </text>
+      )}
+      {selected && !active && !editingTitle && (
+        <text x={W / 2} y={-H / 2 - 10} textAnchor="start" fontSize={11} fill="#7d84a4"
+          onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onSelect?.(); setEditingTitle(true) }}
+          style={{ cursor: 'pointer', userSelect: 'none' }}>  ✎ rename</text>
+      )}
+      <foreignObject x={-W / 2} y={-H / 2} width={W} height={H} style={{ overflow: 'visible' }}>
+        <div style={{ width: '100%', height: '100%', borderRadius: 2, overflow: 'hidden',
+          // Match the free-image selection: a thin, sharp-cornered frame (dashed blue when selected).
+          border: isDropTarget ? '2px solid #4ade80' : (selected ? '1.5px dashed #5b6af0' : '1px solid #2d3a6a'),
+          boxShadow: isDropTarget ? '0 0 0 4px rgba(74,222,128,0.35)' : 'none', background: '#000', position: 'relative' }}>
+          {cur
+            ? <>
+                {underlay && <div style={{ position: 'absolute', inset: 0 }}><ImageSlide clip={underlay} /></div>}
+                <div key={'fade' + cur.id} style={{ position: 'absolute', inset: 0, animation: doFade ? `ytssFadeIn ${fadeMs}ms ease both` : 'none' }}>
+                  <SlidePlayer key={cur.id + (cur.captions ? '-cc' : '')} clip={cur} baseClip={cur.overlayPrev ? overlayBaseClip(ytss?.clips || [], currentIdx) : null} autoplay={!!playing && !ended} interactive={active} muted={cur.muted === true || ytss?.sound === false} captions={cur.captions === true} coverOnPause={!editing} onReady={onReady} onEnded={onEnded} />
+                </div>
+              </>
+            : <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#8fa0d8', fontFamily: '-apple-system, sans-serif' }}>
+                <Icon name="play" size={30} />
+                <div style={{ fontSize: 13 }}>Empty slideshow</div>
+                <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onEdit?.() }}
+                  style={{ background: '#232a5c', border: '1px solid #3a4a8a', color: '#d3daff', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12 }}>Add media…</button>
+              </div>}
+          {isDropTarget && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: 'rgba(74,222,128,0.14)', color: '#dcfce7', fontSize: 15, fontWeight: 700, fontFamily: '-apple-system, sans-serif', pointerEvents: 'none' }}>
+              <Icon name="add" size={16} /> Add to slideshow
+            </div>
+          )}
+          {/* End-of-slideshow: last frame + replay. Hidden while PRESENTING — there we just freeze the
+              last frame (no replay chrome); going back to the slide replays it. */}
+          {ended && active && !presenting && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, background: 'rgba(6,6,16,0.5)', fontFamily: '-apple-system, sans-serif' }}>
+              <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onReplay?.() }} title="Replay"
+                style={{ width: 54, height: 54, borderRadius: '50%', background: 'rgba(18,18,42,0.85)', border: '2px solid #5b6af0', color: '#dbe2ff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="replay" size={26} /></button>
+              <div style={{ color: '#aab4dd', fontSize: 11 }}>End — replay, or → to return</div>
+            </div>
+          )}
+          {/* Hint bar while active (never during a presentation) */}
+          {active && !ended && !presenting && (
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '4px 8px', background: 'rgba(10,10,24,0.82)', color: '#aab4dd', fontSize: 10.5, textAlign: 'center', fontFamily: '-apple-system, sans-serif', pointerEvents: 'none' }}>
+              ← → clips · space play/pause · shift+←/→ ∓10s · esc exit
+            </div>
+          )}
+        </div>
+      </foreignObject>
+      {/* Selected controls — own foreignObject placed AFTER the video so they paint on top and stay clickable. */}
+      {selected && !active && (
+        <foreignObject x={-W / 2} y={-H / 2 - 6} width={W} height={H + 12} style={{ overflow: 'visible', pointerEvents: 'none' }}>
+          <div style={{ position: 'relative', width: '100%', height: '100%', fontFamily: '-apple-system, sans-serif' }}>
+            <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 6 }}>
+              <IconBtn name="edit" title="Edit slideshow" size={26} onClick={onEdit} />
+              <IconBtn name="full" title="Play fullscreen" size={26} onClick={onFullscreen} />
+              <IconBtn name="play" title="Play (or double-click)" size={26} onClick={onEnter} />
+            </div>
+            {clips.length > 1 && (<>
+              <div style={{ position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)' }}>
+                <IconBtn name="prev" title="Previous clip" size={30} onClick={() => onSetIdx?.((idx - 1 + clips.length) % clips.length)} />
+              </div>
+              <div style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)' }}>
+                <IconBtn name="next" title="Next clip" size={30} onClick={() => onSetIdx?.((idx + 1) % clips.length)} />
+              </div>
+            </>)}
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 4, textAlign: 'center', color: '#aab4dd', fontSize: 10.5, pointerEvents: 'none' }}>drag anywhere to move · double-click to play · drag corner to resize</div>
+          </div>
+        </foreignObject>
+      )}
+      {/* Corner resize handle (bottom-right) — SVG so it paints on top of the video and stays clickable. */}
+      {selected && !active && (
+        <g transform={`translate(${W / 2},${H / 2})`} onMouseDown={startScale}
+          style={{ cursor: 'nwse-resize' }} title="Drag to resize">
+          {/* Square handle, matching the free-image selection handles. */}
+          <rect x={-5} y={-5} width={10} height={10} fill="#fff" stroke="#5b6af0" strokeWidth={1.5} />
+        </g>
+      )}
+    </g>
+  )
+}
