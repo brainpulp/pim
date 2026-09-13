@@ -182,22 +182,25 @@ export function fontStack(family) {
 // Inject the Google Fonts stylesheet for one family (+ weight), once. Keyless CSS API. We only request
 // weights the font actually ships (when known) so a single-weight font doesn't 400 the whole request.
 const loaded = new Set()
+// `weight` may be a single number, an array of weights, or omitted. We only request weights the font
+// actually ships (when known) so a single-weight font doesn't 400 the whole request.
 export function loadFont(family, weight) {
   if (!family || !/^[\w .\-&']+$/.test(family)) return
-  const key = family + '@' + (weight || '')
+  const reqW = Array.isArray(weight) ? weight.slice() : (weight ? [400, weight] : [400])
+  const key = family + '@' + [...new Set(reqW)].sort((a, b) => a - b).join(',')
   if (loaded.has(key)) return
   loaded.add(key)
   try {
     const avail = WEIGHTS_BY_FAMILY[family]
     let axis = ''
     if (avail && avail.length) {
-      const want = [...new Set([400, weight].filter(Boolean).filter(w => avail.includes(w)))]
+      const want = [...new Set(reqW.filter(w => avail.includes(w)))]
       const list = want.length ? want : [avail.includes(400) ? 400 : avail[0]]
       axis = ':wght@' + list.sort((a, b) => a - b).join(';')
     } else if (CAT_BY_FAMILY[family]) {
       axis = ':wght@400;500;600;700'   // bundled fonts: assume the common range
     }
-    const id = 'gf-' + (family + '-' + (weight || 'x')).replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+    const id = 'gf-' + key.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
     if (document.getElementById(id)) return
     const link = document.createElement('link')
     link.id = id
@@ -207,3 +210,5 @@ export function loadFont(family, weight) {
     document.head.appendChild(link)
   } catch { /* SSR / blocked — the fallback stack still renders */ }
 }
+// Load EVERY weight a font ships — for previewing all weights before choosing one.
+export function loadFontFull(family) { loadFont(family, weightsFor(family)) }
