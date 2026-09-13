@@ -80,6 +80,12 @@ export default function App() {
   // Docked outliner (the Writer as a resizable side panel beside the canvas), with selection synced.
   const [outlineDock, setOutlineDock] = useState(() => { try { return localStorage.getItem('pim_outline_dock') === '1' } catch { return false } })
   useEffect(() => { try { localStorage.setItem('pim_outline_dock', outlineDock ? '1' : '0') } catch { /* ignore */ } }, [outlineDock])
+  // The Graph's left toolbar (and other canvas chrome) can toggle the docked outliner via this event.
+  useEffect(() => {
+    const onToggle = () => setOutlineDock(o => !o)
+    window.addEventListener('pim-toggle-outline', onToggle)
+    return () => window.removeEventListener('pim-toggle-outline', onToggle)
+  }, [])
   // Maximize the docked outliner: slide the graph/outliner divider fully right so the outliner is the only visible panel.
   const [outlineMax, setOutlineMax] = useState(false)
   const [presenting, setPresenting] = useState(false)   // Graph is in presentation mode → hide all app chrome

@@ -1187,6 +1187,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
   const [showFlowchart, setShowFlowchart] = useState(false)  // flowchart text⇄graph panel
   const [nodeMenu, setNodeMenu] = useState(null)         // { nodeId, px, py } right-click node menu
   const [fontPickerNode, setFontPickerNode] = useState(null)   // nodeId whose font we're choosing (Google Fonts picker)
+  const copiedStyleRef = useRef(null)                          // copy-style / paste-style clipboard (view-prop subset)
+  const [hasCopiedStyle, setHasCopiedStyle] = useState(false)
+  const [viewBarSub, setViewBarSub] = useState(null)           // vertical-toolbar view submenu open: 'views' | 'slides' | null
   const [frameStyleId, setFrameStyleId] = useState(null) // frame whose FILL picker is open (right-click only)
   const [dupGhost, setDupGhost] = useState(null)         // alt-drag duplicate: translucent preview { x, y, label, fill, shape, scale }
   const [dupChildrenPrompt, setDupChildrenPrompt] = useState(null) // { srcId, newId, cx, cy } after alt-drop when source has children
@@ -6834,6 +6837,27 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
     },
   }
 
+  // Copy-style / paste-style: transfer a node's LOOK (colours, font, border, shadow, motion, shape) to
+  // other nodes. Structural shapes (frame / 3d) are never pasted — those change what a node IS, not its style.
+  const STYLE_COPY_KEYS = ['fillColor', 'textColor', 'strokeColor', 'strokeWidth', 'strokeDash', 'shape', 'fontFamily', 'fontScale', 'shadow', 'borderFx', 'borderFxAmp', 'borderFxCount', 'spin', 'nodeMotion', 'nodeColorCycle', 'opacity', 'borderBlur']
+  const copyNodeStyle = (id) => {
+    const vp = getVP(id) || {}
+    const s = {}
+    STYLE_COPY_KEYS.forEach(k => { if (vp[k] !== undefined) s[k] = vp[k] })
+    copiedStyleRef.current = s
+    setHasCopiedStyle(true)
+  }
+  const pasteNodeStyle = (ids) => {
+    const s = copiedStyleRef.current
+    if (!s || !ids.length) return
+    pushUndo()
+    const SAFE_SHAPES = ['circle', 'ellipse', 'roundrect', 'rect', 'diamond', 'none']
+    ids.forEach(id => Object.entries(s).forEach(([k, v]) => {
+      if (k === 'shape' && !SAFE_SHAPES.includes(v)) return
+      setNodeViewProp(id, k, v)
+    }))
+  }
+
   // Phone-remote command handlers (kept in a ref so PresenterRemote subscribes once but always calls the
   // latest closures). Present/Next/Prev/etc. mirror the on-stage keyboard controls.
   // Next/Prev dispatch a SYNTHETIC arrow keydown so the phone drives the exact same tested path as the
@@ -8219,6 +8243,9 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
                 })
               }}
               onMore={() => setNodeMenu({ nodeId: sn.id, px: Math.round(left + 14), py: Math.round(top) })}
+              onCopyStyle={() => copyNodeStyle(sn.id)}
+              onPasteStyle={() => pasteNodeStyle(selectedNodeIds.size > 1 ? [...selectedNodeIds] : [sn.id])}
+              canPaste={hasCopiedStyle}
             />
           )
         })()}
@@ -8540,18 +8567,69 @@ export default function Graph({ projectId, projectName, readOnly = false, shared
             ['📺', 'Slideshow', () => { pushUndo(); const c = cSim(); const id = addYtssNode(c[0], c[1]); place(id, c[0], c[1]); setYtssInspectorId(id) }],
             ['🔗', 'Link…', () => { const c = cSim(); const url = window.prompt('Paste a link to unfurl:'); if (url && url.trim()) addLinkAt(url.trim(), c[0], c[1]) }],
           ]
-          return (
+          // Second section: VIEW controls (show/hide frames + outliner, view & slideshow submenus, fit,
+          // fullscreen, present). `active` (4th slot) highlights toggles that are currently on.
+          const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement)
+          const viewItems = [
+            ['▢', hideFrameOutlines ? 'Show frame outlines' : 'Hide frame outlines', () => setHideFrameOutlines(v => !v), hideFrameOutlines],
+            ['☰', 'Outliner panel', () => window.dispatchEvent(new CustomEvent('pim-toggle-outline'))],
+            ['🗂', 'Views', () => setViewBarSub(s => s === 'views' ? null : 'views'), viewBarSub === 'views'],
+            ['🎞️', 'Slideshows', () => setViewBarSub(s => s === 'slides' ? null : 'slides'), viewBarSub === 'slides'],
+            ['⊡', 'Fit to screen', () => zoomExtents()],
+            ['⛶', isFs ? 'Exit fullscreen' : 'Fullscreen', () => { if (isFs) exitDeviceFullscreen(); else enterDeviceFullscreen() }, isFs],
+            ['▶', 'Present', () => startPresent()],
+          ]
+          const barBtn = (active) => ({ width: 34, height: 34, borderRadius: 8, border: 'none', background: active ? '#25306a' : 'transparent', color: active ? '#dbe4ff' : '#c5d0ff', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 })
+          const popStyle = { position: 'absolute', left: 52, top: '50%', transform: 'translateY(-50%)', zIndex: 39, width: 190, maxHeight: '70vh', overflowY: 'auto', background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 10, boxShadow: '0 12px 34px rgba(0,0,0,0.6)' }
+          return (<>
             <div onMouseDown={e => e.stopPropagation()}
-              style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', zIndex: 38, display: 'flex', flexDirection: 'column', gap: 2,
+              style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', zIndex: 38, display: 'flex', flexDirection: 'column', gap: 2, maxHeight: '92vh', overflowY: 'auto',
                 background: '#12122a', border: '1px solid #2d3a6a', borderRadius: 12, padding: 5, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
               {items.map(([icon, label, fn]) => (
                 <button key={label} title={label} onClick={fn}
                   onMouseEnter={e => { e.currentTarget.style.background = '#1e2547' }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-                  style={{ width: 34, height: 34, borderRadius: 8, border: 'none', background: 'transparent', color: '#c5d0ff', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{icon}</button>
+                  style={barBtn(false)}>{icon}</button>
+              ))}
+              <div style={{ height: 1, background: '#2a3358', margin: '3px 4px', flexShrink: 0 }} />
+              {viewItems.map(([icon, label, fn, active]) => (
+                <button key={label} title={label} onClick={fn}
+                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#1e2547' }}
+                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
+                  style={barBtn(active)}>{icon}</button>
               ))}
             </div>
-          )
+            {viewBarSub && (<>
+              <div onMouseDown={() => setViewBarSub(null)} onContextMenu={e => e.preventDefault()} style={{ position: 'fixed', inset: 0, zIndex: 38 }} />
+              {viewBarSub === 'views' && (
+                <div onMouseDown={e => e.stopPropagation()} style={popStyle}>
+                  <div style={{ padding: '7px 10px 4px', fontSize: '0.62rem', letterSpacing: '0.08em', color: '#7080a0', textTransform: 'uppercase', fontWeight: 700 }}>Views</div>
+                  <ViewManager />
+                </div>
+              )}
+              {viewBarSub === 'slides' && (
+                <div onMouseDown={e => e.stopPropagation()} style={{ ...popStyle, padding: 5 }}>
+                  <div style={{ padding: '4px 6px 6px', fontSize: '0.62rem', letterSpacing: '0.08em', color: '#7080a0', textTransform: 'uppercase', fontWeight: 700 }}>Slideshows</div>
+                  {(activeView?.slideshows || []).length === 0 && <div style={{ color: '#7080a0', fontSize: '0.75rem', padding: '4px 8px' }}>No slideshows yet.</div>}
+                  {(activeView?.slideshows || []).map(ss => {
+                    const on = ss.id === activeView?.activeSlideshowId
+                    return (
+                      <button key={ss.id} onClick={() => { const st = useGraphStore.getState(); st.setActiveSlideshowId(ss.id); st.setShowSlideSidebar(true); st.setShowDraw(false); setViewBarSub(null) }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', textAlign: 'left', padding: '6px 9px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: '0.8rem', background: on ? '#1e2547' : 'transparent', color: on ? '#dbe4ff' : '#c5d0ff' }}>
+                        <span style={{ width: 12, color: '#7c8cff' }}>{on ? '●' : '○'}</span>
+                        <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ss.name || 'Slideshow'}</span>
+                        <span style={{ color: '#7080a0', fontSize: '0.68rem' }}>{(ss.slides || []).length}</span>
+                      </button>
+                    )
+                  })}
+                  <button onClick={() => { const st = useGraphStore.getState(); st.addSlideshow('New Slideshow'); st.setShowSlideSidebar(true); st.setShowDraw(false); setViewBarSub(null) }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', textAlign: 'left', padding: '6px 9px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: '0.8rem', background: 'transparent', color: '#8ea2ff' }}>
+                    <span style={{ width: 12 }}>＋</span><span>New slideshow</span>
+                  </button>
+                </div>
+              )}
+            </>)}
+          </>)
         })()}
 
         {/* AI assistant command bar (Cmd/Ctrl+J or the ✦ button) */}
@@ -12420,7 +12498,7 @@ const TEXT_FONTS = [
 ]
 // Floating style bar shown ABOVE a selected node (screen space), mirroring the text-box formatting bar.
 // Compact: Font + fill/text colour + shape inline, and "⋯" opens the full node toolbox for the rest.
-function NodeStyleBar({ left, top, viewProps, onFont, onSetProp, onMore }) {
+function NodeStyleBar({ left, top, viewProps, onFont, onSetProp, onMore, onCopyStyle, onPasteStyle, canPaste }) {
   const [popup, setPopup] = useState(null)   // 'fill' | 'text' | 'shape' | null
   const FILL = ['none', '#5b6af0', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#30a46c', '#00a2c7', '#0090ff', '#6e56cf', '#8e4ec6', '#d6409f', '#ffffff', '#0f1420']
   const TEXT = ['#ffffff', '#e8ecff', '#c5d0ff', '#0f1420', '#e5484d', '#f76b15', '#ffc53d', '#46a758', '#00a2c7', '#0090ff', '#6e56cf', '#d6409f']
@@ -12439,6 +12517,10 @@ function NodeStyleBar({ left, top, viewProps, onFont, onSetProp, onMore }) {
         <span style={{ fontWeight: 800, color: viewProps.textColor || '#fff', textShadow: '0 0 2px #000' }}>A</span>
       </button>
       <button title="Shape" onClick={() => setPopup(p => p === 'shape' ? null : 'shape')} style={btn(popup === 'shape')}>◆</button>
+      <div style={{ width: 1, alignSelf: 'stretch', background: '#2a3358', margin: '2px 2px' }} />
+      <button title="Copy this node's style" onClick={() => { onCopyStyle?.(); setPopup(null) }} style={btn(false)}>🖌</button>
+      <button title={canPaste ? 'Paste style onto this node' : 'Copy a style first'} onClick={() => canPaste && onPasteStyle?.()}
+        style={{ ...btn(false), opacity: canPaste ? 1 : 0.4, cursor: canPaste ? 'pointer' : 'default' }}>🪣</button>
       <div style={{ width: 1, alignSelf: 'stretch', background: '#2a3358', margin: '2px 2px' }} />
       <button title="More style & options" onClick={onMore} style={{ ...btn(false), fontSize: 16 }}>⋯</button>
       {popup && (
